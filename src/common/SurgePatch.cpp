@@ -4287,7 +4287,12 @@ unsigned int SurgePatch::save_xml(void **data) // allocates mem, must be freed b
 
             if (uses_wavetabledata(scene[sc].osc[os].type.val.i))
             {
-                on.SetAttribute("wavetable_display_name", scene[sc].osc[os].wavetable_display_name);
+                // The wavetable data is saved with the patch, and loading data without a name
+                // names it "(Patch Wavetable)" or "(Patch Sample)". Save the name a load would
+                // give it, so a saved patch loads and saves back to the same bytes. (An
+                // oscillator can hold an unnamed table when its patch had none of its own.)
+                on.SetAttribute("wavetable_display_name",
+                                storage->getCurrentWavetableName(&scene[sc].osc[os]));
 
                 auto wtfo = scene[sc].osc[os].wavetable_script;
                 auto wtfol = wtfo.length();

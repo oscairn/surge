@@ -2686,3 +2686,36 @@ TEST_CASE("Old Window Oscillator Patches Do Not Turn Into Samples", "[io]")
         REQUIRE(flags & wtf_loop_sample);
     }
 }
+
+TEST_CASE("Saved factory patches load and save back to the same bytes", "[io]")
+{
+    // Loading an older patch migrates it. Saving the migrated patch must give a patch that
+    // loads and saves back unchanged, or the first save loses something the migration set
+    // (revision 12 and older feedback parameters, unnamed wavetables both did).
+    auto a = Surge::Headless::createSurge(48000);
+    auto b = Surge::Headless::createSurge(48000);
+    const fs::path root{"resources/data/patches_factory"};
+    REQUIRE(fs::is_directory(root));
+
+    auto save = [](SurgeSynthesizer &s) {
+        void *data = nullptr;
+        auto size = s.saveRaw(&data);
+        return std::vector<uint8_t>((uint8_t *)data, (uint8_t *)data + size);
+    };
+
+    int tested = 0;
+    for (auto &e : fs::recursive_directory_iterator(root))
+    {
+        if (e.path().extension() != ".fxp")
+            continue;
+        INFO(e.path().u8string());
+        REQUIRE(a->loadPatchByPath(e.path().u8string().c_str(), -1, "Test"));
+        a->storage.perform_queued_wtloads();
+        auto first = save(*a);
+        b->loadRaw(first.data(), (int)first.size(), false);
+        b->storage.perform_queued_wtloads();
+        REQUIRE(save(*b) == first);
+        ++tested;
+    }
+    REQUIRE(tested > 600);
+}
