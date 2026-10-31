@@ -764,10 +764,11 @@ target's voice path:
 
 **Reference renders of the factory patches** (`[reference]` in the test runner). Every factory
 patch, two notes, seeded, compared with renders recorded earlier, at the golden tests' 1e-5
-tolerance. Recorded from commit `53886aa` (the RNG change, the first reproducible build); 633
-of 641 patches compared, 6 left out as nondeterministic (above), 2 more because they render
-differently twice within one process. This is the "old patches render as before" check every
-later milestone runs.
+tolerance. Recorded from commit `53886aa` (the RNG change, the first reproducible build); 635
+of 641 patches compared, 6 left out as nondeterministic (above): 4 rendered differently in a
+later recording run, 2 differently twice within one process. (This line said 633 until
+2026-10-31: the 2 were counted twice. The test prints "Compared 635 patches, skipped 6".)
+This is the "old patches render as before" check every later milestone runs.
 
 **Oscairn CLAP target** (`src/oscairn-clap/`, `SURGE_BUILD_OSCAIRN=ON`). Written against
 CLAP directly over `surge-common`. Decisions taken in the code, replacing section 4's
@@ -871,7 +872,7 @@ Tests, all run in this session (macOS arm64):
 | ASan, UBSan | `oscairn-analog-tests` built with `-fsanitize=address,undefined` | no reports |
 | TSan | `oscairn-analog-tests` built with `-fsanitize=thread`; state loads and saves while another thread renders notes | no reports |
 | Surge test runner | `surge-testrunner` (standard build) | 180 passed, 1 skipped (`[reference]` without its directory) |
-| Reference renders | `[reference]` against the `53886aa` recording | 633 patches identical within 1e-5 |
+| Reference renders | `[reference]` against the `53886aa` recording | 635 patches identical within 1e-5 (633 in the first version of this table; see above) |
 | Linux ARM64, CI | `.github/workflows/oscairn.yml` (macOS arm64, Linux ARM64, ASan/UBSan and TSan on Linux ARM64, test runner on macOS) | all 5 jobs pass (run 41180706531, commit `f98a5a9`) |
 
 On GitHub's Linux ARM64 runner the allocation guard found one more allocation that libc++
@@ -949,11 +950,15 @@ fitted from):
 | Table | Surge parameter | Valid indices | Checks | Committed |
 | --- | --- | --- | --- | --- |
 | Amp level | `a_vca_level` | 56-511 (below: under -63 dB, clamped) | 57 of 57 within 0.1 dB | yes |
-| LFO speed | `a_lfo0_rate` | 18-380 | 45 of 45 within 2 %; index 242 not measured (dropout; re-record) | yes |
-| Amp EG attack | `a_env1_attack` | 100-208 | 14 of 14 | yes |
-| Amp EG decay | `a_env1_decay` | 100-244 | 16 of 16 | yes |
-| Amp EG release | `a_env1_release` | 112-244 | 14 of 14 | yes |
-| Cutoff, LPF24 | `a_filter1_cutoff` (LP 24 dB, resonance 0.06) | 320-1023 (notes 24 and 36) | Fitted from every 8th index: 107 of 108 within 50 cents (median 3 cents at note 36, 7 at note 24); index 852 is 58 cents off, next to a kink. From every 16th index: 50 of 54 | no (one check fails) |
+| LFO speed | `a_lfo0_rate` | 18-380 | 46 of 46 within 2 % (242 re-recorded: 0.47 %) | yes |
+| Amp EG attack | `a_env1_attack` | 100-255 | 17 of 17 (third session, with the longer range) | yes |
+| Amp EG decay | `a_env1_decay` | 100-255 | 17 of 17 | yes |
+| Amp EG release | `a_env1_release` | 112-255 | 16 of 16 (108: 8.4 % off, outside) | yes |
+| Cutoff, LPF24 | `a_filter1_cutoff` (LP 24 dB, resonance 0.06) | 320-1004 (note 24 below 384, note 36 from there) | Third session: fitted from every 8th index plus the first index after each kink, pieces between kinks interpolated separately: 154 of 154 within 50 cents, 51 of them next to kinks (median 3 cents at note 36, 7 at note 24; largest 20 and 35) | yes |
+| Cutoff, LPF18 / LPF12 / LPF6 | Legacy Ladder 18 / 12 / 6 dB | 384-992 / 384-912 / 384-944 | LPF24 shape plus a smooth difference from a step-32 sweep; 19 of 19 / 18 of 19 (944: 143 cents) / 18 of 19 (976: 50.4 cents) | yes, the valid spans |
+| Cutoff, HPF18 / HPF12 / HPF6 | Xpander HP3 / OB-Xd 12 dB HP / Xpander HP1 | 384-992 | 19 of 19 each (largest 34, 25, 25 cents) | yes |
+| Cutoff, BPF12 / BPF6 | BP 24 dB / BP 12 dB | 416-992 / 384-992 | 18 of 18 / 19 of 19 | yes |
+| Cutoff, HPF24 | HP 24 dB, resonance 0.05 | 384-912 | 16 of 16 (largest 20 cents); 944 is 129 cents off. At resonance 0 (the first choice): 14 of 17 | yes |
 
 Outside the valid spans, and why:
 
@@ -962,13 +967,19 @@ Outside the valid spans, and why:
   addition Surge's analog-mode decay cannot get shorter than about 28 ms to -40 dB (a slow
   tail after a fast drop), while the reference decays in 6-26 ms at indices 40-76; release
   bottoms out at about 7 ms.
-- Long times: the reference's attack reaches 44 s (10-90 %) and its release and decay 45-51 s
-  (to -40 dB) at index 252-255; Surge's envelope tops out at 32 s, and its analog-mode attack
-  covers 10-90 % in about 0.21 of the set time (6.8 s at most). Matching needs a longer
-  envelope range in the engine (an engine change; for Jacob to decide where it belongs).
+- Long times (done in the third session): the reference's attack reaches 44 s (10-90 %) and
+  its release and decay 45-51 s (to -40 dB) at index 252-255; Surge's analog-mode attack covers
+  10-90 % in about 0.21 of the set time, so it needs 2^7.7 s. The plugin's envelope times now
+  reach 2^8 s (decision below).
 - LFO above index 380: past Surge's 512 Hz LFO maximum. Below 18 (under 0.05 Hz): renders
   would need over a minute.
-- Cutoff below index 320 (about 30 Hz): under the probe's lowest harmonic.
+- Cutoff below index 320 (about 30 Hz): under the probe's lowest harmonic. LPF24 above 1004:
+  the reference flattens at 65.9 engine semitones from 1008; the shape match there sits at
+  the edge of the engine sweep. The other types below 384 (416 for BPF12): not fitted.
+- Cutoff kinks: the reference's cutoff curve has kinks at multiples of 1024/12 indices
+  (85.33); right after each the curve rises steeply (up to 0.6 semitones per index, against
+  about 0.13 just before), then flattens until the next. Measured at every index within 3 of
+  each kink from 341 to 939.
 
 **Filter family.** Each of the 10 filter types (Thru aside) was rendered at cutoffs 256, 512,
 640, 768 and 896 with resonance 0 and compared in shape (RMS dB difference over the part of
@@ -981,7 +992,7 @@ filter types and subtypes, each swept over cutoff. Best matches (RMS dB at 512 /
 | LPF18 | Legacy Ladder, 18 dB | 0.05 / 0.25 / 0.58 | +0.4 dB |
 | LPF12 | Legacy Ladder, 12 dB | 0.07 / 0.24 / 0.91 | +0.9 dB |
 | LPF6 | Legacy Ladder, 6 dB | 0.43 / 0.40 / 0.35 | +0.4 dB |
-| HPF24 | HP 24 dB (Standard) | 0.30 / 0.60 / 0.59 | +6.3 dB |
+| HPF24 | HP 24 dB (Standard), resonance 0.05 (third session) | 0.30 / 0.60 / 0.59 at resonance 0; 0.09 / 0.14 / 0.29 at 0.05 | +6.3 dB (at resonance 0) |
 | HPF18 | OB-Xd Xpander, HP3 | 0.02 / 0.11 / 0.26 | +0.6 dB |
 | HPF12 | OB-Xd 12 dB HP | 0.02 / 0.07 / 0.30 | +0.6 dB |
 | HPF6 | OB-Xd Xpander, HP1 | 0.00 / 0.00 / 0.00 | -2.5 dB |
@@ -1003,9 +1014,8 @@ them (20 Hz-20 kHz): the engine (Surge's Classic oscillator) is between -88.5 an
 the reference between -100 and -87 dB, so the engine is 2-17 dB worse but under a -70 dB
 floor everywhere. The "Analog" oscillator of milestone 3 should be measured the same way.
 
-**Not done in milestone 1:** the LPF24 cutoff table's last failing check (852) and cutoff
-tables for the other 9 types (a sweep of all types at steps of 32 is recorded, not fitted); envelopes under index 100 and the
-engine range extension above; the other envelopes and LFOs (pitch and filter LFO probes are
+**Not done in milestone 1:** cutoff at index 944 for LPF12 and HPF24 (over 125 cents off,
+just after the kink at 938.7; the tables stop at 912); envelopes under index 100; the other envelopes and LFOs (pitch and filter LFO probes are
 recorded, not analysed; the other envelopes not probed); oscillator and mixer levels;
 resonance; the converter (open question 12: it goes in its own repository, not built here).
 
@@ -1014,7 +1024,62 @@ ASan/UBSan and TSan builds of commit `848e2c7`, no sanitizer reports), `surge-te
 patches compared within 1e-5 (6 skipped as nondeterministic). CI: see the report for this
 session.
 
-**Where this stopped.** Next steps, in order: the LPF24 cutoff near index 852 (a step-2
-sweep around the kinks, or knots placed at them) and per-type cutoff tables; re-record LFO index 242;
-average repeated renders for envelope times under 100; analyse the pitch and filter LFO
-probes (same speed curve?); probe the other envelopes and oscillator and mixer levels.
+**Third session (2026-10-31).**
+
+- *Envelope range* (decision for Jacob). The plugin exposes scene A's attack, decay and
+  release (amp and filter envelopes) up to 2^8 s instead of Surge's 2^5 s
+  (`longestEnvelopeTime` in `OscairnAnalog.cpp`). No generic engine change was needed: the analog
+  mode computes its rates from the value without an upper limit, the digital mode's rate
+  table reaches 2^15 s, and modulation
+  depths are stored in the same units, so only the exposed range grows. It is the plugin's
+  behaviour, not an option. Surge XT is unchanged, `[reference]` is unchanged (635 patches),
+  and a Surge patch loaded into the plugin sounds as before. A patch saved by the plugin with
+  a time above 5 should play that time in Surge XT too (its patch loader doesn't clamp
+  values, from reading the code; not tried), but Surge XT's slider can't show it. Not done: the scene LFOs' envelope stages keep 2^5 s.
+- *Cutoff tables.* `fit.py` gained `breaks` (interpolate each piece between kinks from its
+  own points) and `base` (another fit's dense curve plus a smooth difference, used for the
+  types swept at step 32). The plugin test checks each table by response shape: the header
+  holds the reference's response at every harmonic the match uses (tenths of a dB; the
+  header is now 378 KB), and the test renders the table's value and half a semitone either
+  side and fits a parabola to the three shape errors. Subsets of 40 harmonics disagreed with
+  the full match by up to 90 cents for LPF6 and BPF6. A table value moved by 0.6 semitone
+  fails the test (seen).
+- *Resonance, first look* (not fitted). LPF24 at cutoffs 512 and 768, resonance 0-255 in
+  steps of 16, against Surge's LP 24 dB at the table's cutoff with resonance 0-0.99: the best
+  resonance rises from 0.05-0.08 (index 0) to 0.37 (index 64) with shape errors of 0.1-0.85
+  dB, but above index 96 no resonance matches (1.1-1.3 dB RMS at cutoff 512, where the best
+  value stays at 0.52; 1.2-4.1 dB at 768). The best match's gain over the reference grows by 9-12 dB
+  from index 0 to 255. Next: search cutoff and resonance together, and try the other
+  4-pole filters.
+- *Pitch and filter LFO speeds* follow the amplitude LFO's curve: at indices 112, 176 and
+  240 the pitch LFO (vibrato rate) is 0.621, 2.409 and 11.948 Hz and the filter LFO 0.620,
+  2.397 and 11.945 Hz, against 0.620, 2.398 and 12.07 Hz interpolated from the amplitude
+  LFO's measurements (within 1.0 %). The converter can use the one LFO speed table for all
+  three; three points, so not a full check.
+- *Envelope times under index 100, averaged* (not committed). Five more repeats at note 96
+  of indices 40-96 (step 8), with the earlier repeats of 56-76: standard errors of the means
+  0.1-1.8 ms. Fitted from the means at 40, 56, 72, 88 and 96 and checked at the others
+  (48, 60, 64, 68, 76, 80): attack and release pass, but only through the 5 ms floor (attack
+  48: 7.7 ms reference, 9.1 engine; release 68: 17.2 and 20.0); decay fails at 48-68 (9.4-21.2
+  ms against the engine's 28.3 ms floor). With averaging, the 5 ms floor is larger than the
+  reference's noise, so these aren't committed as a pass; tightening the floor for averaged
+  checks is for Jacob to decide with the tolerances.
+- *`[reference]` count.* The plan said 633 patches compared; the test compares 635 (the 2
+  within-process cases had been counted twice). Corrected above.
+- *CI runner* (decision for Jacob). The macOS jobs moved from `macos-14` to `macos-15`:
+  GitHub retires `macos-14` on 2026-11-02 and is already browning it out.
+
+**Tests run in the third session** (macOS arm64, commit `4eafdef`, the last code change):
+`oscairn-analog-tests` all passed in the standard, ASan/UBSan (81 s) and TSan (8 min) builds,
+no sanitizer reports; sanitizer builds check every 8th cutoff index (the full set took
+15 minutes under TSan; that run, of commit `1c03103`, also passed with no reports).
+`surge-testrunner` 181 passed, 1 skipped, and `[reference]` "Compared 635 patches, skipped
+6", both on the tree of `c65dfaf` (later commits touch only the plugin's tests). CI for the
+second session's last commits `d6bdbe1` and `93620f8`: all 5 jobs passed. CI for this
+session's push: see the report.
+
+**Where this stopped.** Next steps: index 944 for LPF12 and HPF24 (probe 940-950 for those
+types); resonance (LPF24 resonance 0-255 at cutoffs 512 and 768 is recorded,
+not fitted); a shorter analog decay in the engine (a generic change: the decay's slow
+tail); probe the other envelopes and oscillator and mixer
+levels; then milestone 2.
