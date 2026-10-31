@@ -845,7 +845,12 @@ Tests, all run in this session (macOS arm64):
 | TSan | `oscairn-analog-tests` built with `-fsanitize=thread`; state loads and saves while another thread renders notes | no reports |
 | Surge test runner | `surge-testrunner` (standard build) | 180 passed, 1 skipped (`[reference]` without its directory) |
 | Reference renders | `[reference]` against the `53886aa` recording | 633 patches identical within 1e-5 |
-| Linux ARM64, CI | `.github/workflows/oscairn.yml` (macOS arm64, Linux ARM64, ASan/UBSan and TSan on Linux ARM64, test runner on macOS) | written; first run on GitHub recorded below |
+| Linux ARM64, CI | `.github/workflows/oscairn.yml` (macOS arm64, Linux ARM64, ASan/UBSan and TSan on Linux ARM64, test runner on macOS) | all 5 jobs pass (run 41180706531, commit `f98a5a9`) |
+
+On GitHub's Linux ARM64 runner the allocation guard found one more allocation that libc++
+hides on macOS (an OSC address string built on an oscillator type change, now only built when
+someone listens), and the ASan job needs about 27 minutes. The CI build includes Surge's
+MTS-ESP client (open question 11); the macOS sanitizer runs above were built without it.
 
 Not covered by the TSan test: a parameter change concurrent with a state save. The save's
 retry makes the result correct, but the read it discards is still a data race in the C++
