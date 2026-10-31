@@ -28,6 +28,7 @@ add_executable(${PROJECT_NAME}
   UnitTestsNOTEID.cpp
   UnitTestsPARAM.cpp
   UnitTestsQUERY.cpp
+  UnitTestsREFERENCE.cpp
   UnitTestsTUN.cpp
   UnitTestsVOICE.cpp
   main.cpp
