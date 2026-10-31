@@ -71,6 +71,7 @@ struct ParamInfo
     Parameter *p{nullptr};
     clap_id id{0};
     bool normalized{false}; // exposed as Surge's 0..1 value instead of its own units
+    bool deactivation{false}; // the parameter's off switch (1 = off), not its value
     double min{0}, max{1}, def{0};
     uint32_t flags{0};
     std::string name, module;
@@ -219,7 +220,22 @@ struct Plugin
             }
             pi.def = std::clamp(pi.def, pi.min, pi.max);
             indexById[pi.id] = (uint32_t)params.size();
-            params.push_back(std::move(pi));
+            params.push_back(pi);
+            if (p->can_deactivate())
+            {
+                // Its off switch (the saturators, the filter types, the scene highpass ...),
+                // with the ID of "<storage name>.off" and the init patch's state as default
+                ParamInfo off;
+                off.p = p;
+                off.deactivation = true;
+                off.id = fnv1a((std::string(p->get_storage_name()) + ".off").c_str());
+                off.module = pi.module;
+                off.name = pi.name + " Off";
+                off.def = p->deactivated ? 1 : 0;
+                off.flags = CLAP_PARAM_IS_AUTOMATABLE | CLAP_PARAM_IS_STEPPED;
+                indexById[off.id] = (uint32_t)params.size();
+                params.push_back(std::move(off));
+            }
         }
         values.reset(new std::atomic<double>[params.size()]);
         refreshValues();
@@ -228,6 +244,8 @@ struct Plugin
     static double currentValue(const ParamInfo &pi)
     {
         auto *p = pi.p;
+        if (pi.deactivation)
+            return p->deactivated ? 1 : 0;
         double v = pi.normalized           ? p->get_value_f01()
                    : p->valtype == vt_float ? p->val.f
                    : p->valtype == vt_int   ? p->val.i
@@ -272,7 +290,10 @@ struct Plugin
 
     void setParam(const ParamInfo &pi, double v)
     {
-        synth->setParameter01(synth->idForParameter(pi.p), to01(pi, v), true);
+        if (pi.deactivation)
+            pi.p->deactivated = v > 0.5; // read by the engine at the next block
+        else
+            synth->setParameter01(synth->idForParameter(pi.p), to01(pi, v), true);
         values[&pi - params.data()].store(currentValue(pi), std::memory_order_relaxed);
     }
 
@@ -644,7 +665,8 @@ bool paramsValueToText(const clap_plugin_t *p, clap_id id, double value, char *o
         return false;
     // shortcut: reads the parameter's current control type, which the audio thread can
     // change for oscillator controls; give these a snapshot once sound contexts exist.
-    auto text = pi->p->get_display(true, Plugin::to01(*pi, value));
+    auto text = pi->deactivation ? std::string(value > 0.5 ? "Off" : "On")
+                                 : pi->p->get_display(true, Plugin::to01(*pi, value));
     std::snprintf(out, size, "%s", text.c_str());
     return true;
 }
@@ -652,6 +674,14 @@ bool paramsTextToValue(const clap_plugin_t *p, clap_id id, const char *text, dou
 {
     auto &s = self(p);
     auto pi = s.find(id, nullptr);
+    if (pi && pi->deactivation)
+    {
+        std::string t(text);
+        if (t != "Off" && t != "On")
+            return false;
+        *value = t == "Off" ? 1 : 0;
+        return true;
+    }
     if (!pi || !pi->p->can_setvalue_from_string())
         return false;
     pdata parsed{};

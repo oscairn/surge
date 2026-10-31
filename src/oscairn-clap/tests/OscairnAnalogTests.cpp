@@ -488,6 +488,26 @@ static void testPortsAndParams(const std::vector<std::string> &patches)
         }
     }
     std::printf("factory patches loaded: %d of %zu\n", loaded, patches.size());
+
+    // Off switches are parameters too ("<storage name>.off"): the amp saturator starts off,
+    // its switch turns it on, and the state carries that.
+    {
+        Instance b;
+        auto id = fnv1a("a_amp_drive.off");
+        double v = -1;
+        check(infos.count(id) && b.params->get_value(b.plugin, id, &v) && v == 1,
+              "the amp drive's off switch is a parameter, on (1) by default");
+        b.render(256, 256, {paramEvent(0, id, 0)});
+        check(b.params->get_value(b.plugin, id, &v) && v == 0, "the off switch follows its event");
+        char text[64];
+        check(b.params->value_to_text(b.plugin, id, 1, text, sizeof(text)) &&
+                  std::string(text) == "Off",
+              "off switch text");
+        auto st = b.save();
+        reference.loadRaw(st.data(), (int)st.size(), false);
+        check(!reference.storage.getPatch().scene[0].amp_drive.deactivated,
+              "the state carries the switched-on amp drive");
+    }
 }
 
 static void testStateRoundTrip(const std::vector<std::string> &patches)
