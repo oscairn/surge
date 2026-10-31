@@ -1168,7 +1168,7 @@ engine):
   dB at 64); on a saw the second harmonic overtakes the fundamental at 192 and above; on a
   triangle 128 and above turn it into a different wave. Transfer curves not fitted.
 
-Engine work these imply (not started): a post-filter route and a polarity switch per mixer
+Engine work these imply (started in the fifth session, below): a post-filter route and a polarity switch per mixer
 channel (the voice mixes into the two filter inputs, and the quad filter chain runs filter,
 shaper and VCA per voice lane, so the post-filter route needs a third input to the chain
 before the VCA), saturators, folder and shaper as new blocks (section 3). Each changes the
@@ -1182,6 +1182,134 @@ skipped) and `[reference]` ("Compared 635 patches, skipped 6") on the trees of `
 reference value (0.2 dB) makes the new oscillator level check fail (seen). CI for `01be3b3`:
 all 5 jobs passed (run 41221092760); for the push ending at `699b968` (which added `f967ac1`,
 `c7aa171`, `e3698df` and this record): all 5 passed (run 41225707828, which ran on the head only).
+
+**Fifth session (2026-10-31): milestone 2 engine work.**
+
+*Block positions, measured first* (batch `m2b`, sine at note 48 unless noted; harmonic levels
+relative to the fundamental):
+
+- Filter saturator: **after** its filter. Through LPF24 at cutoff 480 (about 184 Hz) drive raw
+  48 leaves the second harmonic at -28.4 dB (open filter: -26.4); a saturator before the filter
+  would have it filtered away. Through HPF24 at 576 the attenuated fundamental drives it less
+  (-71 dB). Filter 2's saturator measures the same as filter 1's in the same place.
+- Filter out level: **after** the filter saturator (the filter saturator's spectrum is the same
+  at out level 32, 64 and 96) and **before** the amp saturator (the amp saturator's spectrum
+  changes with it).
+- Amp saturator: **before** the amp level (identical spectra at amp level 128, 256, 431 and
+  511), and **after** the out-select join: an oscillator routed to the amp is saturated by it,
+  not by the filter saturator.
+- The two filters are in series (LPF24 640 into HPF24 640 gives the product, not the sum).
+- Wave folder: **after** the mixer (two sines 4 Hz apart give intermodulation products),
+  **before** the filters (LPF24 at 480 removes what it adds), on the filter path only (an
+  oscillator routed to the amp is not folded), before the amp level.
+
+So the reference's voice is: mixer (filter path) → folder → filter 1 → saturator 1 → out level
+1 → filter 2 → saturator 2 → out level 2 → + channels routed to the amp → amp saturator → amp
+level and EG.
+
+*Engine changes* (generic Surge commits, each off by default; each new parameter is appended to
+the scene, has no control in Surge XT's skin yet, and is reset to its default by `load_xml`
+before a patch is read):
+
+| Commit | What |
+| --- | --- |
+| `9a5a4a5` | Mixer: Invert and Post-Filter switches for each of the six channels. Post-filter channels go to a new chain input added just before the amp gain |
+| `96ef6c0` | Filter units: Drive (off by default), Drive Asymmetry, Output Gain; scene: Amp Drive, Amp Drive Asymmetry. Saturator = (tanh(g x) + a tanh²(g x)) / g, then a DC blocker at about 5 Hz. Filter saturator only while its filter runs; output gain also with the filter off |
+| `a1830c0` | Pre-Filter Shaper Type (any sst waveshaper, off by default) and Drive on the filter 1 and 2 inputs: the folder's place |
+
+Decisions taken (for Jacob to confirm):
+
+- No patch revision change: resetting the new parameters before every load makes old patches
+  load as before, and a revision number of our own would collide with upstream's next one.
+- Post-Filter is a separate switch per channel, not a fourth value of Route: Surge XT's route
+  control is a three-position switch.
+- Feedback configurations (Serial 2/3, Dual, Ring, Stereo, Wide) keep tapping the filtered signal
+  without the post-filter input and the amp saturator. In Stereo the post-filter signal goes
+  half to each filter's pan position.
+- The saturators run at Surge's 2x oversampled rate with no further anti-aliasing; tanh is
+  sst's clamped Padé approximation.
+- The folder is a generic stage running sst's existing waveshapers, not a new folder curve (see
+  the fit below).
+- Not done: the plugin doesn't expose deactivation (the drives' and the shaper's on/off, like the
+  scene highpass and filter types before) as CLAP parameters; the converter sets it in the state.
+
+*Saturator fit* (engine renders through the plugin at osc level table[511], amp level
+table[431], against the `m2` probes; drive in the engine = offset + 0.75 dB × raw):
+
+| Saturator | Offset | Asymmetry | Harmonics 2-6 above -50 dB, worst difference |
+| --- | --- | --- | --- |
+| Amp | -40.0 dB | 0.10 | raw 48: 1.6 dB; 64: 1.0 dB; 80: 3.5 dB (second harmonic) |
+| Filter (LPF24 at 1004, resonance 0.06) | -41.4 dB | 0.226 | raw 48: 1.8 dB; 64: 1.3 dB; 80: 3.1 dB (second harmonic) |
+
+Below raw 48 the second harmonic is within 0.7 dB (amp) and 0.3 dB (filter), but the reference
+has odd harmonics at -55 to -80 dB that grow as the level falls (third harmonic -56 dB at
+osc level 64), which no static curve gives; the engine has none. Its odd harmonics also grow
+faster in the middle of the range (fifth harmonic at raw 48: -53.9 reference, -59.1 engine): a
+sharper knee than tanh. The reference's small-signal gain varies irregularly with drive (+0.6 to
++3.6 dB, not monotonic); the engine's is 1, so the converter folds that into the out level and
+amp level that follow. The filter offset includes the LPF24 pass-band offset (engine about
+1.4 dB lower) and needs the other types' offsets. Proposed tolerance (for Jacob): harmonics
+above -50 dB within 3 dB; **not met** at raw 80 (3.5 and 3.1 dB). No plugin check committed.
+
+*Folder fit* (engine pre-filter shaper, types Sine, Single/Dual/West Fold and Soft Fold, drive
+-24 to +36 dB in 1 dB steps, best RMS dB over harmonics 2-12 floored at -60): Soft at amount 32,
+64, 96 matches Soft Fold at -9, -1, +6 dB (1.3, 2.1, 3.0 dB RMS); above that and for Hard the
+best match jumps between types and drives (2.6-10 dB RMS). A folder curve fitted to the
+reference (and texture) remains to be done; the transfer curves (sine probes reconstructed with
+150 harmonics, input phase from symmetry) show soft compression at 64, one fold by 96 and
+several by 255; texture 255 at amount 128 is a gentle compression, texture 0 folds more.
+
+*Wave shaper* (not implemented): on a saw (ramp) it folds like a·sin(g x) up to amount 96
+(2 % of peak RMS error), not beyond; on a sine, odd harmonics. Belongs to the "Analog"
+oscillator (milestone 3).
+
+*Pitch EG* (batches `m1c`, `m1d`; sine at note 60):
+
+- Depth mapping (raw → cents, attack 0, sustain full; batch `m1e`, every 8th raw value and 27
+  between): piecewise linear in cents, symmetric about raw 247 (0 cents): 50 cents per step
+  from 0 to 72 (-4800 to -1200) and from 420 to 494 (+1180 to +4800), 10 per step from 72 to
+  160 and 332 to 420, 5 per step from 160 to 208 and 288 to 332, and a smooth curve in between
+  (-69.7 at 208, -15.2 at 232, +1.2 at 248, +17.0 at 264, +46.3 at 280, +80.3 at 288; raw 309,
+  used for the probes, is +185.2). Linear interpolation of every 8th value plus the breakpoints
+  332 and 420 is within 0.4 cents at the values in between, except 268 (1.2) and 284 (3.5).
+  The engine side is linear: a filter EG routed to oscillator 1's pitch gives 1400.18 cents per
+  unit of depth, and depths above 1 work (3.43 gave 4803.6 cents). This is a converter lookup;
+  no engine table was committed.
+- Decay and release, depth raw 309, against Surge's filter EG (analog mode) routed to pitch,
+  fitted from every 8th index (96-208) and checked at the indices 4 between (100-204). With the
+  time measured from 90 % to 10 % by threshold crossings, checks scatter by up to 11 % (decay)
+  and 8 % (release). Measured instead from a straight-line fit of log(cents) against time over
+  that range (`pitch_fall_time` in the measurement repository, kind `pitchfall`, tolerance as
+  for envelope times: 2.5 % or 5 ms, for Jacob to confirm): **committed** (`e1489f5`) as
+  `pitchEgRelease` (valid 128-208, 10 of 10 checks within 1.2 %) and `pitchEgDecay` (valid
+  144-208, 8 of 8 within 1.9 %), with the same check in `oscairn-analog-tests` (C++
+  `pitchFallTime`; a reference value moved by 5 % fails it, seen). Below those spans: release
+  at 124 is 6.4 % off (the reference's times step unevenly there), decay is 2.6-14 % off below
+  148 (short decays scatter; repeated probes needed). The reference's times step by about 22,
+  20, 15 and 18 % per 4 indices, repeating every 16. The filter EG shares these curves (fourth
+  session), so the converter can use the tables for it too (not checked separately).
+
+**Tests run in the fifth session** (macOS arm64). On the tree of each code commit (`9a5a4a5`,
+`96ef6c0`, `a1830c0`): `oscairn-analog-tests` passed in the standard, ASan/UBSan and TSan
+builds with no sanitizer reports (the plugin exposes 284, 292 and 294 parameters); `surge-testrunner`
+passed with `[reference]` included: 185, 188 and 189 test cases, "Compared 635 patches, skipped
+6" each time. New `[signalpath]` tests: invert cancels exactly, post-filter skips a closed filter
+and changes nothing with the filter off, the amp saturator's harmonics match the formula within
+0.02 dB and don't change with the amp level, the filter saturator runs only with its filter,
+output gain applies with the filter off, the shaper sits before the filters and post-filter
+channels skip it, and every new parameter resets on loading an old patch and round-trips.
+For `e1489f5` (plugin tests only): `oscairn-analog-tests` passed in the standard, ASan/UBSan and
+TSan builds with no sanitizer reports; `surge-testrunner` was not rerun (no engine change). CI:
+see the report for this session.
+
+**Where this stopped** (fifth session). Milestone 2 engine blocks are in (mixer invert and
+post-filter, saturators, filter output gain, pre-filter shaper), all off by default with
+`[reference]` unchanged. Next: a folder curve fitted to the reference (soft/hard, texture) in
+place of sst's folders above amount 96; a sharper-kneed saturator option if the 3 dB proposal at
+raw 80 matters; the saturators' small-signal gain per drive into the converter; exposing the
+deactivation switches as plugin parameters; the per-oscillator wave shaper with the "Analog"
+oscillator (milestone 3); short pitch EG decays (repeated probes); then milestone 3 (unison,
+OSC reset, drift, ageing, pitch LFO, Part LFO), not started.
 
 **Where this stopped** (fourth session). Next steps: pitch EG decay and release tables (dense
 probes, which can serve the filter EG too; attack can use the amp table); the depth scale of
