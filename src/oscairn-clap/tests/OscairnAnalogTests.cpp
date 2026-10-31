@@ -761,6 +761,35 @@ static void testFittedTables()
             return F::lfoRate(x, rate, t0 + 0.3, x.size() / rate - 0.15);
         },
         pct, [](double ref) { return ref >= 1 && ref <= 40; });
+
+    // Cutoff: the engine cutoff whose response best matches the reference's in shape, from
+    // renders at the table's value and half a semitone either side (a parabola through the
+    // three shape errors), must be within the tolerance of the table's value.
+    std::map<int, std::vector<float>> thru;
+    for (auto &r : T::cutoffLp24Responses)
+    {
+        auto spec = [&](std::vector<std::pair<std::string, double>> p) {
+            return oscairn_analog::RenderSpec{r.note, 100, 1, 0.1, rate, std::move(p), {}};
+        };
+        if (!thru.count(r.note))
+            thru[r.note] = renderMono(spec({}));
+        double v = T::cutoffLp24[r.index], e[3];
+        for (int k = 0; k < 3; ++k)
+        {
+            auto x = renderMono(spec({{"a_filter1_type", 2},
+                                      {"a_filter1_subtype", 0},
+                                      {"a_filter1_resonance", 0.06},
+                                      {"a_filter1_cutoff", v + 0.5 * (k - 1)}}));
+            double t0 = F::onset(x, rate);
+            e[k] = F::shapeErrorDb(x, thru[r.note], rate, 440 * std::pow(2.0, (r.note - 69) / 12.0),
+                                   t0 + 0.3, t0 + 0.9, r.harmonic, r.gainDb, r.count);
+        }
+        double curv = e[0] - 2 * e[1] + e[2];
+        double best = curv > 0 ? 0.25 * (e[0] - e[2]) / curv : 1e9; // semitones from v
+        check(std::fabs(100 * best) <= T::cutoffLp24Tolerance,
+              "LPF24 cutoff at index " + std::to_string(r.index) + ": best match " +
+                  std::to_string(100 * best) + " cents from the table");
+    }
 }
 
 int main(int argc, char **argv)
