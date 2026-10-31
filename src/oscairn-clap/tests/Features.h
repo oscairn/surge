@@ -109,23 +109,37 @@ inline double releaseTime(const std::vector<float> &x, double rate, double noteO
     return fallsTo(e, h - 40, noteOff - uncertainty + knee);
 }
 
-// Rate of a periodic level change between start and stop: rising zero crossings of the
-// mean-removed 2 ms RMS amplitude, interpolated, over whole periods.
-inline double lfoRate(const std::vector<float> &x, double rate, double start, double stop)
+// Rate of a periodic level change between start and stop: rising crossings of the mean
+// (with hysteresis of a quarter of the standard deviation, so oscillator ripple doesn't
+// count) by the RMS amplitude over windowMs, interpolated, over whole periods. windowMs
+// should span whole oscillator periods.
+inline double lfoRate(const std::vector<float> &x, double rate, double start, double stop,
+                      double windowMs = 7.645)
 {
     std::vector<float> seg(x.begin() + (size_t)(start * rate),
                            x.begin() + std::min(x.size(), (size_t)(stop * rate)));
-    auto e = envelopeDb(seg, rate, 2.0, 1.0);
+    auto e = envelopeDb(seg, rate, windowMs, 0.5);
     std::vector<double> a(e.db.size());
-    double mean = 0;
+    double mean = 0, var = 0;
     for (size_t i = 0; i < a.size(); ++i)
         mean += (a[i] = std::pow(10.0, e.db[i] / 20));
     mean /= a.size();
+    for (auto v : a)
+        var += (v - mean) * (v - mean);
+    double h = 0.25 * std::sqrt(var / a.size());
     std::vector<double> crossings;
+    bool low = false;
     for (size_t i = 1; i < a.size(); ++i)
-        if (a[i - 1] < mean && a[i] >= mean)
-            crossings.push_back(e.t[i - 1] +
-                                (mean - a[i - 1]) / (a[i] - a[i - 1]) * (e.t[i] - e.t[i - 1]));
+    {
+        if (a[i] < mean - h)
+            low = true;
+        if (low && a[i - 1] < mean && a[i] >= mean)
+        {
+            crossings.push_back(e.t[i - 1] + (mean - a[i - 1]) / (a[i] - a[i - 1]) *
+                                                 (e.t[i] - e.t[i - 1]));
+            low = false;
+        }
+    }
     if (crossings.size() < 3)
         return -1;
     return (crossings.size() - 1) / (crossings.back() - crossings.front());

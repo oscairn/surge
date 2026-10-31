@@ -685,10 +685,13 @@ template <size_t N, size_t K>
 static void checkTable(const char *name, const float (&table)[N],
                        const oscairn_tables::Check (&checks)[K], double tolerance,
                        const std::function<double(float)> &measure,
-                       const std::function<double(double, double)> &error)
+                       const std::function<double(double, double)> &error,
+                       const std::function<bool(double)> &applies = [](double) { return true; })
 {
     for (auto &c : checks)
     {
+        if (!applies(c.reference))
+            continue;
         double got = measure(table[c.index]), err = error(c.reference, got);
         check(std::fabs(err) <= tolerance, std::string(name) + " at index " +
                                                std::to_string(c.index) + ": reference " +
@@ -711,6 +714,49 @@ static void testFittedTables()
             return F::levelDb(x, rate, t0 + 0.3, t0 + 0.8);
         },
         db);
+    auto pct = [](double ref, double got) { return 100 * (got / ref - 1); };
+    // Envelope times at note 60 with one-period windows; the tolerance has a 5 ms floor.
+    auto envSpec = [&](const char *name, float v) {
+        double h = 1.6 * std::pow(2.0, v) + 0.5;
+        bool rel = std::string(name) == "a_env1_release";
+        oscairn_analog::RenderSpec s{60, 100, rel ? 0.4 : h, rel ? h : 0.1, rate, {{name, v}}, {}};
+        if (std::string(name) == "a_env1_decay")
+            s.params.push_back({"a_env1_sustain", 0});
+        return s;
+    };
+    const double w = 3.822;
+    auto pctFloor = [](double floor) {
+        return [floor](double ref, double got) {
+            return std::fabs(got - ref) <= floor ? 0.0 : 100 * (got / ref - 1);
+        };
+    };
+    checkTable(
+        "amp EG attack", T::ampAttack, T::ampAttackChecks, T::ampAttackTolerance,
+        [&](float v) { return F::attackTime(renderMono(envSpec("a_env1_attack", v)), rate, w); },
+        pctFloor(0.005));
+    checkTable(
+        "amp EG decay", T::ampDecay, T::ampDecayChecks, T::ampDecayTolerance,
+        [&](float v) { return F::decayTime(renderMono(envSpec("a_env1_decay", v)), rate, w); },
+        pctFloor(0.005));
+    checkTable(
+        "amp EG release", T::ampRelease, T::ampReleaseChecks, T::ampReleaseTolerance,
+        [&](float v) {
+            auto x = renderMono(envSpec("a_env1_release", v));
+            return F::releaseTime(x, rate, F::onset(x, rate) + 0.4, 0.1, w);
+        },
+        pctFloor(0.005));
+    // The zero-crossing rate here needs several periods and an envelope that follows the
+    // modulation: checked from 1 to 40 Hz (the measurement repository checks the whole range).
+    checkTable(
+        "LFO speed", T::lfoSpeed, T::lfoSpeedChecks, T::lfoSpeedTolerance,
+        [&](float v) {
+            double hold = std::max(3.0, 6.0 / std::pow(2.0, v));
+            auto x = renderMono(
+                {60, 100, hold, 0.1, rate, {{"a_lfo0_rate", v}}, {{17, "a_vca_level", 0.3}}});
+            double t0 = F::onset(x, rate);
+            return F::lfoRate(x, rate, t0 + 0.3, x.size() / rate - 0.15);
+        },
+        pct, [](double ref) { return ref >= 1 && ref <= 40; });
 }
 
 int main(int argc, char **argv)
