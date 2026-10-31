@@ -494,6 +494,7 @@ static void testStateRoundTrip(const std::vector<std::string> &patches)
     // next one (Surge's migrations aren't idempotent for some revision-9/10 patches). The
     // plugin's own state must be a fixed point: save -> load -> save gives the same bytes.
     int tested = 0, migrated = 0;
+    Instance c; // one instance: constructing 625 is slow under ASan on Linux
     for (auto &path : patches)
     {
         auto patch = patchFromFxp(path);
@@ -502,7 +503,6 @@ static void testStateRoundTrip(const std::vector<std::string> &patches)
         auto s1 = a.save();
         check(b.load(s1), "load saved state: " + path);
         auto s2 = b.save();
-        Instance c;
         check(c.load(s2), "load saved state again: " + path);
         check(c.save() == s2, "state round trip is byte-identical: " + path);
         migrated += s1 != s2;
