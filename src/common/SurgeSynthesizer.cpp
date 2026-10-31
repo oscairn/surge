@@ -20,6 +20,7 @@
  * https://github.com/surge-synthesizer/surge
  */
 
+#include <array>
 #include "SurgeSynthesizer.h"
 #include <fmt/core.h>
 #include "DSPUtils.h"
@@ -556,7 +557,7 @@ void SurgeSynthesizer::playNoteByFrequency(float freq, char velocity, int32_t id
 
 void SurgeSynthesizer::softkillVoice(int s)
 {
-    list<SurgeVoice *>::iterator iter, max_playing, max_released;
+    voice_list_t::iterator iter, max_playing, max_released;
     int max_age = -1, max_age_release = -1;
     iter = voices[s].begin();
 
@@ -591,7 +592,7 @@ void SurgeSynthesizer::softkillVoice(int s)
 // only allow 'margin' number of voices to be softkilled simultaneously
 void SurgeSynthesizer::enforcePolyphonyLimit(int s, int margin)
 {
-    list<SurgeVoice *>::iterator iter;
+    voice_list_t::iterator iter;
 
     int paddedPoly = std::min((storage.getPatch().polylimit.val.i + margin), MAX_VOICES - 1);
     if (voices[s].size() > paddedPoly)
@@ -890,7 +891,7 @@ void SurgeSynthesizer::playVoice(int scene, char channel, char key, char velocit
     case pm_mono_fp:
     case pm_latch:
     {
-        list<SurgeVoice *>::const_iterator iter;
+        voice_list_t::const_iterator iter;
         bool glide = false;
 
         int primode = storage.getPatch().scene[scene].monoVoicePriorityMode;
@@ -1117,7 +1118,7 @@ void SurgeSynthesizer::playVoice(int scene, char channel, char key, char velocit
 
         if (createVoice)
         {
-            list<SurgeVoice *>::const_iterator iter;
+            voice_list_t::const_iterator iter;
             SurgeVoice *recycleThis{nullptr};
             float aegStart{0.}, fegStart{0.};
             for (iter = voices[scene].begin(); iter != voices[scene].end(); iter++)
@@ -1214,7 +1215,7 @@ void SurgeSynthesizer::playVoice(int scene, char channel, char key, char velocit
 
 void SurgeSynthesizer::releaseScene(int s)
 {
-    list<SurgeVoice *>::const_iterator iter;
+    voice_list_t::const_iterator iter;
     for (iter = voices[s].begin(); iter != voices[s].end(); iter++)
     {
         freeVoice(*iter);
@@ -1380,7 +1381,7 @@ void SurgeSynthesizer::releaseNotePostHoldCheck(int scene, char channel, char ke
                                                 int32_t host_noteid)
 {
     channelState[channel].keyState[key].keystate = 0;
-    list<SurgeVoice *>::const_iterator iter;
+    voice_list_t::const_iterator iter;
     for (int s = 0; s < n_scenes; s++)
     {
         bool do_switch = false;
@@ -2653,7 +2654,8 @@ void SurgeSynthesizer::purgeHoldbufferByScenemode(int channel)
 
 void SurgeSynthesizer::purgeHoldbuffer(int scene)
 {
-    std::list<HoldBufferItem> retainBuffer;
+    auto &retainBuffer = holdRetainBuffer;
+    retainBuffer.clear();
 
     for (const auto &hp : holdbuffer[scene])
     {
@@ -2703,27 +2705,25 @@ void SurgeSynthesizer::purgeDuplicateHeldVoicesInPolyMode(int scene, int channel
     /* If we end up here we know there's multiple voices in the voice structure on this key and
      * channel probably
      */
-    std::vector<SurgeVoice *> candidates;
+    std::array<SurgeVoice *, MAX_VOICES> candidates; // not a vector: audio thread
+    size_t nCandidates = 0;
     for (const auto &v : voices[scene])
     {
-        if (v->state.key == key && v->state.channel == channel && v->state.gate)
+        if (v->state.key == key && v->state.channel == channel && v->state.gate &&
+            nCandidates < candidates.size())
         {
-            candidates.push_back(v);
+            candidates[nCandidates++] = v;
         }
     }
-    if (candidates.size() > 1)
+    if (nCandidates > 1)
     {
         // make sure latest is first
-        std::sort(candidates.begin(), candidates.end(), [](const auto &a, const auto &b) {
-            return a->state.voiceOrderAtCreate > b->state.voiceOrderAtCreate;
-        });
-        bool r = false;
-        for (auto &v : candidates)
-        {
-            if (r)
-                v->release();
-            r = true;
-        }
+        std::sort(candidates.begin(), candidates.begin() + nCandidates,
+                  [](const auto &a, const auto &b) {
+                      return a->state.voiceOrderAtCreate > b->state.voiceOrderAtCreate;
+                  });
+        for (size_t i = 1; i < nCandidates; ++i)
+            candidates[i]->release();
     }
 }
 
@@ -2761,7 +2761,7 @@ void SurgeSynthesizer::stopSound()
 
     for (int s = 0; s < n_scenes; s++)
     {
-        list<SurgeVoice *>::const_iterator iter;
+        voice_list_t::const_iterator iter;
         for (iter = voices[s].begin(); iter != voices[s].end(); iter++)
         {
             freeVoice(*iter);
@@ -3312,7 +3312,7 @@ void SurgeSynthesizer::switch_toggled()
 {
     for (int s = 0; s < n_scenes; s++)
     {
-        list<SurgeVoice *>::iterator iter;
+        voice_list_t::iterator iter;
         for (iter = voices[s].begin(); iter != voices[s].end(); iter++)
         {
             SurgeVoice *v = *iter;
@@ -5104,7 +5104,7 @@ void SurgeSynthesizer::process()
         }
     }
 
-    list<SurgeVoice *>::iterator iter;
+    voice_list_t::iterator iter;
 
     for (int sc = 0; sc < n_scenes; sc++)
     {

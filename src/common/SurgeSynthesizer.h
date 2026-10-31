@@ -24,6 +24,7 @@
 #define SURGE_SRC_COMMON_SURGESYNTHESIZER_H
 #include "SurgeStorage.h"
 #include "SurgeVoice.h"
+#include "FixedPoolAllocator.h"
 #include "Effect.h"
 #include "BiquadFilter.h"
 #include <set>
@@ -594,7 +595,10 @@ class alignas(16) SurgeSynthesizer
     bool approachingAllSoundOff{false};
     // TODO: FIX SCENE ASSUMPTION (for halfbandA/B - use std::array)
     sst::filters::HalfRate::HalfRateFilter halfbandA, halfbandB, halfbandIN;
-    std::list<SurgeVoice *> voices[n_scenes];
+    // Pooled so that starting and ending voices doesn't allocate on the audio thread.
+    using voice_list_t =
+        std::list<SurgeVoice *, Surge::FixedPoolAllocator<SurgeVoice *, MAX_VOICES>>;
+    voice_list_t voices[n_scenes];
     std::unique_ptr<Effect> fx[n_fx_slots];
     std::atomic<bool> halt_engine;
     MidiChannelState channelState[16];
@@ -652,7 +656,9 @@ class alignas(16) SurgeSynthesizer
         int originalKey;
         int32_t host_noteid;
     };
-    std::list<HoldBufferItem> holdbuffer[n_scenes];
+    using hold_list_t =
+        std::list<HoldBufferItem, Surge::FixedPoolAllocator<HoldBufferItem, 1024>>;
+    hold_list_t holdbuffer[n_scenes], holdRetainBuffer; // the latter is purgeHoldbuffer's scratch
     void purgeHoldbuffer(int scene);
     void purgeHoldbufferByScenemode(int channel);
     bool isSustainPedalDown(int channel) const;
