@@ -24,5 +24,5 @@ target_compile_definitions(oscairn-analog-tests PRIVATE
   SURGE_FACTORY_PATCHES="${SURGE_SOURCE_DIR}/resources/data/patches_factory")
 
 # Renders one note through the plugin, for measuring the engine (doc/oscairn-plan.md, M1).
-add_executable(oscairn-analog-render tools/OscairnAnalogRender.cpp)
+add_executable(oscairn-analog-render tools/OscairnAnalogRender.cpp tools/RenderNote.cpp)
 target_link_libraries(oscairn-analog-render PRIVATE oscairn-analog-core)
