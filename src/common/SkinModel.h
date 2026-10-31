@@ -401,6 +401,8 @@ extern Surge::Skin::Connector balance, config, cutoff_1, cutoff_2, envmod_1, env
     f2_link_resonance, f2_offset_mode, feedback, highpass, keytrack_1, keytrack_2, resonance_1,
     resonance_2, subtype_1, subtype_2, type_1, type_2, waveshaper_drive, waveshaper_type,
     waveshaper_jog, waveshaper_analyze, filter_analyze;
+// Per-unit saturator and output gain, without a control in the skin
+extern Surge::Skin::Connector drive[2], drive_asymmetry[2], output_gain[2];
 }
 namespace Global
 {
@@ -435,6 +437,8 @@ namespace Scene
 extern Surge::Skin::Connector polylimit, splitpoint, drift, fmdepth, fmrouting, gain, keytrack_root,
     noise_color, octave, pan, pbrange_dn, pbrange_up, pitch, playmode, portatime, send_fx_1,
     send_fx_2, send_fx_3, send_fx_4, vel_sensitivity, volume, width;
+// Amp saturator, without a control in the skin
+extern Surge::Skin::Connector amp_drive, amp_drive_asymmetry;
 }
 
 namespace ModSources

@@ -135,6 +135,11 @@ struct QuadFilterChainState
 
     SIMD_M128 wsLPF, FBlineL, FBlineR;
 
+    // Saturator after each filter unit and its output gain, and the amp saturator
+    SIMD_M128 FDrive[2], FAsym[2], FGain[2], dFDrive[2], dFAsym[2], dFGain[2];
+    SIMD_M128 ADrive, AAsym, dADrive, dAAsym;
+    SIMD_M128 dcX[6], dcY[6]; // DC blocker states: filter saturators by FU index, amp L and R
+
     SIMD_M128 DL[BLOCK_SIZE_OS], DR[BLOCK_SIZE_OS]; // wavedata
     SIMD_M128 DPL[BLOCK_SIZE_OS], DPR[BLOCK_SIZE_OS]; // routed past the filters, left and right
 
@@ -153,7 +158,9 @@ struct fbq_global
 {
     sst::filters::FilterUnitQFPtr FU1ptr, FU2ptr;
     sst::waveshapers::QuadWaveshaperPtr WSptr;
-    bool preAmp{false}; // run the stage between the filters and the amp gain (post-filter input)
+    bool preAmp{false}; // run the stage between the filters and the amp gain
+    bool filterDrive[2]{false, false}, ampDrive{false}; // saturators switched on
+    SIMD_M128 dcR;                                      // DC blocker pole
 };
 
 typedef void (*FBQFPtr)(QuadFilterChainState &, fbq_global &, float *, float *);

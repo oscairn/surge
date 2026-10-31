@@ -155,7 +155,7 @@ const int FIRoffsetI16 = FIRipolI16_N >> 1;
 
 const int ff_revision = 31;
 
-const int n_scene_params = 285;
+const int n_scene_params = 293;
 const int n_global_params = 11 + n_fx_slots * (n_fx_params + 1); // each param plus a type
 const int n_global_postparams = 1;
 const int n_total_params = n_global_params + 2 * n_scene_params + n_global_postparams;
@@ -793,6 +793,9 @@ struct FilterStorage
     Parameter resonance;
     Parameter envmod;
     Parameter keytrack;
+    // Added after revision 31, see SurgeSceneStorage
+    Parameter drive, drive_asymmetry; // saturator after the filter, while the filter runs
+    Parameter output_gain;
 };
 
 struct WaveshaperStorage
@@ -893,6 +896,7 @@ struct SurgeSceneStorage
     // 31 without a revision change: load_xml resets them before reading a patch.
     Parameter mix_invert[6];     // flip the channel's polarity
     Parameter mix_postfilter[6]; // send the channel past the filters, straight to the amp
+    Parameter amp_drive, amp_drive_asymmetry; // saturator before the amp gain
 
     std::vector<ModulationRouting> modulation_scene, modulation_voice;
     std::vector<ModulationSource *> modsources;

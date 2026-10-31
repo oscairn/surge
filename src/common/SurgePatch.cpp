@@ -668,6 +668,33 @@ SurgePatch::SurgePatch(SurgeStorage *storage)
                 fmt::format("{:c}/mixer/{}/post_filter", 'a' + sc, mixOsc[c]), ct_bool,
                 Surge::Skin::Mixer::postfilter[c], sc_id, cg_MIX, 0, false));
         }
+
+        for (int u = 0; u < n_filterunits_per_scene; u++)
+        {
+            auto &fu = scene[sc].filterunit[u];
+            // assign prefixes filter unit names with filterN_
+            a->push_back(fu.drive.assign(p_id.next(), id_s++, "drive", "Drive",
+                                         fmt::format("{:c}/filter/{}/drive", 'a' + sc, u + 1),
+                                         ct_decibel_deactivatable, Surge::Skin::Filter::drive[u],
+                                         sc_id, cg_FILTER, u, true));
+            a->push_back(fu.drive_asymmetry.assign(
+                p_id.next(), id_s++, "drive_asym", "Drive Asymmetry",
+                fmt::format("{:c}/filter/{}/drive_asymmetry", 'a' + sc, u + 1),
+                ct_percent_bipolar, Surge::Skin::Filter::drive_asymmetry[u], sc_id, cg_FILTER, u,
+                true));
+            a->push_back(fu.output_gain.assign(
+                p_id.next(), id_s++, "output_gain", "Output Gain",
+                fmt::format("{:c}/filter/{}/output_gain", 'a' + sc, u + 1), ct_decibel,
+                Surge::Skin::Filter::output_gain[u], sc_id, cg_FILTER, u, true));
+        }
+
+        a->push_back(scene[sc].amp_drive.assign(
+            p_id.next(), id_s++, "amp_drive", "Amp Drive", fmt::format("{:c}/amp/drive", 'a' + sc),
+            ct_decibel_deactivatable, Surge::Skin::Scene::amp_drive, sc_id, cg_GLOBAL, 0, true));
+        a->push_back(scene[sc].amp_drive_asymmetry.assign(
+            p_id.next(), id_s++, "amp_drive_asym", "Amp Drive Asymmetry",
+            fmt::format("{:c}/amp/drive_asymmetry", 'a' + sc), ct_percent_bipolar,
+            Surge::Skin::Scene::amp_drive_asymmetry, sc_id, cg_GLOBAL, 0, true));
     }
 
     param_ptr.push_back(
@@ -2009,6 +2036,14 @@ void SurgePatch::load_xml(const void *data, int datasize, bool is_preset)
         {
             sc.mix_invert[c].val = sc.mix_invert[c].val_default;
             sc.mix_postfilter[c].val = sc.mix_postfilter[c].val_default;
+        }
+        for (auto *p : {&sc.filterunit[0].drive, &sc.filterunit[0].drive_asymmetry,
+                         &sc.filterunit[0].output_gain, &sc.filterunit[1].drive,
+                         &sc.filterunit[1].drive_asymmetry, &sc.filterunit[1].output_gain,
+                         &sc.amp_drive, &sc.amp_drive_asymmetry})
+        {
+            p->val = p->val_default;
+            p->deactivated = p->can_deactivate();
         }
     }
 

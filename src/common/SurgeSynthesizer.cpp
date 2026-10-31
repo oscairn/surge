@@ -5182,6 +5182,14 @@ void SurgeSynthesizer::process()
         {
             g.preAmp = g.preAmp || pf.val.b;
         }
+        for (int u = 0; u < n_filterunits_per_scene; u++)
+        {
+            g.filterDrive[u] = !storage.getPatch().scene[s].filterunit[u].drive.deactivated;
+        }
+        g.ampDrive = !storage.getPatch().scene[s].amp_drive.deactivated;
+        g.preAmp = g.preAmp || g.ampDrive;
+        // DC blocker after the saturators, about 5 Hz at the oversampled rate
+        g.dcR = SIMD_MM(set1_ps)(1.f - 2.f * M_PI * 5.f * storage.dsamplerate_os_inv);
 
         FBQFPtr ProcessQuadFB =
             GetFBQPointer(storage.getPatch().scene[s].filterblock_configuration.val.i,

@@ -1420,6 +1420,49 @@ void SurgeVoice::SetQFB(QuadFilterChainState *Q, int e) // Q == 0 means init(ial
         }
     }
 
+    // Filter saturators and output gains, amp saturator
+    auto lc = [this](const Parameter &p) { return localcopy[p.param_id_in_scene].f; };
+    float FDrive[2], FAsym[2], FGain[2];
+    for (int u = 0; u < 2; ++u)
+    {
+        auto &fu = scene->filterunit[u];
+        FDrive[u] = db_to_linear(lc(fu.drive));
+        FAsym[u] = lc(fu.drive_asymmetry);
+        FGain[u] = db_to_linear(lc(fu.output_gain));
+    }
+    float ADrive = db_to_linear(lc(scene->amp_drive));
+    float AAsym = lc(scene->amp_drive_asymmetry);
+
+    if (Q)
+    {
+        for (int u = 0; u < 2; ++u)
+        {
+            set1f(Q->FDrive[u], e, FBP.FDrive[u]);
+            set1f(Q->dFDrive[u], e, (FDrive[u] - FBP.FDrive[u]) * BLOCK_SIZE_OS_INV);
+            set1f(Q->FAsym[u], e, FBP.FAsym[u]);
+            set1f(Q->dFAsym[u], e, (FAsym[u] - FBP.FAsym[u]) * BLOCK_SIZE_OS_INV);
+            set1f(Q->FGain[u], e, FBP.FGain[u]);
+            set1f(Q->dFGain[u], e, (FGain[u] - FBP.FGain[u]) * BLOCK_SIZE_OS_INV);
+        }
+        set1f(Q->ADrive, e, FBP.ADrive);
+        set1f(Q->dADrive, e, (ADrive - FBP.ADrive) * BLOCK_SIZE_OS_INV);
+        set1f(Q->AAsym, e, FBP.AAsym);
+        set1f(Q->dAAsym, e, (AAsym - FBP.AAsym) * BLOCK_SIZE_OS_INV);
+        for (int i = 0; i < 6; ++i)
+        {
+            set1f(Q->dcX[i], e, FBP.dcX[i]);
+            set1f(Q->dcY[i], e, FBP.dcY[i]);
+        }
+    }
+    for (int u = 0; u < 2; ++u)
+    {
+        FBP.FDrive[u] = FDrive[u];
+        FBP.FAsym[u] = FAsym[u];
+        FBP.FGain[u] = FGain[u];
+    }
+    FBP.ADrive = ADrive;
+    FBP.AAsym = AAsym;
+
     FBP.Gain = Gain;
     FBP.Drive = Drive;
     FBP.FB = FB;
@@ -1520,6 +1563,11 @@ void SurgeVoice::GetQFB()
         {
             FBP.WS[c].R[i] = get1f(fbq->WSS[c].R[i], fbqi);
         }
+    }
+    for (int i = 0; i < 6; ++i)
+    {
+        FBP.dcX[i] = get1f(fbq->dcX[i], fbqi);
+        FBP.dcY[i] = get1f(fbq->dcY[i], fbqi);
     }
     FBP.FBlineL = get1f(fbq->FBlineL, fbqi);
     FBP.FBlineR = get1f(fbq->FBlineR, fbqi);

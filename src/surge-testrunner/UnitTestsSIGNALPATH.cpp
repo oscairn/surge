@@ -21,9 +21,11 @@
  */
 
 /*
- * Voice signal path additions: mixer channel polarity and the post-filter route.
+ * Voice signal path additions: mixer channel polarity, the post-filter route, the saturators
+ * after the filters and before the amp, and the filter output gain.
  */
 #include <cmath>
+#include <complex>
 #include <vector>
 
 #include "HeadlessUtils.h"
@@ -52,6 +54,38 @@ std::vector<float> render(SurgeSynthesizer &s, int note = 48, int blocks = 200)
             s.playNote(0, note, 100, 0);
         s.process();
         out.insert(out.end(), s.output[0], s.output[0] + BLOCK_SIZE);
+    }
+    return out;
+}
+
+// A sine at 440 Hz on oscillator 1, sustain at full level.
+std::shared_ptr<SurgeSynthesizer> sineSurge()
+{
+    auto surge = sawSurge();
+    auto &sc = surge->storage.getPatch().scene[0];
+    sc.osc[0].type.val.i = ot_sine;
+    surge->storage.getPatch().update_controls(false, &sc.osc[0]);
+    sc.adsr[0].s.val.f = 1.f;
+    return surge;
+}
+
+// Level in dB of harmonics 1..n of f0, relative to the fundamental (Hann window).
+std::vector<double> harmonics(const std::vector<float> &v, size_t from, double f0, int n = 6)
+{
+    std::vector<double> out;
+    auto N = v.size() - from;
+    double h1 = 0;
+    for (int h = 1; h <= n; h++)
+    {
+        std::complex<double> acc = 0;
+        for (size_t i = 0; i < N; i++)
+        {
+            double w = 0.5 - 0.5 * std::cos(2 * M_PI * i / N);
+            acc += w * v[from + i] * std::polar(1.0, -2 * M_PI * h * f0 * i / 48000.0);
+        }
+        if (h == 1)
+            h1 = std::abs(acc);
+        out.push_back(20 * std::log10(std::abs(acc) / h1 + 1e-12));
     }
     return out;
 }
@@ -150,4 +184,143 @@ TEST_CASE("Mixer Switches Reset When A Patch Lacks Them", "[signalpath]")
     REQUIRE(patch.scene[0].mix_invert[2].val.b);
     REQUIRE(patch.scene[0].mix_postfilter[3].val.b);
     REQUIRE(!patch.scene[0].mix_invert[0].val.b);
+}
+
+TEST_CASE("Amp Saturator Shape And Position", "[signalpath]")
+{
+    auto make = [](float drive, float asym, float vca) {
+        auto s = sineSurge();
+        auto &sc = s->storage.getPatch().scene[0];
+        sc.vca_level.val.f = vca;
+        sc.amp_drive.deactivated = drive < -100;
+        sc.amp_drive.val.f = drive;
+        sc.amp_drive_asymmetry.val.f = asym;
+        return s;
+    };
+    const size_t from = 24000;
+    auto clean = render(*make(-1000, 0, 0), 69, 1000);
+    REQUIRE(rms(clean, from) > 0.1);
+
+    // Off by default
+    {
+        auto s = sineSurge();
+        REQUIRE(s->storage.getPatch().scene[0].amp_drive.deactivated);
+    }
+
+    for (auto [drive, asym] : {std::pair{12.f, 0.f}, {12.f, 0.4f}, {24.f, -0.3f}})
+    {
+        INFO("drive " << drive << " asymmetry " << asym);
+        auto sat = render(*make(drive, asym, 0), 69, 1000);
+        // the same curve applied to the clean render divided by k, the gain after the
+        // saturator (amp level, scene volume, pan), which this test doesn't need to know
+        auto G = std::pow(10.f, drive / 20.f);
+        auto hs = harmonics(sat, from, 440);
+        std::vector<double> he;
+        double bestErr = 1e9;
+        for (double k = 0.25; k < 2; k *= 1.01)
+        {
+            std::vector<float> expect(clean.size());
+            for (size_t i = 0; i < clean.size(); i++)
+            {
+                auto t = std::tanh(G * clean[i] / k);
+                expect[i] = (t + asym * t * t) / G;
+            }
+            auto h = harmonics(expect, from, 440);
+            double err = 0;
+            for (int j = 1; j < 6; j++)
+                if (h[j] > -80)
+                    err += (h[j] - hs[j]) * (h[j] - hs[j]);
+            if (err < bestErr)
+            {
+                bestErr = err;
+                he = h;
+            }
+        }
+        for (int h = 1; h < 6; h++)
+        {
+            INFO("harmonic " << h + 1);
+            if (he[h] > -80)
+                REQUIRE(hs[h] == Catch::Approx(he[h]).margin(0.2));
+            else
+                REQUIRE(hs[h] < -70);
+        }
+        if (asym == 0)
+            REQUIRE(hs[1] < -70); // symmetric: no even harmonics
+
+        // before the amp gain: the amp level doesn't change the spectrum
+        auto quiet = render(*make(drive, asym, -12), 69, 1000);
+        auto hq = harmonics(quiet, from, 440);
+        for (int h = 1; h < 6; h++)
+            if (hs[h] > -80)
+                REQUIRE(hq[h] == Catch::Approx(hs[h]).margin(0.05));
+        REQUIRE(rms(quiet, from) == Catch::Approx(rms(sat, from) / 4).epsilon(0.01));
+    }
+}
+
+TEST_CASE("Filter Saturator And Output Gain", "[signalpath]")
+{
+    auto make = [](bool filterOn, float drive, float gain) {
+        auto s = sineSurge();
+        auto &sc = s->storage.getPatch().scene[0];
+        sc.filterunit[0].type.val.i = sst::filters::fut_lp24;
+        sc.filterunit[0].cutoff.val.f = 60; // open
+        sc.filterunit[0].type.deactivated = !filterOn;
+        sc.filterunit[1].type.deactivated = true;
+        sc.filterunit[0].drive.deactivated = drive < -100;
+        sc.filterunit[0].drive.val.f = drive;
+        sc.filterunit[0].output_gain.val.f = gain;
+        return s;
+    };
+    const size_t from = 24000;
+    auto thru = render(*make(false, -1000, 0), 69, 1000);
+
+    // the saturator runs only while its filter does
+    auto thruDriven = render(*make(false, 24, 0), 69, 1000);
+    double worst = 0;
+    for (size_t i = 0; i < thru.size(); i++)
+        worst = std::max(worst, (double)std::fabs(thru[i] - thruDriven[i]));
+    REQUIRE(worst < 1e-6);
+    auto driven = harmonics(render(*make(true, 24, 0), 69, 1000), from, 440);
+    REQUIRE(driven[2] > -40); // third harmonic from the saturator
+
+    // output gain, also with the filter off
+    auto thruLoud = render(*make(false, -1000, 6.0206f), 69, 1000);
+    REQUIRE(rms(thruLoud, from) == Catch::Approx(2 * rms(thru, from)).epsilon(1e-4));
+    auto open = render(*make(true, -1000, 0), 69, 1000);
+    auto openQuiet = render(*make(true, -1000, -6.0206f), 69, 1000);
+    REQUIRE(rms(openQuiet, from) == Catch::Approx(rms(open, from) / 2).epsilon(1e-4));
+}
+
+TEST_CASE("Saturator Parameters Reset When A Patch Lacks Them", "[signalpath]")
+{
+    auto surge = Surge::Headless::createSurge(48000);
+    auto &patch = surge->storage.getPatch();
+    for (auto &sc : patch.scene)
+    {
+        sc.amp_drive.deactivated = false;
+        sc.amp_drive.val.f = 10;
+        sc.filterunit[1].drive.deactivated = false;
+        sc.filterunit[1].output_gain.val.f = 3;
+    }
+    REQUIRE(surge->loadPatchByPath("resources/test-data/patches/TestInitSaw.fxp", -1, "Test"));
+    for (auto &sc : patch.scene)
+    {
+        REQUIRE(sc.amp_drive.deactivated);
+        REQUIRE(sc.amp_drive.val.f == 0);
+        REQUIRE(sc.filterunit[1].drive.deactivated);
+        REQUIRE(sc.filterunit[1].output_gain.val.f == 0);
+    }
+    patch.scene[0].filterunit[0].drive.deactivated = false;
+    patch.scene[0].filterunit[0].drive.val.f = 7;
+    patch.scene[0].amp_drive_asymmetry.val.f = 0.25f;
+    void *data = nullptr;
+    auto size = patch.save_patch(&data);
+    std::vector<char> copy((char *)data, (char *)data + size);
+    patch.scene[0].filterunit[0].drive.deactivated = true;
+    patch.scene[0].filterunit[0].drive.val.f = 0;
+    patch.scene[0].amp_drive_asymmetry.val.f = 0;
+    patch.load_patch(copy.data(), (int)copy.size(), false);
+    REQUIRE(!patch.scene[0].filterunit[0].drive.deactivated);
+    REQUIRE(patch.scene[0].filterunit[0].drive.val.f == 7);
+    REQUIRE(patch.scene[0].amp_drive_asymmetry.val.f == 0.25f);
 }

@@ -213,6 +213,8 @@ Connector fx4_return = Connector("global.fx4_return", 763, 162);
 
 namespace Scene
 {
+Connector amp_drive = Connector("scene.amp_drive", 0, 0, Components::None);
+Connector amp_drive_asymmetry = Connector("scene.amp_drive_asymmetry", 0, 0, Components::None);
 Connector polylimit =
     Connector("scene.polylimit", 100, 41, 43, 14, Components::NumberField)
         .withBackground(IDB_NUMFIELD_POLY_SPLIT)
@@ -390,6 +392,12 @@ Connector level_prefiltergain =
 
 namespace Filter
 {
+Connector drive[2] = {Connector("filter.drive_1", 0, 0, Components::None),
+                      Connector("filter.drive_2", 0, 0, Components::None)};
+Connector drive_asymmetry[2] = {Connector("filter.drive_asymmetry_1", 0, 0, Components::None),
+                                Connector("filter.drive_asymmetry_2", 0, 0, Components::None)};
+Connector output_gain[2] = {Connector("filter.output_gain_1", 0, 0, Components::None),
+                            Connector("filter.output_gain_2", 0, 0, Components::None)};
 Connector config = Connector("filter.config", 455, 83, 134, 52, Components::MultiSwitch)
                        .withHSwitch2Properties(IDB_FILTER_CONFIG, 8, 1, 8);
 Connector feedback = Connector("filter.feedback", 457, 152).asHorizontal().asWhite();

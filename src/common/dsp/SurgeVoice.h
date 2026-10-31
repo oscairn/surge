@@ -262,6 +262,7 @@ class alignas(16) SurgeVoice
     struct
     {
         float Gain, FB, Mix1, Mix2, OutL, OutR, Out2L, Out2R, Drive, wsLPF, FBlineL, FBlineR;
+        float FDrive[2], FAsym[2], FGain[2], ADrive, AAsym, dcX[6], dcY[6];
         float Delay[4][sst::filters::utilities::MAX_FB_COMB +
                        sst::filters::utilities::SincTable::FIRipol_N];
         struct
