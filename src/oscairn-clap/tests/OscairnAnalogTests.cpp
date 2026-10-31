@@ -731,6 +731,16 @@ static void testFittedTables()
             return F::levelDb(x, rate, t0 + 0.3, t0 + 0.8);
         },
         db);
+    // Oscillator 1's out level at the amp level table's value for index 431 (the init amp level)
+    checkTable(
+        "oscillator 1 level", T::osc1Level, T::osc1LevelChecks, T::osc1LevelTolerance,
+        [&](float v) {
+            auto x = renderMono(
+                {60, 100, 1, 0.1, rate, {{"a_vca_level", T::ampLevel[431]}, {"a_level_o1", v}}, {}});
+            double t0 = F::onset(x, rate);
+            return F::levelDb(x, rate, t0 + 0.3, t0 + 0.8);
+        },
+        db);
     auto pct = [](double ref, double got) { return 100 * (got / ref - 1); };
     // Envelope times at note 60 with one-period windows; the tolerance has a 5 ms floor.
     auto envSpec = [&](const char *name, float v) {
