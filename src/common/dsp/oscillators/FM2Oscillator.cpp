@@ -195,10 +195,9 @@ void FM2Oscillator::init_default_values()
 void FM2Oscillator::handleStreamingMismatches(int streamingRevision,
                                               int currentSynthStreamingRevision)
 {
-    if (streamingRevision <= 12)
-    {
-        oscdata->p[fm2_feedback].set_type(ct_osc_feedback);
-    }
+    // Patches up to revision 12 used to get the unipolar ct_osc_feedback type here. A type
+    // isn't saved, so the next load came back bipolar; both give the same sound for the
+    // values these patches hold (>= 0), so they keep the current type (see SineOscillator).
 
     if (streamingRevision <= 15)
     {

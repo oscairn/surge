@@ -1196,7 +1196,12 @@ void SineOscillator::handleStreamingMismatches(int streamingRevision,
         oscdata->p[sine_highcut].val.f = oscdata->p[sine_highcut].val_max.f;
         oscdata->p[sine_highcut].deactivated = true;
 
-        oscdata->p[sine_feedback].set_type(ct_osc_feedback);
+        // These patches predate negative feedback and the feedback modes. They used to get
+        // the unipolar ct_osc_feedback type here, but a type isn't saved, so the next save
+        // and load came back bipolar and with whatever deform the parameter held before.
+        // Both types give the same sound for the values these patches can hold (>= 0), so
+        // keep the current type and pin the mode those patches always had.
+        oscdata->p[sine_feedback].deform_type = 0;
 
         int wave_remap[] = {0, 8, 9, 10, 1, 11, 4, 12, 13, 2, 3, 5, 6, 7, 14, 15, 16, 17, 18, 19};
 
