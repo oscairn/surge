@@ -4470,7 +4470,8 @@ unsigned int SurgePatch::save_xml(void **data) // allocates mem, must be freed b
     }
 
     TiXmlElement tempoOnSave("tempoOnSave");
-    tempoOnSave.SetDoubleAttribute("v", storage->temposyncratio * 120.0);
+    auto tempo = storage->saveFixedTempo ? 120.0 : storage->temposyncratio * 120.0;
+    tempoOnSave.SetDoubleAttribute("v", tempo);
     patch.InsertEndChild(tempoOnSave);
 
     TiXmlElement dawExtraXML("dawExtraState");

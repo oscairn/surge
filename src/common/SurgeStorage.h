@@ -1658,6 +1658,9 @@ class alignas(16) SurgeStorage
 
     float vu_falloff;
     float temposyncratio, temposyncratio_inv; // 1.f is 120 BPM
+    // Save 120 BPM as the patch's tempo instead of the host's, so a patch's saved bytes don't
+    // depend on the tempo at the time (and saving doesn't read the audio thread's tempo).
+    bool saveFixedTempo{false};
     float unstreamedTempo{120.f};             // this one is in actual BPM
     double songpos;
     bool isPlaying{false}; // host transport state
