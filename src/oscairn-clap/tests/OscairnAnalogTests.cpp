@@ -1,6 +1,10 @@
 /*
  * Tests for the Oscairn Analog CLAP instrument (doc/oscairn-plan.md, milestone 0).
- * GPL-3.0-or-later, see ../OscairnAnalog.cpp.
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright 2026, Oscairn contributors. This file (a small CLAP test host and an allocation
+ * guard) is MIT-licensed; the test executable links Surge XT and is GPL-3.0-or-later as a
+ * whole.
  *
  * The test is a small CLAP host: it creates the plugin through its entry, renders with
  * events at exact sample times and checks

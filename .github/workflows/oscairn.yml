@@ -1,5 +1,5 @@
 # Oscairn Analog (src/oscairn-clap, doc/oscairn-plan.md): build the plugin and its tests
-# without JUCE, Lua or MTS-ESP on macOS and Linux ARM64, with sanitizers on Linux, and run
+# without JUCE or Lua on macOS and Linux ARM64, with sanitizers on Linux, and run
 # Surge's test runner on macOS.
 name: Oscairn
 on:
@@ -42,7 +42,7 @@ jobs:
       - name: Configure
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DSURGE_SKIP_JUCE_FOR_RACK=ON -DSURGE_SKIP_LUA=ON -DSURGE_SKIP_ODDSOUND_MTS=ON \
+            -DSURGE_SKIP_JUCE_FOR_RACK=ON -DSURGE_SKIP_LUA=ON \
             -DSURGE_BUILD_TESTRUNNER=OFF -DSURGE_BUILD_OSCAIRN=ON \
             -DCMAKE_C_FLAGS="${{ matrix.flags }}" -DCMAKE_CXX_FLAGS="${{ matrix.flags }}" \
             -DCMAKE_EXE_LINKER_FLAGS="${{ matrix.flags }}" -DCMAKE_MODULE_LINKER_FLAGS="${{ matrix.flags }}"

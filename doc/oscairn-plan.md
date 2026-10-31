@@ -721,6 +721,9 @@ Open questions (each to settle from the manual or by measurement):
 9. Whether Oscairn will send polyphonic parameter modulation (Surge supports it; useful for
    controller boxes with per-voice destinations).
 10. ~~The licence of Oscairn's extension headers~~ Settled: MIT (section 8).
+11. Tuning: Oscairn as the MTS-ESP master (plugins keep Surge's MTS-ESP client) or tuning
+    only from each plugin's saved state (build with `SURGE_SKIP_ODDSOUND_MTS`). Jacob is
+    deciding; the Oscairn build keeps the client until then.
 
 ### Not verified in writing this plan
 
@@ -798,8 +801,21 @@ proposals where they differ:
 - *Notes.* CLAP note-on with velocity 0 stays a note-on. MIDI note-on with velocity 0 is a
   note-off, as MIDI defines. Note port dialects: CLAP (preferred) and MIDI; no MPE.
 - *No Lua.* Patches with a Formula modulator in scene A are refused (the previous state is
-  kept). Built with `SURGE_SKIP_LUA`, `SURGE_SKIP_ODDSOUND_MTS` and `SURGE_SKIP_JUCE_FOR_RACK`:
-  `surge-common` does build without JUCE (verified on macOS arm64).
+  kept). Built with `SURGE_SKIP_LUA` and `SURGE_SKIP_JUCE_FOR_RACK`: `surge-common` does build
+  without JUCE (verified on macOS arm64).
+- *MTS-ESP: kept for now* (open question 11). Surge's MTS-ESP client stays in the Oscairn
+  build, because Oscairn may become the MTS-ESP master and save tuning with the Performance.
+  The CI workflow first built with `SURGE_SKIP_ODDSOUND_MTS`; it now builds with the client.
+  The local sanitizer runs above used `SURGE_SKIP_ODDSOUND_MTS`; the plain macOS build with the
+  client passes the same plugin tests. Not checked: whether the MTS-ESP client does anything
+  real-time unsafe while a master is running (the tests run without one).
+- *Licences* (Jacob's decision, 2026-10-31): DSP blocks shared between Oscairn and the forks
+  (filters, envelopes, LFOs) are GPL-3.0-or-later; test helpers are MIT
+  (`src/oscairn-clap/tests/OscairnAnalogTests.cpp`). Measurement analysis against reference
+  renders of the instrument being matched (pitch, level, spectrum, envelopes, filter response,
+  tolerances) goes in the private, MIT-licensed `oscairn/measurement` repository (`analog/`,
+  `common/`), not in this fork. Nothing of that kind is in the fork yet; the `[reference]`
+  test compares Surge with itself.
 - *Allocation on the audio thread.* Found by the allocation guard and fixed: the voice and
   hold-buffer `std::list`s allocated a node per note (now `Surge::FixedPoolAllocator`, with a
   heap fallback past the pool size); `purgeHoldbuffer` and

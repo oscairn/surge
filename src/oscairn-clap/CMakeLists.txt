@@ -1,7 +1,7 @@
 # vi:set sw=2 et:
 # Oscairn Analog: Surge XT's engine as a CLAP instrument for the Oscairn host
-# (doc/oscairn-plan.md). Build with SURGE_SKIP_LUA and SURGE_SKIP_ODDSOUND_MTS for the
-# configuration the plan describes; the plugin refuses Formula modulators either way.
+# (doc/oscairn-plan.md). Build with SURGE_SKIP_LUA for the configuration the plan describes;
+# the plugin refuses Formula modulators either way. MTS-ESP stays for now (plan, section 10).
 project(oscairn-analog)
 
 add_library(oscairn-analog-core STATIC OscairnAnalog.cpp OscairnAnalog.h)
