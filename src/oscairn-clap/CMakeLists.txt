@@ -18,7 +18,7 @@ set_target_properties(oscairn-analog PROPERTIES
   CXX_VISIBILITY_PRESET hidden
   VISIBILITY_INLINES_HIDDEN ON)
 
-add_executable(oscairn-analog-tests tests/OscairnAnalogTests.cpp)
+add_executable(oscairn-analog-tests tests/OscairnAnalogTests.cpp tools/RenderNote.cpp)
 target_link_libraries(oscairn-analog-tests PRIVATE oscairn-analog-core)
 target_compile_definitions(oscairn-analog-tests PRIVATE
   SURGE_FACTORY_PATCHES="${SURGE_SOURCE_DIR}/resources/data/patches_factory")

@@ -16,13 +16,18 @@
  *   - a velocity-0 note-on starts a note, NOTE_END for every note ID (also when a state
  *     load ends held notes),
  *   - refusal of patches with Formula modulators,
- *   - state loads and saves on one thread while another renders (run under TSan).
+ *   - state loads and saves on one thread while another renders (run under TSan),
+ *   - the fitted tables (FittedTables.h, milestone 1): rendering a table's engine value
+ *     gives the feature measured on the reference at that index, within the tolerance.
  *
  * Usage: oscairn-analog-tests [factory patch directory]
  */
 
 #include "OscairnAnalog.h"
 #include "SurgeSynthesizer.h"
+#include "../tools/RenderNote.h"
+#include "Features.h"
+#include "FittedTables.h"
 
 #include <algorithm>
 #include <atomic>
@@ -664,6 +669,50 @@ static void testConcurrentState()
     audio.join();
 }
 
+// --- fitted tables -------------------------------------------------------------------
+static std::vector<float> renderMono(oscairn_analog::RenderSpec spec)
+{
+    spec.rate = 44100;
+    spec.params.insert(spec.params.begin(), {{"a_drift", 0}, {"a_env1_mode", 1}});
+    auto lr = oscairn_analog::renderNote(spec);
+    std::vector<float> m(lr.size() / 2);
+    for (size_t i = 0; i < m.size(); ++i)
+        m[i] = 0.5f * (lr[2 * i] + lr[2 * i + 1]);
+    return m;
+}
+
+template <size_t N, size_t K>
+static void checkTable(const char *name, const float (&table)[N],
+                       const oscairn_tables::Check (&checks)[K], double tolerance,
+                       const std::function<double(float)> &measure,
+                       const std::function<double(double, double)> &error)
+{
+    for (auto &c : checks)
+    {
+        double got = measure(table[c.index]), err = error(c.reference, got);
+        check(std::fabs(err) <= tolerance, std::string(name) + " at index " +
+                                               std::to_string(c.index) + ": reference " +
+                                               std::to_string(c.reference) + ", engine " +
+                                               std::to_string(got));
+    }
+}
+
+static void testFittedTables()
+{
+    namespace F = oscairn_features;
+    namespace T = oscairn_tables;
+    const double rate = 44100;
+    auto db = [](double ref, double got) { return got - ref; };
+    checkTable(
+        "amp level", T::ampLevel, T::ampLevelChecks, T::ampLevelTolerance,
+        [&](float v) {
+            auto x = renderMono({60, 100, 1, 0.1, rate, {{"a_vca_level", v}}, {}});
+            double t0 = F::onset(x, rate);
+            return F::levelDb(x, rate, t0 + 0.3, t0 + 0.8);
+        },
+        db);
+}
+
 int main(int argc, char **argv)
 {
     std::string dir = argc > 1 ? argv[1] : SURGE_FACTORY_PATCHES;
@@ -682,6 +731,7 @@ int main(int argc, char **argv)
         run("notes", [] { testNotes(); });
         run("formula refused", [] { testFormulaRefused(); });
         run("concurrent state", [] { testConcurrentState(); });
+        run("fitted tables", [] { testFittedTables(); });
     }
     catch (const std::exception &e)
     {
