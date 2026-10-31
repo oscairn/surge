@@ -198,6 +198,13 @@ class alignas(16) SurgeSynthesizer
     int getNonReleasedVoices(int scene) const;
 
     SurgeVoice *getUnusedVoice(int scene); // not const since it updates voice state
+    // Voice unison: how many voices a note starts, and the detune and pan of voice u of n
+    int unisonVoiceCount(int scene) const;
+    void setupUnisonVoice(SurgeVoice *v, int scene, int u, int n, int64_t group);
+    // Reclaims the other voices of lead's unison group for the same note (mono modes)
+    void reclaimUnisonGroup(SurgeVoice *lead, char key, char channel, char velocity, int scene,
+                            int host_noteid, int host_originating_channel,
+                            int host_originating_key);
     void freeVoice(SurgeVoice *);
     void reclaimVoiceFor(SurgeVoice *v, char key, char channel, char velocity, int scene,
                          int host_note_id, int host_originating_channel, int host_originating_key,

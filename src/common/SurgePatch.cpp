@@ -704,6 +704,21 @@ SurgePatch::SurgePatch(SurgeStorage *storage)
             p_id.next(), id_s++, "prews_drive", "Pre-Filter Shaper Drive",
             fmt::format("{:c}/prefilter_shaper/drive", 'a' + sc), ct_decibel,
             Surge::Skin::Filter::prefilter_ws_drive, sc_id, cg_GLOBAL, 0, true));
+
+        a->push_back(scene[sc].unison_voices.assign(
+            p_id.next(), id_s++, "unison_voices", "Voice Unison",
+            fmt::format("{:c}/unison/voices", 'a' + sc), ct_osccount,
+            Surge::Skin::Scene::unison_voices, sc_id, cg_GLOBAL, 0, false));
+        a->push_back(scene[sc].unison_detune.assign(
+            p_id.next(), id_s++, "unison_detune", "Voice Unison Detune",
+            fmt::format("{:c}/unison/detune", 'a' + sc), ct_oscspread,
+            Surge::Skin::Scene::unison_detune, sc_id, cg_GLOBAL, 0, true));
+        scene[sc].unison_detune.val_default.f = 0.f;
+        scene[sc].unison_detune.val.f = 0.f;
+        a->push_back(scene[sc].unison_spread.assign(
+            p_id.next(), id_s++, "unison_spread", "Voice Unison Spread",
+            fmt::format("{:c}/unison/spread", 'a' + sc), ct_percent,
+            Surge::Skin::Scene::unison_spread, sc_id, cg_GLOBAL, 0, true));
     }
 
     param_ptr.push_back(
@@ -2050,7 +2065,8 @@ void SurgePatch::load_xml(const void *data, int datasize, bool is_preset)
                          &sc.filterunit[0].output_gain, &sc.filterunit[1].drive,
                          &sc.filterunit[1].drive_asymmetry, &sc.filterunit[1].output_gain,
                          &sc.amp_drive, &sc.amp_drive_asymmetry, &sc.prefilter_ws.type,
-                         &sc.prefilter_ws.drive})
+                         &sc.prefilter_ws.drive, &sc.unison_voices, &sc.unison_detune,
+                         &sc.unison_spread})
         {
             p->val = p->val_default;
             p->deactivated = p->can_deactivate();

@@ -893,6 +893,14 @@ template <bool first> void SurgeVoice::calc_ctrldata(QuadFilterChainState *Q, in
 
     amp = amp * noteExpressions[VOLUME]; // since amp is already linear as is the NE
 
+    // Unison pan attenuates only the far side (by cos^2), so a voice at the centre is unchanged
+    float unisonL = state.unisonGain, unisonR = state.unisonGain;
+    if (state.unisonPan != 0.f)
+    {
+        float c = std::cos(1.57079633f * std::min(std::fabs(state.unisonPan), 1.f));
+        (state.unisonPan > 0.f ? unisonL : unisonR) *= c * c;
+    }
+
     // Volume correcting/correction (fc_stereo updated since v1.2.2)
     if (scene->filterblock_configuration.val.i == fc_wide)
         amp *= 0.6666666f;
@@ -908,8 +916,8 @@ template <bool first> void SurgeVoice::calc_ctrldata(QuadFilterChainState *Q, in
         float pan2 = pan1 + localcopy[width_id].f;
         pan1 -= localcopy[width_id].f;
 
-        float amp2L = amp * megapanL(pan2);
-        float amp2R = amp * megapanR(pan2);
+        float amp2L = amp * megapanL(pan2) * unisonL;
+        float amp2R = amp * megapanR(pan2) * unisonR;
         if (Q)
         {
             set1f(Q->Out2L, e, FBP.Out2L);
@@ -921,8 +929,8 @@ template <bool first> void SurgeVoice::calc_ctrldata(QuadFilterChainState *Q, in
         FBP.Out2R = amp2R;
     }
 
-    float ampL = amp * megapanL(pan1);
-    float ampR = amp * megapanR(pan1);
+    float ampL = amp * megapanL(pan1) * unisonL;
+    float ampR = amp * megapanR(pan1) * unisonR;
 
     if (Q)
     {

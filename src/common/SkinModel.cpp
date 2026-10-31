@@ -214,6 +214,9 @@ Connector fx4_return = Connector("global.fx4_return", 763, 162);
 namespace Scene
 {
 Connector amp_drive = Connector("scene.amp_drive", 0, 0, Components::None);
+Connector unison_voices = Connector("scene.unison_voices", 0, 0, Components::None);
+Connector unison_detune = Connector("scene.unison_detune", 0, 0, Components::None);
+Connector unison_spread = Connector("scene.unison_spread", 0, 0, Components::None);
 Connector amp_drive_asymmetry = Connector("scene.amp_drive_asymmetry", 0, 0, Components::None);
 Connector polylimit =
     Connector("scene.polylimit", 100, 41, 43, 14, Components::NumberField)

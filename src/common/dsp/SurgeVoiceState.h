@@ -50,6 +50,11 @@ struct SurgeVoiceState
     bool mtsUseChannelWhenRetuning = false;
     int64_t voiceOrderAtCreate{-1};
 
+    // Voice unison: the voices a note starts share a group (the first one's voice order) and
+    // each has a pan position (-1..1; the far side is scaled by cos^2) and a gain
+    int64_t unisonGroup{-1};
+    float unisonPan{0.f}, unisonGain{1.f};
+
     float getPitch(SurgeStorage *storage);
     float MTS_RetuningForBentKey(SurgeStorage *storage, float key);
 };

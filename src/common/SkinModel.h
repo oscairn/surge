@@ -440,6 +440,8 @@ extern Surge::Skin::Connector polylimit, splitpoint, drift, fmdepth, fmrouting, 
     send_fx_2, send_fx_3, send_fx_4, vel_sensitivity, volume, width;
 // Amp saturator, without a control in the skin
 extern Surge::Skin::Connector amp_drive, amp_drive_asymmetry;
+// Voice unison, without a control in the skin
+extern Surge::Skin::Connector unison_voices, unison_detune, unison_spread;
 }
 
 namespace ModSources

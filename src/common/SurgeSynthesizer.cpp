@@ -770,6 +770,42 @@ int SurgeSynthesizer::getMpeMainChannel(int voiceChannel, int key)
     return voiceChannel;
 }
 
+int SurgeSynthesizer::unisonVoiceCount(int scene) const
+{
+    auto &p = storage.getPatch().scene[scene].unison_voices;
+    return std::clamp(p.val.i, p.val_min.i, p.val_max.i);
+}
+
+void SurgeSynthesizer::setupUnisonVoice(SurgeVoice *v, int scene, int u, int n, int64_t group)
+{
+    if (n <= 1)
+        return;
+    auto &sc = storage.getPatch().scene[scene];
+    // offsets from -n/2 to n/2, evenly spaced: +-1 for two voices, +-2 and +-2/3 for four
+    float k = 0.5f * n * (2.f * u / (n - 1) - 1.f);
+    v->state.detune += k * sc.unison_detune.get_extended(sc.unison_detune.val.f);
+    v->state.unisonPan = std::clamp(k * sc.unison_spread.val.f, -1.f, 1.f);
+    v->state.unisonGain = 1.f / std::sqrt((float)n);
+    v->state.unisonGroup = group;
+}
+
+void SurgeSynthesizer::reclaimUnisonGroup(SurgeVoice *lead, char key, char channel,
+                                          char velocity, int scene, int host_noteid,
+                                          int host_originating_channel, int host_originating_key)
+{
+    if (lead->state.unisonGroup < 0)
+        return;
+    // shortcut: keeps the group's size from when it started, even if the voice count changed
+    for (auto v : voices[scene])
+    {
+        if (v != lead && v->state.unisonGroup == lead->state.unisonGroup)
+        {
+            reclaimVoiceFor(v, key, channel, velocity, scene, host_noteid,
+                            host_originating_channel, host_originating_key);
+        }
+    }
+}
+
 void SurgeSynthesizer::playVoice(int scene, char channel, char key, char velocity, char detune,
                                  int32_t host_noteid, int16_t override_hostkey,
                                  int16_t override_hostchan)
@@ -812,8 +848,9 @@ void SurgeSynthesizer::playVoice(int scene, char channel, char key, char velocit
         storage.getPatch().scene[scene].modsources[i]->attack();
     }
 
-    int excessVoices =
-        max(0, (int)getNonUltrareleaseVoices(scene) - storage.getPatch().polylimit.val.i + 1);
+    const int nUnison = unisonVoiceCount(scene);
+    int excessVoices = max(0, (int)getNonUltrareleaseVoices(scene) -
+                                  storage.getPatch().polylimit.val.i + nUnison);
 
     for (int i = 0; i < excessVoices; i++)
     {
@@ -866,23 +903,30 @@ void SurgeSynthesizer::playVoice(int scene, char channel, char key, char velocit
 
         if (!reusedVoice)
         {
-            SurgeVoice *nvoice = getUnusedVoice(scene);
-
-            if (nvoice)
+            const int64_t group = voiceCounter;
+            for (int u = 0; u < nUnison; ++u)
             {
-                // This is a constructed voice which we are going to re-construct
-                // so run the destructor. See also the handling in freeVoice below
-                nvoice->~SurgeVoice();
+                SurgeVoice *nvoice = getUnusedVoice(scene);
 
-                int mpeMainChannel = getMpeMainChannel(channel, key);
+                if (nvoice)
+                {
+                    // This is a constructed voice which we are going to re-construct
+                    // so run the destructor. See also the handling in freeVoice below
+                    nvoice->~SurgeVoice();
 
-                voices[scene].push_back(nvoice);
-                new (nvoice) SurgeVoice(
-                    &storage, &storage.getPatch().scene[scene], storage.getPatch().scenedata[scene],
-                    storage.getPatch().scenedataOrig[scene], key, velocity, channel, scene, detune,
-                    &channelState[channel].keyState[key], &channelState[mpeMainChannel],
-                    &channelState[channel], mpeEnabled, voiceCounter++, host_noteid,
-                    host_originating_key, host_originating_channel, 0.f, 0.f);
+                    int mpeMainChannel = getMpeMainChannel(channel, key);
+
+                    voices[scene].push_back(nvoice);
+                    new (nvoice) SurgeVoice(
+                        &storage, &storage.getPatch().scene[scene],
+                        storage.getPatch().scenedata[scene],
+                        storage.getPatch().scenedataOrig[scene], key, velocity, channel, scene,
+                        detune, &channelState[channel].keyState[key],
+                        &channelState[mpeMainChannel], &channelState[channel], mpeEnabled,
+                        voiceCounter++, host_noteid, host_originating_key,
+                        host_originating_channel, 0.f, 0.f);
+                    setupUnisonVoice(nvoice, scene, u, nUnison, group);
+                }
             }
         }
         break;
@@ -996,9 +1040,19 @@ void SurgeSynthesizer::playVoice(int scene, char channel, char key, char velocit
             {
                 reclaimVoiceFor(stealEnvelopesFrom, key, channel, velocity, scene, host_noteid,
                                 host_originating_channel, host_originating_key);
+                reclaimUnisonGroup(stealEnvelopesFrom, key, channel, velocity, scene, host_noteid,
+                                   host_originating_channel, host_originating_key);
                 if (mode == pm_mono_fp && !wasGated)
                 {
-                    stealEnvelopesFrom->resetPortamentoFrom(key, channel);
+                    for (auto v : voices[scene])
+                    {
+                        if (v == stealEnvelopesFrom ||
+                            (v->state.unisonGroup >= 0 &&
+                             v->state.unisonGroup == stealEnvelopesFrom->state.unisonGroup))
+                        {
+                            v->resetPortamentoFrom(key, channel);
+                        }
+                    }
                 }
             }
             else
@@ -1010,11 +1064,14 @@ void SurgeSynthesizer::playVoice(int scene, char channel, char key, char velocit
                     notifyEndedNote(host_noteid, noteIdToReuse, channelToReuse, keyToReuse);
                 }
 
-                SurgeVoice *nvoice = getUnusedVoice(scene);
                 float aegReuse{0.f}, fegReuse{0.f};
+                const int64_t group = voiceCounter;
 
-                if (nvoice)
+                for (int u = 0; u < nUnison; ++u)
                 {
+                    SurgeVoice *nvoice = getUnusedVoice(scene);
+                    if (!nvoice)
+                        break;
                     int mpeMainChannel = getMpeMainChannel(channel, key);
 
                     voices[scene].push_back(nvoice);
@@ -1030,6 +1087,7 @@ void SurgeSynthesizer::playVoice(int scene, char channel, char key, char velocit
                         detune, &channelState[channel].keyState[key], &channelState[mpeMainChannel],
                         &channelState[channel], mpeEnabled, voiceCounter++, host_noteid,
                         host_originating_key, host_originating_channel, aegReuse, fegReuse);
+                    setupUnisonVoice(nvoice, scene, u, nUnison, group);
 
                     if (wasGated && pkeyToReuse > 0)
                     {
@@ -1141,11 +1199,13 @@ void SurgeSynthesizer::playVoice(int scene, char channel, char key, char velocit
                         v->state.voiceChannelState = &channelState[channel];
                         storage.last_channel[scene] = channel;
                     }
-                    break;
+                    if (v->state.unisonGroup < 0)
+                        break;
                 }
                 else
                 {
-                    if (v->state.scene_id == scene && !v->state.uberrelease)
+                    // found_one is only set here while legato-ing a unison group
+                    if (!found_one && v->state.scene_id == scene && !v->state.uberrelease)
                     {
                         if (storage.getPatch().scene[scene].monoVoiceEnvelopeMode !=
                             RESTART_FROM_ZERO)
@@ -1159,14 +1219,19 @@ void SurgeSynthesizer::playVoice(int scene, char channel, char key, char velocit
             {
                 reclaimVoiceFor(recycleThis, key, channel, velocity, scene, host_noteid,
                                 host_originating_channel, host_originating_key);
+                reclaimUnisonGroup(recycleThis, key, channel, velocity, scene, host_noteid,
+                                   host_originating_channel, host_originating_key);
             }
             else if (!found_one)
             {
                 int mpeMainChannel = getMpeMainChannel(channel, key);
+                const int64_t group = voiceCounter;
 
-                SurgeVoice *nvoice = getUnusedVoice(scene);
-                if (nvoice)
+                for (int u = 0; u < nUnison; ++u)
                 {
+                    SurgeVoice *nvoice = getUnusedVoice(scene);
+                    if (!nvoice)
+                        break;
                     voices[scene].push_back(nvoice);
                     new (nvoice) SurgeVoice(
                         &storage, &storage.getPatch().scene[scene],
@@ -1175,6 +1240,7 @@ void SurgeSynthesizer::playVoice(int scene, char channel, char key, char velocit
                         detune, &channelState[channel].keyState[key], &channelState[mpeMainChannel],
                         &channelState[channel], mpeEnabled, voiceCounter++, host_noteid,
                         host_originating_key, host_originating_channel, aegStart, fegStart);
+                    setupUnisonVoice(nvoice, scene, u, nUnison, group);
                 }
             }
             else
@@ -6009,15 +6075,16 @@ void SurgeSynthesizer::reclaimVoiceFor(SurgeVoice *v, char key, char channel, ch
     v->retriggerOSCWithIndependentAttacks();
     v->resetPortamentoFrom(priorKey, priorVoiceChannel);
 
-    // Now end this note unless it is used by another scene
+    // Now end this note unless it is used by another scene, or another voice of its unison
+    // group still holds it (the group's last reclaim ends it)
     bool endHostVoice = true;
     for (auto s = 0; s < n_scenes; ++s)
     {
-        if (s == scene)
-            continue;
-        for (auto v : voices[s])
+        for (auto vo : voices[s])
         {
-            if (v->host_note_id == priorNoteId)
+            if (vo->host_note_id == priorNoteId &&
+                (s != scene || (vo != v && vo->state.unisonGroup >= 0 &&
+                                vo->state.unisonGroup == v->state.unisonGroup)))
             {
                 endHostVoice = false;
             }
