@@ -17,7 +17,8 @@ struct RenderSpec
 {
     int note = 60, velocity = 100;
     double hold = 1, tail = 1, rate = 48000;
-    // Surge storage name (a_osc1_pitch ...) and value in Surge's own units
+    // Surge storage name (a_osc1_pitch ...) and value in Surge's own units; name.off with a
+    // value of 1 deactivates the parameter (a_lowcut.off)
     std::vector<std::pair<std::string, double>> params;
     struct Mod
     {

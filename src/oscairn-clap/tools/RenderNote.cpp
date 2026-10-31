@@ -54,6 +54,12 @@ const clap_host_t host = {
 
 void setParam(SurgeSynthesizer &synth, const std::string &name, double v)
 {
+    // name.off=1 deactivates a parameter that can be switched off (a_lowcut.off=1)
+    if (name.size() > 4 && name.compare(name.size() - 4, 4, ".off") == 0)
+    {
+        findParam(synth, name.substr(0, name.size() - 4))->deactivated = v > 0.5;
+        return;
+    }
     auto *p = findParam(synth, name);
     pdata d = p->val;
     if (p->valtype == vt_float)
