@@ -611,6 +611,9 @@ Measurement follows RFC 0013's rules:
 
 ## 7. Upstreamability
 
+Jacob's decision (2026-10-31): the generic commits go upstream eventually, not yet. Nothing has
+been offered upstream.
+
 | Change | Upstream to surge-synthesizer? |
 | --- | --- |
 | Seedable, platform-independent RNG; removing `rand()` from `DriftLFO` (sst-basic-blocks) | Likely: helps Surge's own golden tests |
@@ -721,9 +724,8 @@ Open questions (each to settle from the manual or by measurement):
 9. Whether Oscairn will send polyphonic parameter modulation (Surge supports it; useful for
    controller boxes with per-voice destinations).
 10. ~~The licence of Oscairn's extension headers~~ Settled: MIT (section 8).
-11. Tuning: Oscairn as the MTS-ESP master (plugins keep Surge's MTS-ESP client) or tuning
-    only from each plugin's saved state (build with `SURGE_SKIP_ODDSOUND_MTS`). Jacob is
-    deciding; the Oscairn build keeps the client until then.
+11. ~~Tuning~~ Settled: Oscairn is the MTS-ESP master and offers `clap.tuning` (RFC 0017);
+    the plugin keeps Surge's MTS-ESP client (section 10).
 
 ### Not verified in writing this plan
 
@@ -795,16 +797,37 @@ proposals where they differ:
 - *State bytes.* Surge's patch (`sub3` header, XML, wavetables). Never written: the DAW extra
   state. The patch's "tempo on save" is fixed at 120 BPM in this target
   (`SurgeStorage::saveFixedTempo`) so the bytes don't depend on the host's tempo.
-  Surge's migrations are not idempotent for 83 older factory patches (revision 9/10): the first
-  save after loading one differs from the next save. The test therefore requires the fixed
-  point (save, load, save gives the same bytes) for every factory patch.
+  Surge's migrations were not idempotent for 83 older factory patches: the first save after
+  loading one differed from the next save. Jacob asked for the cause to be found and fixed
+  (2026-10-31). Two causes, both fixed in separate commits with an `[io]` test that every
+  factory patch, once loaded and saved, loads and saves back to the same bytes:
+  - 81 patches (revision 12 and older) with a Sine, FM2 or FM3 oscillator: the migration
+    switched the feedback parameter to the unipolar `ct_osc_feedback` type, which isn't saved,
+    so the next load came back bipolar; for the Sine oscillator the feedback mode
+    (`deform_type`) also kept whatever the parameter held before the load, because `load_xml`
+    decides a missing `deform_type`'s default with the previous patch's control types. Fix:
+    keep the current type (same sound for these patches' values, 0 to 1) and set the Sine
+    feedback mode to 0. The reference renders are unchanged.
+  - 2 patches with a wavetable oscillator but no wavetable data of their own: the save wrote
+    the table with an empty name, and the load names unnamed data "(Patch Wavetable)". Fix:
+    save the name a load would give. Not fixed: such an oscillator plays whatever table it
+    held before the load (order-dependent sound); the plugin's state always carries the table,
+    so this only affects loading those old patches.
+  The plugin test now requires save == load→save from the first save.
+
+  The wider `load_xml` issue (a missing `deform_type` defaults by the control type in place
+  before the load) remains for patches between revision 13 and the revision that added each
+  deform. No factory patch shows it in bytes; not investigated further.
 - *Notes.* CLAP note-on with velocity 0 stays a note-on. MIDI note-on with velocity 0 is a
   note-off, as MIDI defines. Note port dialects: CLAP (preferred) and MIDI; no MPE.
 - *No Lua.* Patches with a Formula modulator in scene A are refused (the previous state is
   kept). Built with `SURGE_SKIP_LUA` and `SURGE_SKIP_JUCE_FOR_RACK`: `surge-common` does build
   without JUCE (verified on macOS arm64).
-- *MTS-ESP: kept for now* (open question 11). Surge's MTS-ESP client stays in the Oscairn
-  build, because Oscairn may become the MTS-ESP master and save tuning with the Performance.
+- *MTS-ESP: kept.* Jacob's decision (2026-10-31, Oscairn RFC 0017 "Host-level tuning"):
+  Oscairn is the MTS-ESP master and also offers CLAP's draft `clap.tuning`. Plugins use host
+  tuning first, then their own stored tuning, then MTS-ESP, then 12-TET. Surge's MTS-ESP
+  client stays in the Oscairn build. `clap.tuning` is the target but no milestone of this plan
+  covers it yet; it belongs with sound contexts (milestone 5) or its own step.
   The CI workflow first built with `SURGE_SKIP_ODDSOUND_MTS`; it now builds with the client.
   The local sanitizer runs above used `SURGE_SKIP_ODDSOUND_MTS`; the plain macOS build with the
   client passes the same plugin tests. Not checked: whether the MTS-ESP client does anything
