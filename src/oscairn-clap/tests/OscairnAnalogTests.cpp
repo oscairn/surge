@@ -46,6 +46,7 @@ static void *guardedAlloc(std::size_t n)
 {
     if (forbidAllocation)
     {
+        forbidAllocation = false; // backtrace() may allocate
         std::fputs("FAIL: heap allocation inside process()\n", stderr);
         void *frames[32];
         backtrace_symbols_fd(frames, backtrace(frames, 32), STDERR_FILENO);

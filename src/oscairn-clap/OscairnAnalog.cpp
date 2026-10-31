@@ -119,7 +119,9 @@ struct Plugin
     // Main thread sets loading, then waits until the audio thread is out of process().
     // process() marks itself inside, then backs out if a load is pending. Both use seq_cst,
     // so at least one of them sees the other.
-    std::atomic<bool> loading{false}, inProcess{false};
+    // A call that backs out sets backedOut: process() calls never overlap, so every later call
+    // backs out too and the main thread needn't catch inProcess false between back-to-back calls.
+    std::atomic<bool> loading{false}, inProcess{false}, backedOut{false};
     // Odd while the audio thread applies parameter changes; save checks it didn't change.
     std::atomic<uint32_t> paramEpoch{0};
 
@@ -447,6 +449,7 @@ struct Plugin
         inProcess.store(true);
         if (loading.load())
         {
+            backedOut.store(true);
             inProcess.store(false);
             std::fill(outL, outL + pr->frames_count, 0.f);
             std::fill(outR, outR + pr->frames_count, 0.f);
@@ -497,8 +500,9 @@ struct Plugin
     // Runs f with the audio thread kept out of the engine. Main thread only.
     template <typename F> void excludingAudio(F &&f)
     {
+        backedOut.store(false);
         loading.store(true);
-        while (inProcess.load())
+        while (inProcess.load() && !backedOut.load())
             std::this_thread::yield();
         f();
         loading.store(false);
@@ -671,7 +675,9 @@ void paramsFlush(const clap_plugin_t *p, const clap_input_events_t *in,
     auto &s = self(p);
     // Called on the main thread when not processing, or on the audio thread instead of process.
     s.inProcess.store(true);
-    if (!s.loading.load())
+    if (s.loading.load())
+        s.backedOut.store(true);
+    else
     {
         for (uint32_t i = 0; i < in->size(in); ++i)
         {
