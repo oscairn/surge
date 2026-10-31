@@ -677,12 +677,17 @@ int main(int argc, char **argv)
     {
         auto patches = factoryPatches(dir);
         check(!patches.empty(), "factory patches found in " + dir);
-        testPortsAndParams(patches);
-        testStateRoundTrip(patches);
-        testBlockSizes(patches);
-        testNotes();
-        testFormulaRefused();
-        testConcurrentState();
+        auto run = [](const char *name, auto &&test) {
+            std::printf("%s\n", name);
+            std::fflush(stdout);
+            test();
+        };
+        run("ports and parameters", [&] { testPortsAndParams(patches); });
+        run("state round trips", [&] { testStateRoundTrip(patches); });
+        run("block sizes", [&] { testBlockSizes(patches); });
+        run("notes", [] { testNotes(); });
+        run("formula refused", [] { testFormulaRefused(); });
+        run("concurrent state", [] { testConcurrentState(); });
     }
     catch (const std::exception &e)
     {

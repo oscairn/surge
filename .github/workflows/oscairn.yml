@@ -49,6 +49,7 @@ jobs:
       - name: Build
         run: cmake --build build --target oscairn-analog oscairn-analog-tests
       - name: Test
+        timeout-minutes: 30
         env:
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
           TSAN_OPTIONS: halt_on_error=1
