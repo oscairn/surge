@@ -207,7 +207,7 @@ void StringOscillator::init(float pitch, bool is_display, bool nzi)
     for (int i = 0; i < 2; ++i)
     {
         delayLine[i]->clear();
-        driftLFO[i].init(nzi);
+        driftLFO[i].init(nzi, is_display ? 1u : storage->rand_u32());
     }
 
     auto mode = (exciter_modes)oscdata->p[str_exciter_mode].val.i;

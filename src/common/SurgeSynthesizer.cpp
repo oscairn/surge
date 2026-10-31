@@ -157,6 +157,9 @@ SurgeSynthesizer::SurgeSynthesizer(PluginLayer *parent, const std::string &suppl
 
         scene.modsources[ms_random_bipolar] = new RandomModulationSource(true);
         scene.modsources[ms_random_unipolar] = new RandomModulationSource(false);
+        // storage's RNG is clock-seeded here; seedRandom() makes these reproducible
+        for (auto ms : {ms_random_bipolar, ms_random_unipolar})
+            static_cast<RandomModulationSource *>(scene.modsources[ms])->seed(storage.rand_u32());
         scene.modsources[ms_alternate_bipolar] = new AlternateModulationSource(true);
         scene.modsources[ms_alternate_unipolar] = new AlternateModulationSource(false);
 
@@ -2902,6 +2905,19 @@ void SurgeSynthesizer::retriggerHeldNotesAfterPatchLoad()
     }
 
     suppressedNoteEndCount = 0;
+}
+
+void SurgeSynthesizer::seedRandom(uint32_t seed)
+{
+    storage.seedRandom(seed);
+    for (auto &scene : storage.getPatch().scene)
+    {
+        for (auto ms : {ms_random_bipolar, ms_random_unipolar})
+            static_cast<RandomModulationSource *>(scene.modsources[ms])->seed(storage.rand_u32());
+        for (int l = 0; l < n_lfos_scene; l++)
+            static_cast<LFOModulationSource *>(scene.modsources[ms_slfo1 + l])
+                ->seed(storage.rand_u32());
+    }
 }
 
 void SurgeSynthesizer::setSamplerate(float sr)

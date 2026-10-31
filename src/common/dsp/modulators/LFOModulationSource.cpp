@@ -183,7 +183,10 @@ void LFOModulationSource::attackFrom(float start)
 {
     // For VLFO you don't need this but SLFO get recycled, so you do
     if (!is_display)
+    {
         msegstate = Surge::MSEG::EvaluatorState();
+        msegstate.seed(storage->rand_u32());
+    }
 
     if (!phaseInitialized)
     {

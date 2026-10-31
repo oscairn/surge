@@ -31,7 +31,51 @@ namespace Surge
 {
 namespace Oscillator
 {
-using DriftLFO = sst::basic_blocks::dsp::DriftLFO;
+/*
+ * sst::basic_blocks::dsp::DriftLFO with the same filter, but drawing from its own generator
+ * instead of the C library's global rand(), so drift is reproducible once storage's RNG is
+ * seeded and doesn't depend on other instances or threads.
+ */
+struct DriftLFO
+{
+    inline void init(bool nzi, uint32_t seed)
+    {
+        rng = seed;
+        d = 0;
+        d2 = 0;
+        if (nzi)
+            d2 = 0.0005f * unif01();
+    }
+
+    inline float drift_noise(float &lastval)
+    {
+        constexpr float filter = 0.00001f;
+        constexpr float m = 316.227766017f; // 1.f / sqrt(filter);
+        float rand11 = unif01() * 2.f - 1.f;
+
+        lastval = lastval * (1.f - filter) + rand11 * filter;
+
+        return lastval * m;
+    }
+
+    inline float next()
+    {
+        d = drift_noise(d2);
+        return d;
+    }
+
+    inline float val() const { return d; }
+
+    float d{0}, d2{0};
+
+  private:
+    uint32_t rng{0x2545F491u};
+    inline float unif01() // LCG (Numerical Recipes), top 24 bits, in [0, 1]
+    {
+        rng = rng * 1664525u + 1013904223u;
+        return (float)(rng >> 8) * (1.f / 16777215.f);
+    }
+};
 
 template <typename valtype>
 using CharacterFilter = sst::basic_blocks::dsp::CharacterFilter<valtype, SurgeStorage>;

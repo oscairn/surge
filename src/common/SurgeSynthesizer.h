@@ -133,6 +133,9 @@ class alignas(16) SurgeSynthesizer
     void allNotesOff();
     void allSoundOff();
     void setSamplerate(float sr);
+    // Reseed every random source (storage, scene random modulators, scene LFOs). With a fixed
+    // seed, the same patch and events render the same samples on one machine.
+    void seedRandom(uint32_t seed);
     void updateHighLowKeys(int scene);
     int getNumInputs() { return N_INPUTS; }
     int getNumOutputs() { return N_OUTPUTS; }

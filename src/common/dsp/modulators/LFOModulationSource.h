@@ -55,6 +55,7 @@ class LFOModulationSource : public ModulationSource
     float bend1(float x);
     float bend2(float x);
     float bend3(float x);
+    void seed(uint32_t s) { gen.seed(s); } // the noise and S&H shapes' generator
     virtual void attack() override { attackFrom(0.f); }
     void attackFrom(float);
     virtual void release() override;

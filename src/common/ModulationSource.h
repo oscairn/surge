@@ -652,8 +652,6 @@ class RandomModulationSource : public ModulationSource
   public:
     RandomModulationSource(bool bp) : bipolar(bp)
     {
-        std::random_device rd;
-        gen = std::minstd_rand(rd());
         if (bp)
         {
             dis = std::uniform_real_distribution<float>(-1.0, 1.0);
@@ -664,6 +662,13 @@ class RandomModulationSource : public ModulationSource
             dis = std::uniform_real_distribution<float>(0.0, 1.0);
             norm = std::normal_distribution<float>(0, 0.33); // stddev
         }
+    }
+
+    // Default-seeded; SurgeSynthesizer::seedRandom gives each instance its seed.
+    void seed(uint32_t s)
+    {
+        gen.seed(s);
+        norm.reset();
     }
 
     int get_active_outputs() override

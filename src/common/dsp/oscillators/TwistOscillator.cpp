@@ -319,7 +319,7 @@ void TwistOscillator::init(float pitch, bool is_display, bool nonzero_drift)
     memset((void *)patch.get(), 0, sizeof(plaits::Patch));
     memset((void *)mod.get(), 0, sizeof(plaits::Modulations));
 
-    driftLFO.init(nonzero_drift);
+    driftLFO.init(nonzero_drift, is_display ? 1u : storage->rand_u32());
 
     // Lets run forward a cycle
     int throwaway = 0;

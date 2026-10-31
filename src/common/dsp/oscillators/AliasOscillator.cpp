@@ -96,10 +96,9 @@ void AliasOscillator::init(float pitch, bool is_display, bool nonzero_init_drift
 
         phase[u] = oscdata->retrigger.val.b || is_display ? 0.f : storage->rand_u32();
 
-        driftLFO[u].init(nonzero_init_drift);
+        driftLFO[u].init(nonzero_init_drift, is_display ? 1u : storage->rand_u32());
         // Seed the RNGs in display mode
-        if (is_display)
-            urng8[u].a = 73;
+        urng8[u].a = is_display ? 73 : (storage->rand_u32() & 0xFF);
     }
 
     charFilt.init(storage->getPatch().character.val.i);

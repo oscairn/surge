@@ -206,7 +206,7 @@ void WavetableOscillator::init(float pitch, bool is_display, bool nonzero_init_d
         last_level[i] = 0.0;
         mipmap[i] = 0;
         mipmap_ofs[i] = 0;
-        driftLFO[i].init(nonzero_init_drift);
+        driftLFO[i].init(nonzero_init_drift, is_display ? 1u : storage->rand_u32());
     }
 }
 

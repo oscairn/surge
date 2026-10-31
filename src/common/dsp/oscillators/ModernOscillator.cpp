@@ -289,7 +289,7 @@ void ModernOscillator::init(float pitch, bool is_display, bool nonzero_init_drif
         sprior[u] = 0;
         sTurnVal[u] = 0;
 
-        driftLFO[u].init(nonzero_init_drift);
+        driftLFO[u].init(nonzero_init_drift, is_display ? 1u : storage->rand_u32());
 
         sReset[u] = false;
     }

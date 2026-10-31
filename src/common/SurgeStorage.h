@@ -2146,15 +2146,16 @@ class alignas(16) SurgeStorage
      */
     struct RNGGen
     {
-        RNGGen()
-            : g(std::chrono::system_clock::now().time_since_epoch().count()), d(0, RAND_MAX),
-              pm1(-1.f, 1.f), z1(0.f, 1.f), u32(0, 0xFFFFFFFF)
-        {
-        }
+        RNGGen() : g(std::chrono::system_clock::now().time_since_epoch().count()) {}
+        // minstd_rand's sequence is fixed by the standard; the conversions below are ours
+        // (std distributions differ between libc++ and libstdc++), so a seed gives the
+        // same numbers on every platform.
         std::minstd_rand g;
-        std::uniform_int_distribution<int> d;
-        std::uniform_real_distribution<float> pm1, z1;
-        std::uniform_int_distribution<uint32_t> u32;
+        inline uint32_t next31() { return (uint32_t)g() - 1; } // [0, 2^31 - 3]
+        inline int d() { return (int)(next31() % ((uint32_t)RAND_MAX + 1)); }
+        inline uint32_t u32() { return (next31() << 16) ^ (next31() & 0xFFFF); }
+        inline float z1() { return (float)(next31() >> 7) * (1.f / 16777216.f); } // [0, 1)
+        inline float pm1() { return z1() * 2.f - 1.f; }
     } rngGen;
 
     sst::basic_blocks::dsp::RNG noiseRng;
@@ -2181,24 +2182,33 @@ class alignas(16) SurgeStorage
     inline int rand()
     {
         runningOnAudioThread();
-        return rngGen.d(rngGen.g);
+        return rngGen.d();
     }
     inline uint32_t rand_u32()
     {
         runningOnAudioThread();
-        return rngGen.u32(rngGen.g);
+        return rngGen.u32();
     }
     inline float rand_pm1()
     {
         runningOnAudioThread();
-        return rngGen.pm1(rngGen.g);
+        return rngGen.pm1();
     }
     inline float rand_01()
     {
         runningOnAudioThread();
-        return rngGen.z1(rngGen.g);
+        return rngGen.z1();
     }
-// void seed_rand(int s) { rngGen.g.seed(s); }
+    /*
+     * Reseed every random source owned by storage. Renders are reproducible on one machine
+     * when this is called with a fixed seed before playing (see
+     * SurgeSynthesizer::seedRandom, which also reseeds the scene random modulators).
+     */
+    void seedRandom(uint32_t seed)
+    {
+        rngGen.g.seed(seed);
+        noiseRng.reseed(seed ^ 0x9E3779B9u);
+    }
 #else
     inline int rand() { return std::rand(); }
     inline uint32_t rand_u32() { return (uint32_t)(rand_01() * (float)(0xFFFFFFFF)); }

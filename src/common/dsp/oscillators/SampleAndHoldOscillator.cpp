@@ -134,7 +134,7 @@ void SampleAndHoldOscillator::init(float pitch, bool is_display, bool nonzero_in
             pwidth[i] = limit_range(l_pw.v, 0.001, 0.999);
         }
         state[i] = 0;
-        driftLFO[i].init(nonzero_init_drift);
+        driftLFO[i].init(nonzero_init_drift, is_display ? 1u : storage->rand_u32());
     }
 
     hp.coeff_instantize();

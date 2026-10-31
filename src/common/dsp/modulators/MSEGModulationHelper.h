@@ -33,12 +33,8 @@ void rebuildCache(MSEGStorage *ms);
 
 struct EvaluatorState
 {
-    EvaluatorState()
-    {
-        std::random_device rd;
-        gen = std::minstd_rand(rd());
-        urd = std::uniform_real_distribution<float>(-1.0, 1.0);
-    }
+    // Default-seeded; LFOModulationSource seeds it from storage's RNG at attack.
+    EvaluatorState() { urd = std::uniform_real_distribution<float>(-1.0, 1.0); }
     int lastEval = -1;
     float lastOutput = 0;
     // 6 is NOT the number of LFOs, but number of MSEG state elements!

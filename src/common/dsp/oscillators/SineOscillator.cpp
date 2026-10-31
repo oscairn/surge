@@ -122,7 +122,7 @@ void SineOscillator::init(float pitch, bool is_display, bool nonzero_init_drift)
             (oscdata->retrigger.val.b || is_display) ? 0.f : 2.0 * M_PI * storage->rand_01() - M_PI;
         lastvalue[0][i] = 0.f;
         lastvalue[1][i] = 0.f;
-        driftLFO[i].init(nonzero_init_drift);
+        driftLFO[i].init(nonzero_init_drift, is_display ? 1u : storage->rand_u32());
         sine[i].set_phase(phase[i]);
     }
 

@@ -416,7 +416,7 @@ void ClassicOscillator::init(float pitch, bool is_display, bool nonzero_init_dri
             pwidth2[i] = pw2;
         }
 
-        driftLFO[i].init(nonzero_init_drift);
+        driftLFO[i].init(nonzero_init_drift, is_display ? 1u : storage->rand_u32());
     }
 }
 

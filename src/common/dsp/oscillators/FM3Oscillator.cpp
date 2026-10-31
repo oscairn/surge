@@ -37,7 +37,7 @@ void FM3Oscillator::init(float pitch, bool is_display, bool nonzero_init_drift)
         (is_display || oscdata->retrigger.val.b) ? 0.f : (2.0 * M_PI * storage->rand_01() - M_PI);
     oldout1 = 0.f;
     oldout2 = 0.f;
-    driftLFO.init(nonzero_init_drift);
+    driftLFO.init(nonzero_init_drift, is_display ? 1u : storage->rand_u32());
     omegaPriorValid = false;
     fb_val = 0.f;
     fb_mode = 0;
