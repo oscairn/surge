@@ -719,6 +719,27 @@ SurgePatch::SurgePatch(SurgeStorage *storage)
             p_id.next(), id_s++, "unison_spread", "Voice Unison Spread",
             fmt::format("{:c}/unison/spread", 'a' + sc), ct_percent,
             Surge::Skin::Scene::unison_spread, sc_id, cg_GLOBAL, 0, true));
+
+        a->push_back(scene[sc].segdrift_pitch.assign(
+            p_id.next(), id_s++, "segdrift_pitch", "Segment Drift Pitch",
+            fmt::format("{:c}/segment_drift/pitch", 'a' + sc), ct_oscspread,
+            Surge::Skin::Scene::segdrift_pitch, sc_id, cg_GLOBAL, 0, true));
+        scene[sc].segdrift_pitch.val_default.f = 0.f;
+        scene[sc].segdrift_pitch.val.f = 0.f;
+        a->push_back(scene[sc].segdrift_offset.assign(
+            p_id.next(), id_s++, "segdrift_offset", "Segment Drift Offset",
+            fmt::format("{:c}/segment_drift/offset", 'a' + sc), ct_oscspread_bipolar,
+            Surge::Skin::Scene::segdrift_offset, sc_id, cg_GLOBAL, 0, true));
+        a->push_back(scene[sc].segdrift_cutoff.assign(
+            p_id.next(), id_s++, "segdrift_cutoff", "Segment Drift Cutoff",
+            fmt::format("{:c}/segment_drift/cutoff", 'a' + sc), ct_pitch_semi7bp,
+            Surge::Skin::Scene::segdrift_cutoff, sc_id, cg_GLOBAL, 0, true));
+        a->push_back(scene[sc].segdrift_time.assign(
+            p_id.next(), id_s++, "segdrift_time", "Segment Drift Time",
+            fmt::format("{:c}/segment_drift/time", 'a' + sc), ct_envtime,
+            Surge::Skin::Scene::segdrift_time, sc_id, cg_GLOBAL, 0, false));
+        scene[sc].segdrift_time.val_default.f = 2.5f; // about 5.7 s
+        scene[sc].segdrift_time.val.f = 2.5f;
     }
 
     param_ptr.push_back(
@@ -2066,7 +2087,8 @@ void SurgePatch::load_xml(const void *data, int datasize, bool is_preset)
                          &sc.filterunit[1].drive_asymmetry, &sc.filterunit[1].output_gain,
                          &sc.amp_drive, &sc.amp_drive_asymmetry, &sc.prefilter_ws.type,
                          &sc.prefilter_ws.drive, &sc.unison_voices, &sc.unison_detune,
-                         &sc.unison_spread})
+                         &sc.unison_spread, &sc.segdrift_pitch, &sc.segdrift_offset,
+                         &sc.segdrift_cutoff, &sc.segdrift_time})
         {
             p->val = p->val_default;
             p->deactivated = p->can_deactivate();

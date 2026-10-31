@@ -442,6 +442,8 @@ extern Surge::Skin::Connector polylimit, splitpoint, drift, fmdepth, fmrouting, 
 extern Surge::Skin::Connector amp_drive, amp_drive_asymmetry;
 // Voice unison, without a control in the skin
 extern Surge::Skin::Connector unison_voices, unison_detune, unison_spread;
+// Segment drift, without a control in the skin
+extern Surge::Skin::Connector segdrift_pitch, segdrift_offset, segdrift_cutoff, segdrift_time;
 }
 
 namespace ModSources

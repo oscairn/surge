@@ -124,9 +124,54 @@ class alignas(16) SurgeVoice
     ** But in absolute mode you need to find the virtual note which would
     ** map to that frequency shift.
     */
+    /*
+    ** Segment drift: a random value held at nodes segment-time apart and interpolated
+    ** linearly between them, one per oscillator pitch and one per filter cutoff. Nodes are
+    ** normal (mean 0, deviation 1); the scene's depth and offset scale them.
+    */
+    struct SegmentDrift
+    {
+        float from{0.f}, to{0.f}, pos{0.f};
+        uint32_t rng{0};
+        float uniform()
+        {
+            rng = rng * 1664525u + 1013904223u;
+            return ((rng >> 8) + 0.5f) * (1.f / 16777216.f);
+        }
+        float normal() // Box-Muller
+        {
+            float u = uniform(), v = uniform();
+            return std::sqrt(-2.f * std::log(u)) * std::cos(6.28318531f * v);
+        }
+        void init(uint32_t seed) // a point anywhere along a segment, as if it had run for ever
+        {
+            rng = seed;
+            from = normal();
+            to = normal();
+            pos = uniform();
+        }
+        float next(float dpos)
+        {
+            pos += dpos;
+            while (pos >= 1.f)
+            {
+                pos -= 1.f;
+                from = to;
+                to = normal();
+            }
+            return from + (to - from) * pos;
+        }
+    };
+    static constexpr int n_segdrift = n_oscs + n_filterunits_per_scene;
+    SegmentDrift segDrift[n_segdrift];
+    float segDriftValue[n_segdrift]{}; // semitones: oscillator pitches, then filter cutoffs
+    bool segDriftOn{false};
+    void updateSegmentDrift();
+
     inline float noteShiftFromPitchParam(float note0 /* the key + octave */,
                                          int oscNum /* The osc for pitch diffs */)
     {
+        note0 += segDriftValue[oscNum];
         if (localcopy[scene->osc[oscNum].pitch.param_id_in_scene].f == 0)
         {
             return note0;

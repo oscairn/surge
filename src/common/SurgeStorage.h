@@ -155,7 +155,7 @@ const int FIRoffsetI16 = FIRipolI16_N >> 1;
 
 const int ff_revision = 31;
 
-const int n_scene_params = 298;
+const int n_scene_params = 302;
 const int n_global_params = 11 + n_fx_slots * (n_fx_params + 1); // each param plus a type
 const int n_global_postparams = 1;
 const int n_total_params = n_global_params + 2 * n_scene_params + n_global_postparams;
@@ -900,6 +900,8 @@ struct SurgeSceneStorage
     WaveshaperStorage prefilter_ws;           // shaper on the filter inputs (a folder, say)
     // Voice unison: each note starts this many voices, detuned and panned symmetrically
     Parameter unison_voices, unison_detune, unison_spread;
+    // Segment drift: random pitch per oscillator and cutoff per filter, linear between nodes
+    Parameter segdrift_pitch, segdrift_offset, segdrift_cutoff, segdrift_time;
 
     std::vector<ModulationRouting> modulation_scene, modulation_voice;
     std::vector<ModulationSource *> modsources;

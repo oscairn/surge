@@ -29,6 +29,7 @@ add_executable(${PROJECT_NAME}
   UnitTestsPARAM.cpp
   UnitTestsQUERY.cpp
   UnitTestsREFERENCE.cpp
+  UnitTestsSEGMENTDRIFT.cpp
   UnitTestsSIGNALPATH.cpp
   UnitTestsUNISON.cpp
   UnitTestsTUN.cpp

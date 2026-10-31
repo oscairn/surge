@@ -176,6 +176,15 @@ SurgeVoice::SurgeVoice(SurgeStorage *storage, SurgeSceneStorage *oscene, pdata *
     sampleRateReset();
     memcpy(localcopy, paramptr, sizeof(localcopy));
 
+    // only draws from storage's generator when on, so other voices' randomness is unchanged
+    segDriftOn = oscene->segdrift_pitch.val.f != 0.f || oscene->segdrift_offset.val.f != 0.f ||
+                 oscene->segdrift_cutoff.val.f != 0.f;
+    if (segDriftOn)
+    {
+        for (auto &d : segDrift)
+            d.init(storage->rand_u32());
+    }
+
     noteExpressions[VOLUME] = 1.0; // 1 is no amplification
     noteExpressions[PAN] = 0.5;    // since it is 0 ... 1
     noteExpressions[PITCH] = 0.0;
@@ -877,6 +886,9 @@ template <bool first> void SurgeVoice::calc_ctrldata(QuadFilterChainState *Q, in
     osclevels[le_ring23].set_target(scene->mix_invert[le_ring23].val.b ? -r23 : r23);
     osclevels[le_pfg].set_target(pfg);
 
+    if (segDriftOn) // after modulation, before the oscillators and filter coefficients use it
+        updateSegmentDrift();
+
     route[0] = routefilter(scene->route_o1.val.i);
     route[1] = routefilter(scene->route_o2.val.i);
     route[2] = routefilter(scene->route_o3.val.i);
@@ -1060,6 +1072,18 @@ inline void all_ring_modes_block(float *__restrict src1_l, float *__restrict src
         }
         osclevels.multiply_block(dst_l, nquads);
     }
+}
+
+void SurgeVoice::updateSegmentDrift()
+{
+    auto f = [this](const Parameter &p) { return localcopy[p.param_id_in_scene].f; };
+    float dpos = BLOCK_SIZE * storage->samplerate_inv / std::exp2(f(scene->segdrift_time));
+    float depth = scene->segdrift_pitch.get_extended(f(scene->segdrift_pitch));
+    float offset = scene->segdrift_offset.get_extended(f(scene->segdrift_offset));
+    for (int i = 0; i < n_oscs; i++)
+        segDriftValue[i] = offset + depth * segDrift[i].next(dpos);
+    for (int u = 0; u < n_filterunits_per_scene; u++)
+        segDriftValue[n_oscs + u] = f(scene->segdrift_cutoff) * segDrift[n_oscs + u].next(dpos);
 }
 
 bool SurgeVoice::process_block(QuadFilterChainState &Q, int Qe)
@@ -1514,6 +1538,8 @@ void SurgeVoice::SetQFB(QuadFilterChainState *Q, int e) // Q == 0 means init(ial
 
         if (scene->f2_cutoff_is_offset.val.b)
             cutoffB += cutoffA;
+        cutoffA += segDriftValue[n_oscs];
+        cutoffB += segDriftValue[n_oscs + 1];
 
         CM[0].MakeCoeffs(cutoffA, localcopy[id_resoa].f,
                          static_cast<FilterType>(scene->filterunit[0].type.val.i),
