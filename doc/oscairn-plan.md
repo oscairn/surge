@@ -1115,9 +1115,14 @@ session's push: see the report.
   suggests), against Surge's filter EG in analog mode at the amp tables' values routed to
   pitch (Sine oscillator, scene highpass off), 10-90 % times: attack -3.6 / +0.4 / +0.2 %, decay -1.9 / +12.8 / +7.1 %, release
   -6.8 / -6.0 / -5.6 % (with the dropped attack clamp above, decay was +6.9 / +17.6 / +12.0 %). The attack can use the amp attack table; decay and release need their
-  own tables (dense probes next). The pitch EG decays exponentially in cents. Not probed: the
-  filter EG time course (one probe set is recorded: decay 160 and 192, attack, release and
-  sustain at cutoff 512, depth +4800 cents; not analysed), oscillator EGs.
+  own tables (dense probes next). The pitch EG decays exponentially in cents.
+- *Filter EG* (LPF24 at cutoff 512, depth raw 352 = +4800 cents; the cutoff over time from the
+  LP 24 dB shape match in 60 ms windows). Held at full level the EG moves the cutoff by +51.2
+  engine semitones, not 48. Its decay is exponential with time constants 0.193 s (index 160)
+  and 0.78 s (192), against the pitch EG's 0.196 and 0.82 s; its attack at 192 follows the pitch
+  EG's within 0.03 of full travel at 0.1-4 s. So the filter EG, pitch EG and (for attack) amp
+  EG share their time curves to within a few percent; the release probe was cut short by the
+  amp release. Not probed: oscillator EGs.
 - *Levels.* Oscillator 1's out level follows the amp level curve within 0.02 dB (80-511);
   committed as a table with 14 checks. Oscillators 2 and 3 measure the same as oscillator 1
   within 0.01 dB at 128, 256, 384 and 511, so the converter can use the one table. Noise out
@@ -1175,10 +1180,12 @@ ASan/UBSan and TSan builds with no sanitizer reports. `surge-testrunner` (181 pa
 skipped) and `[reference]` ("Compared 635 patches, skipped 6") on the trees of `01be3b3` and
 `e3698df` (the commits between touch only the plugin's tests and render tool). A shifted
 reference value (0.2 dB) makes the new oscillator level check fail (seen). CI for `01be3b3`:
-all 5 jobs passed (run 41221092760).
+all 5 jobs passed (run 41221092760); for the push ending at `699b968` (which added `f967ac1`,
+`c7aa171`, `e3698df` and this record): all 5 passed (run 41225707828, which ran on the head only).
 
 **Where this stopped** (fourth session). Next steps: pitch EG decay and release tables (dense
-probes; attack can use the amp table); analyse the recorded filter EG probes; oscillator EGs;
+probes, which can serve the filter EG too; attack can use the amp table); the depth scale of
+the filter EG (+4800 cents gave +51.2 semitones); oscillator EGs;
 resonance above index 96 needs a new filter (ladder with LP 24 dB's knee) or stays approximate;
 milestone 2 engine work from the measurements above: post-filter route and polarity per mixer
 channel, then saturators (position to measure first), folder, shaper.
