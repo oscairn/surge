@@ -734,6 +734,24 @@ int SurgeVoice::routefilter(int r)
     return r;
 }
 
+void SurgeVoice::accumulateChannel(int le, int r, float *L, float *R)
+{
+    if (scene->mix_postfilter[le].val.b)
+    {
+        mech::accumulate_from_to<BLOCK_SIZE_OS>(L, postOutput[0]);
+        mech::accumulate_from_to<BLOCK_SIZE_OS>(R, postOutput[1]);
+        return;
+    }
+    if (r < 2)
+    {
+        mech::accumulate_from_to<BLOCK_SIZE_OS>(L, output[0]);
+    }
+    if (r > 0)
+    {
+        mech::accumulate_from_to<BLOCK_SIZE_OS>(R, output[1]);
+    }
+}
+
 template <bool first> void SurgeVoice::calc_ctrldata(QuadFilterChainState *Q, int e)
 {
     // Always process LFO1 so the gate retrigger always work
@@ -851,12 +869,12 @@ template <bool first> void SurgeVoice::calc_ctrldata(QuadFilterChainState *Q, in
     float r23 = amp_to_linear(localcopy[lag_id[le_ring23]].f);
     float pfg = storage->db_to_linear(localcopy[lag_id[le_pfg]].f);
 
-    osclevels[le_osc1].set_target(o1);
-    osclevels[le_osc2].set_target(o2);
-    osclevels[le_osc3].set_target(o3);
-    osclevels[le_noise].set_target(on);
-    osclevels[le_ring12].set_target(r12);
-    osclevels[le_ring23].set_target(r23);
+    osclevels[le_osc1].set_target(scene->mix_invert[le_osc1].val.b ? -o1 : o1);
+    osclevels[le_osc2].set_target(scene->mix_invert[le_osc2].val.b ? -o2 : o2);
+    osclevels[le_osc3].set_target(scene->mix_invert[le_osc3].val.b ? -o3 : o3);
+    osclevels[le_noise].set_target(scene->mix_invert[le_noise].val.b ? -on : on);
+    osclevels[le_ring12].set_target(scene->mix_invert[le_ring12].val.b ? -r12 : r12);
+    osclevels[le_ring23].set_target(scene->mix_invert[le_ring23].val.b ? -r23 : r23);
     osclevels[le_pfg].set_target(pfg);
 
     route[0] = routefilter(scene->route_o1.val.i);
@@ -1052,6 +1070,8 @@ bool SurgeVoice::process_block(QuadFilterChainState &Q, int Qe)
     // clear output
     mech::clear_block<BLOCK_SIZE_OS>(output[0]);
     mech::clear_block<BLOCK_SIZE_OS>(output[1]);
+    mech::clear_block<BLOCK_SIZE_OS>(postOutput[0]);
+    mech::clear_block<BLOCK_SIZE_OS>(postOutput[1]);
 
     for (int i = 0; i < n_oscs; ++i)
     {
@@ -1083,14 +1103,7 @@ bool SurgeVoice::process_block(QuadFilterChainState &Q, int Qe)
                 osclevels[le_osc3].multiply_block_to(osc[2]->output, tblock, BLOCK_SIZE_OS_QUAD);
             }
 
-            if (route[2] < 2)
-            {
-                mech::accumulate_from_to<BLOCK_SIZE_OS>(tblock, output[0]);
-            }
-            if (route[2] > 0)
-            {
-                mech::accumulate_from_to<BLOCK_SIZE_OS>(tblockR, output[1]);
-            }
+            accumulateChannel(le_osc3, route[2], tblock, tblockR);
         }
     }
 
@@ -1128,14 +1141,7 @@ bool SurgeVoice::process_block(QuadFilterChainState &Q, int Qe)
                 osclevels[le_osc2].multiply_block_to(osc[1]->output, tblock, BLOCK_SIZE_OS_QUAD);
             }
 
-            if (route[1] < 2)
-            {
-                mech::accumulate_from_to<BLOCK_SIZE_OS>(tblock, output[0]);
-            }
-            if (route[1] > 0)
-            {
-                mech::accumulate_from_to<BLOCK_SIZE_OS>(tblockR, output[1]);
-            }
+            accumulateChannel(le_osc2, route[1], tblock, tblockR);
         }
     }
 
@@ -1184,14 +1190,7 @@ bool SurgeVoice::process_block(QuadFilterChainState &Q, int Qe)
                 osclevels[le_osc1].multiply_block_to(osc[0]->output, tblock, BLOCK_SIZE_OS_QUAD);
             }
 
-            if (route[0] < 2)
-            {
-                mech::accumulate_from_to<BLOCK_SIZE_OS>(tblock, output[0]);
-            }
-            if (route[0] > 0)
-            {
-                mech::accumulate_from_to<BLOCK_SIZE_OS>(tblockR, output[1]);
-            }
+            accumulateChannel(le_osc1, route[0], tblock, tblockR);
         }
     }
 
@@ -1201,14 +1200,7 @@ bool SurgeVoice::process_block(QuadFilterChainState &Q, int Qe)
                              tblock, tblockR, is_wide, scene->level_ring_12.deform_type,
                              osclevels[le_ring12], BLOCK_SIZE_OS_QUAD);
 
-        if (route[3] < 2)
-        {
-            mech::accumulate_from_to<BLOCK_SIZE_OS>(tblock, output[0]);
-        }
-        if (route[3] > 0)
-        {
-            mech::accumulate_from_to<BLOCK_SIZE_OS>(tblockR, output[1]);
-        }
+        accumulateChannel(le_ring12, route[3], tblock, tblockR);
     }
 
     if (ring23)
@@ -1217,14 +1209,7 @@ bool SurgeVoice::process_block(QuadFilterChainState &Q, int Qe)
                              tblock, tblockR, is_wide, scene->level_ring_23.deform_type,
                              osclevels[le_ring23], BLOCK_SIZE_OS_QUAD);
 
-        if (route[4] < 2)
-        {
-            mech::accumulate_from_to<BLOCK_SIZE_OS>(tblock, output[0]);
-        }
-        if (route[4] > 0)
-        {
-            mech::accumulate_from_to<BLOCK_SIZE_OS>(tblockR, output[1]);
-        }
+        accumulateChannel(le_ring23, route[4], tblock, tblockR);
     }
 
     if (noise)
@@ -1241,14 +1226,7 @@ bool SurgeVoice::process_block(QuadFilterChainState &Q, int Qe)
             generate_legacy_noise(is_wide, stereo, tblock, tblockR);
         }
 
-        if (route[5] < 2)
-        {
-            mech::accumulate_from_to<BLOCK_SIZE_OS>(tblock, output[0]);
-        }
-        if (route[5] > 0)
-        {
-            mech::accumulate_from_to<BLOCK_SIZE_OS>(tblockR, output[1]);
-        }
+        accumulateChannel(le_noise, route[5], tblock, tblockR);
     }
 
     // pre-filter gain
@@ -1258,6 +1236,8 @@ bool SurgeVoice::process_block(QuadFilterChainState &Q, int Qe)
     {
         SIMD_MM(store_ss)(((float *)&Q.DL[i] + Qe), SIMD_MM(load_ss)(&output[0][i]));
         SIMD_MM(store_ss)(((float *)&Q.DR[i] + Qe), SIMD_MM(load_ss)(&output[1][i]));
+        SIMD_MM(store_ss)(((float *)&Q.DPL[i] + Qe), SIMD_MM(load_ss)(&postOutput[0][i]));
+        SIMD_MM(store_ss)(((float *)&Q.DPR[i] + Qe), SIMD_MM(load_ss)(&postOutput[1][i]));
     }
     SetQFB(&Q, Qe);
 

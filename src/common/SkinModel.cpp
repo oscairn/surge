@@ -353,6 +353,21 @@ Connector route_ring12 =
     Connector("mixer.route_ring12", 61, 22).asMixerRoute().inParent("mixer.panel");
 Connector route_ring23 =
     Connector("mixer.route_ring23", 81, 22).asMixerRoute().inParent("mixer.panel");
+
+Connector invert[6] = {
+    Connector("mixer.invert_o1", 0, 0, Components::None),
+    Connector("mixer.invert_o2", 0, 0, Components::None),
+    Connector("mixer.invert_o3", 0, 0, Components::None),
+    Connector("mixer.invert_noise", 0, 0, Components::None),
+    Connector("mixer.invert_ring12", 0, 0, Components::None),
+    Connector("mixer.invert_ring23", 0, 0, Components::None)};
+Connector postfilter[6] = {
+    Connector("mixer.postfilter_o1", 0, 0, Components::None),
+    Connector("mixer.postfilter_o2", 0, 0, Components::None),
+    Connector("mixer.postfilter_o3", 0, 0, Components::None),
+    Connector("mixer.postfilter_noise", 0, 0, Components::None),
+    Connector("mixer.postfilter_ring12", 0, 0, Components::None),
+    Connector("mixer.postfilter_ring23", 0, 0, Components::None)};
 Connector route_noise =
     Connector("mixer.route_noise", 101, 22).asMixerRoute().inParent("mixer.panel");
 

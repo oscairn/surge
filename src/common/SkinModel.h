@@ -419,6 +419,8 @@ extern Surge::Skin::Connector level_noise, level_o1, level_o2, level_o3, level_p
     level_ring12, level_ring23, mute_noise, mute_o1, mute_o2, mute_o3, mute_ring12, mute_ring23,
     route_noise, route_o1, route_o2, route_o3, route_ring12, route_ring23, solo_noise, solo_o1,
     solo_o2, solo_o3, solo_ring12, solo_ring23;
+// Per-channel switches without a control in the skin, in lag_entries order
+extern Surge::Skin::Connector invert[6], postfilter[6];
 }
 namespace Osc
 {

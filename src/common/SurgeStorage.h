@@ -155,7 +155,7 @@ const int FIRoffsetI16 = FIRipolI16_N >> 1;
 
 const int ff_revision = 31;
 
-const int n_scene_params = 273;
+const int n_scene_params = 285;
 const int n_global_params = 11 + n_fx_slots * (n_fx_params + 1); // each param plus a type
 const int n_global_postparams = 1;
 const int n_total_params = n_global_params + 2 * n_scene_params + n_global_postparams;
@@ -888,6 +888,11 @@ struct SurgeSceneStorage
     LFOStorage lfo[n_lfos];
     Parameter feedback, filterblock_configuration, filter_balance;
     Parameter lowcut;
+
+    // Mixer channels in the order o1, o2, o3, noise, ring 1x2, ring 2x3. Added after revision
+    // 31 without a revision change: load_xml resets them before reading a patch.
+    Parameter mix_invert[6];     // flip the channel's polarity
+    Parameter mix_postfilter[6]; // send the channel past the filters, straight to the amp
 
     std::vector<ModulationRouting> modulation_scene, modulation_voice;
     std::vector<ModulationSource *> modsources;

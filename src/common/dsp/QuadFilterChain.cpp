@@ -51,6 +51,17 @@ namespace sdsp = sst::basic_blocks::dsp;
     SIMD_MM(store_ss)                                                                              \
     (&OutR[k], SIMD_MM(add_ss)(SIMD_MM(load_ss)(&OutR[k]), mech::sum_ps_to_ss(outR)));
 
+// The stage between the filters and the amp gain: mixer channels routed past the filters join
+// the filtered signal here. Feedback keeps tapping the filtered signal alone.
+inline SIMD_M128 preAmpStage(QuadFilterChainState &d, SIMD_M128 x, SIMD_M128 post)
+{
+    return SIMD_MM(add_ps)(x, post);
+}
+
+#define MPreAmp(x, out, post)                                                                      \
+    if (g.preAmp)                                                                                  \
+        out = SIMD_MM(and_ps)(mask, SIMD_MM(mul_ps)(preAmpStage(d, x, post), d.Gain));
+
 #if 0 // DEBUG
 #define AssertReasonableAudioFloat(x) assert(x<32.f && x> - 32.f);
 #else
@@ -99,6 +110,7 @@ void ProcessFBQuad(QuadFilterChainState &d, fbq_global &g, float *OutL, float *O
                                 SIMD_MM(mul_ps)(y, d.Mix2));
             d.Gain = SIMD_MM(add_ps)(d.Gain, d.dGain);
             auto out = SIMD_MM(and_ps)(mask, SIMD_MM(mul_ps)(x, d.Gain));
+            MPreAmp(x, out, d.DPL[k])
 
             // output stage
             MWriteOutputs(out)
@@ -139,7 +151,9 @@ void ProcessFBQuad(QuadFilterChainState &d, fbq_global &g, float *OutL, float *O
                                 SIMD_MM(mul_ps)(y, d.Mix2));
             d.Gain = SIMD_MM(add_ps)(d.Gain, d.dGain);
             auto out = SIMD_MM(and_ps)(mask, SIMD_MM(mul_ps)(x, d.Gain));
-            d.FBlineL = out;
+            auto fbOut = out;
+            MPreAmp(x, out, d.DPL[k])
+            d.FBlineL = fbOut;
 
             // output stage
             MWriteOutputs(out)
@@ -173,9 +187,11 @@ void ProcessFBQuad(QuadFilterChainState &d, fbq_global &g, float *OutL, float *O
 
             // output stage
             d.Gain = SIMD_MM(add_ps)(d.Gain, d.dGain);
+            auto out = SIMD_MM(and_ps)(mask, SIMD_MM(mul_ps)(x, d.Gain));
+            MPreAmp(x, out, d.DPL[k])
             x = SIMD_MM(and_ps)(mask, SIMD_MM(mul_ps)(x, d.Gain));
 
-            MWriteOutputs(x)
+            MWriteOutputs(out)
 
                 y = SIMD_MM(add_ps)(x, y);
 
@@ -217,7 +233,9 @@ void ProcessFBQuad(QuadFilterChainState &d, fbq_global &g, float *OutL, float *O
 
             d.Gain = SIMD_MM(add_ps)(d.Gain, d.dGain);
             auto out = SIMD_MM(and_ps)(mask, SIMD_MM(mul_ps)(x, d.Gain));
-            d.FBlineL = out;
+            auto fbOut = out;
+            MPreAmp(x, out, d.DPL[k])
+            d.FBlineL = fbOut;
             // output stage
             MWriteOutputs(out)
         }
@@ -250,7 +268,9 @@ void ProcessFBQuad(QuadFilterChainState &d, fbq_global &g, float *OutL, float *O
 
             d.Gain = SIMD_MM(add_ps)(d.Gain, d.dGain);
             auto out = SIMD_MM(and_ps)(mask, SIMD_MM(mul_ps)(x, d.Gain));
-            d.FBlineL = out;
+            auto fbOut = out;
+            MPreAmp(x, out, d.DPL[k])
+            d.FBlineL = fbOut;
             // output stage
             MWriteOutputs(out)
         }
@@ -287,7 +307,9 @@ void ProcessFBQuad(QuadFilterChainState &d, fbq_global &g, float *OutL, float *O
 
             d.Gain = SIMD_MM(add_ps)(d.Gain, d.dGain);
             auto out = SIMD_MM(and_ps)(mask, SIMD_MM(mul_ps)(x, d.Gain));
-            d.FBlineL = out;
+            auto fbOut = out;
+            MPreAmp(x, out, d.DPL[k])
+            d.FBlineL = fbOut;
             // output stage
             MWriteOutputs(out)
         }
@@ -320,12 +342,17 @@ void ProcessFBQuad(QuadFilterChainState &d, fbq_global &g, float *OutL, float *O
             y = SIMD_MM(mul_ps)(y, d.Mix2);
 
             d.Gain = SIMD_MM(add_ps)(d.Gain, d.dGain);
+            auto px = x, py = y;
             x = SIMD_MM(and_ps)(mask, SIMD_MM(mul_ps)(x, d.Gain));
             y = SIMD_MM(and_ps)(mask, SIMD_MM(mul_ps)(y, d.Gain));
+            auto ox = x, oy = y;
+            // half to each filter's pan position
+            MPreAmp(px, ox, SIMD_MM(mul_ps)(hb_c, d.DPL[k]))
+            MPreAmp(py, oy, SIMD_MM(mul_ps)(hb_c, d.DPR[k]))
             d.FBlineL = SIMD_MM(add_ps)(x, y);
 
             // output stage
-            MWriteOutputsDual(x, y) AssertReasonableAudioFloat(OutL[k]);
+            MWriteOutputsDual(ox, oy) AssertReasonableAudioFloat(OutL[k]);
             AssertReasonableAudioFloat(OutR[k]);
         }
         break;
@@ -375,13 +402,17 @@ void ProcessFBQuad(QuadFilterChainState &d, fbq_global &g, float *OutL, float *O
             }
 
             d.Gain = SIMD_MM(add_ps)(d.Gain, d.dGain);
+            auto px = x, py = y;
             x = SIMD_MM(and_ps)(mask, SIMD_MM(mul_ps)(x, d.Gain));
             y = SIMD_MM(and_ps)(mask, SIMD_MM(mul_ps)(y, d.Gain));
+            auto ox = x, oy = y;
+            MPreAmp(px, ox, d.DPL[k])
+            MPreAmp(py, oy, d.DPR[k])
             d.FBlineL = x;
             d.FBlineR = y;
 
             // output stage
-            MWriteOutputsDual(x, y) AssertReasonableAudioFloat(OutL[k]);
+            MWriteOutputsDual(ox, oy) AssertReasonableAudioFloat(OutL[k]);
             AssertReasonableAudioFloat(OutR[k]);
         }
         break;
@@ -472,6 +503,8 @@ void InitQuadFilterChainStateToZero(QuadFilterChainState *Q)
     {
         Q->DL[i] = SIMD_MM(setzero_ps)();
         Q->DR[i] = SIMD_MM(setzero_ps)();
+        Q->DPL[i] = SIMD_MM(setzero_ps)();
+        Q->DPR[i] = SIMD_MM(setzero_ps)();
     }
 
     Q->OutL = SIMD_MM(setzero_ps)();

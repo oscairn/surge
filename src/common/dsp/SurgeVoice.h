@@ -51,6 +51,7 @@ class alignas(16) SurgeVoice
 {
   public:
     float output alignas(16)[2][BLOCK_SIZE_OS];
+    float postOutput alignas(16)[2][BLOCK_SIZE_OS]; // mixer channels routed past the filters
     lipol_ps osclevels alignas(16)[7];
     pdata localcopy alignas(16)[n_scene_params];
     pdata localcopy2 alignas(16)[n_scene_params];
@@ -248,6 +249,7 @@ class alignas(16) SurgeVoice
     void set_path(bool osc1, bool osc2, bool osc3, int FMmode, bool ring12, bool ring23,
                   bool noise);
     int routefilter(int);
+    void accumulateChannel(int lagEntry, int route, float *L, float *R);
     void retriggerPortaIfKeyChanged();
 
     LFOModulationSource lfo[n_lfos_voice];

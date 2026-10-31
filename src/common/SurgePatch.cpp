@@ -638,6 +638,36 @@ SurgePatch::SurgePatch(SurgeStorage *storage)
                 fmt::format("{:c}/{}/{}/eg/release", 'a' + sc, lt, lid), ct_envtime_lfodecay,
                 Surge::Skin::LFO::release, sc_id, cg_LFO, ms_lfo1 + l, true, kMini));
         }
+
+        // Mixer channel switches with no place in the skin yet, in lag_entries order
+        static constexpr const char *mixKey[6] = {"o1", "o2", "o3", "noise", "ring12", "ring23"};
+        static constexpr const char *mixOsc[6] = {"osc1", "osc2", "osc3", "noise", "rm1x2", "rm2x3"};
+        static constexpr const char *mixName[6] = {"Osc 1",
+                                                   "Osc 2",
+                                                   "Osc 3",
+                                                   "Noise",
+                                                   "Ring Modulation 1x2",
+                                                   "Ring Modulation 2x3"};
+        for (int c = 0; c < 6; c++)
+        {
+            char label[LABEL_SIZE], name[NAMECHARS];
+            snprintf(label, LABEL_SIZE, "invert_%s", mixKey[c]);
+            snprintf(name, NAMECHARS, "%s Invert", mixName[c]);
+            a->push_back(scene[sc].mix_invert[c].assign(
+                p_id.next(), id_s++, label, name,
+                fmt::format("{:c}/mixer/{}/invert", 'a' + sc, mixOsc[c]), ct_bool,
+                Surge::Skin::Mixer::invert[c], sc_id, cg_MIX, 0, false));
+        }
+        for (int c = 0; c < 6; c++)
+        {
+            char label[LABEL_SIZE], name[NAMECHARS];
+            snprintf(label, LABEL_SIZE, "postfilter_%s", mixKey[c]);
+            snprintf(name, NAMECHARS, "%s Post-Filter", mixName[c]);
+            a->push_back(scene[sc].mix_postfilter[c].assign(
+                p_id.next(), id_s++, label, name,
+                fmt::format("{:c}/mixer/{}/post_filter", 'a' + sc, mixOsc[c]), ct_bool,
+                Surge::Skin::Mixer::postfilter[c], sc_id, cg_MIX, 0, false));
+        }
     }
 
     param_ptr.push_back(
@@ -1968,6 +1998,17 @@ void SurgePatch::load_xml(const void *data, int datasize, bool is_preset)
         if (tp)
         {
             parameters->RemoveChild(tp);
+        }
+    }
+
+    // Parameters added after revision 31 (see SurgeSceneStorage) start from their defaults, so
+    // patches without them load the same whatever was loaded before.
+    for (auto &sc : scene)
+    {
+        for (int c = 0; c < 6; c++)
+        {
+            sc.mix_invert[c].val = sc.mix_invert[c].val_default;
+            sc.mix_postfilter[c].val = sc.mix_postfilter[c].val_default;
         }
     }
 

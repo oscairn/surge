@@ -136,6 +136,7 @@ struct QuadFilterChainState
     SIMD_M128 wsLPF, FBlineL, FBlineR;
 
     SIMD_M128 DL[BLOCK_SIZE_OS], DR[BLOCK_SIZE_OS]; // wavedata
+    SIMD_M128 DPL[BLOCK_SIZE_OS], DPR[BLOCK_SIZE_OS]; // routed past the filters, left and right
 
     SIMD_M128 OutL, OutR, dOutL, dOutR;
     SIMD_M128 Out2L, Out2R, dOut2L, dOut2R; // fc_stereo only
@@ -152,6 +153,7 @@ struct fbq_global
 {
     sst::filters::FilterUnitQFPtr FU1ptr, FU2ptr;
     sst::waveshapers::QuadWaveshaperPtr WSptr;
+    bool preAmp{false}; // run the stage between the filters and the amp gain (post-filter input)
 };
 
 typedef void (*FBQFPtr)(QuadFilterChainState &, fbq_global &, float *, float *);

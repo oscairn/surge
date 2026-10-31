@@ -5178,6 +5178,11 @@ void SurgeSynthesizer::process()
                     storage.getPatch().scene[s].wsunit.type.val.i));
         }
 
+        for (auto &pf : storage.getPatch().scene[s].mix_postfilter)
+        {
+            g.preAmp = g.preAmp || pf.val.b;
+        }
+
         FBQFPtr ProcessQuadFB =
             GetFBQPointer(storage.getPatch().scene[s].filterblock_configuration.val.i,
                           g.FU1ptr != 0, g.WSptr != 0, g.FU2ptr != 0);
