@@ -799,6 +799,7 @@ static void testFittedTables()
     cutoff("LPF18", T::cutoffLp18, T::cutoffLp18Responses, T::cutoffLp18Tolerance, 3, 2, 0);
     cutoff("LPF12", T::cutoffLp12, T::cutoffLp12Responses, T::cutoffLp12Tolerance, 3, 1, 0);
     cutoff("LPF6", T::cutoffLp6, T::cutoffLp6Responses, T::cutoffLp6Tolerance, 3, 0, 0);
+    cutoff("HPF24", T::cutoffHp24, T::cutoffHp24Responses, T::cutoffHp24Tolerance, 5, 0, 0.05);
     cutoff("HPF18", T::cutoffHp18, T::cutoffHp18Responses, T::cutoffHp18Tolerance, 35, 6, 0);
     cutoff("HPF12", T::cutoffHp12, T::cutoffHp12Responses, T::cutoffHp12Tolerance, 20, 0, 0);
     cutoff("HPF6", T::cutoffHp6, T::cutoffHp6Responses, T::cutoffHp6Tolerance, 35, 4, 0);
