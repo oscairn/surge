@@ -1230,8 +1230,11 @@ Decisions taken (for Jacob to confirm):
   sst's clamped Padé approximation.
 - The folder is a generic stage running sst's existing waveshapers, not a new folder curve (see
   the fit below).
-- Not done: the plugin doesn't expose deactivation (the drives' and the shaper's on/off, like the
-  scene highpass and filter types before) as CLAP parameters; the converter sets it in the state.
+- Off switches (`52280db`, Oscairn-specific): every Surge parameter that can be switched off
+  (filter types, scene highpass, LFO rates, the new drives and shaper) is now also a stepped
+  plugin parameter "<name> Off" (ID: FNV-1a of "<storage name>.off", 1 = off, default from the
+  init patch). The plugin has 327 parameters (272 at milestone 0; 284, 292, 294 after the three
+  engine commits).
 
 *Saturator fit* (engine renders through the plugin at osc level table[511], amp level
 table[431], against the `m2` probes; drive in the engine = offset + 0.75 dB × raw):
@@ -1298,17 +1301,19 @@ and changes nothing with the filter off, the amp saturator's harmonics match the
 0.02 dB and don't change with the amp level, the filter saturator runs only with its filter,
 output gain applies with the filter off, the shaper sits before the filters and post-filter
 channels skip it, and every new parameter resets on loading an old patch and round-trips.
-For `e1489f5` (plugin tests only): `oscairn-analog-tests` passed in the standard, ASan/UBSan and
+For `52280db`: `oscairn-analog-tests` passed in the standard, ASan/UBSan and TSan builds (TSan:
+see the report), with a new check that the amp drive's off switch is a parameter, follows its
+event and is carried by the state. For `e1489f5` (plugin tests only): `oscairn-analog-tests` passed in the standard, ASan/UBSan and
 TSan builds with no sanitizer reports; `surge-testrunner` was not rerun (no engine change). CI:
 see the report for this session.
 
 **Where this stopped** (fifth session). Milestone 2 engine blocks are in (mixer invert and
 post-filter, saturators, filter output gain, pre-filter shaper), all off by default with
-`[reference]` unchanged. Next: a folder curve fitted to the reference (soft/hard, texture) in
-place of sst's folders above amount 96; a sharper-kneed saturator option if the 3 dB proposal at
-raw 80 matters; the saturators' small-signal gain per drive into the converter; exposing the
-deactivation switches as plugin parameters; the per-oscillator wave shaper with the "Analog"
-oscillator (milestone 3); short pitch EG decays (repeated probes); then milestone 3 (unison,
+`[reference]` unchanged; their off switches are plugin parameters. Next: a folder curve fitted
+to the reference (soft/hard, texture) in place of sst's folders above amount 96; a
+sharper-kneed saturator option if the 3 dB proposal at raw 80 matters; the saturators'
+small-signal gain per drive into the converter; the per-oscillator wave shaper with the
+"Analog" oscillator (milestone 3); short pitch EG decays (repeated probes); then milestone 3 (unison,
 OSC reset, drift, ageing, pitch LFO, Part LFO), not started.
 
 **Where this stopped** (fourth session). Next steps: pitch EG decay and release tables (dense
