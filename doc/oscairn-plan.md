@@ -1235,6 +1235,12 @@ Decisions taken (for Jacob to confirm):
   plugin parameter "<name> Off" (ID: FNV-1a of "<storage name>.off", 1 = off, default from the
   init patch). The plugin has 327 parameters (272 at milestone 0; 284, 292, 294 after the three
   engine commits).
+- Added in the sixth session (details there): voice unison allows 1-16 voices, and a mono-mode
+  group keeps its size if the count changes mid-note; segment drift keeps no memory between
+  notes, has normal nodes, and leaves Surge's own drift in place (the converter sets it to 0);
+  the saturators divide by tanh(drive) instead of the drive; Saw2 maps to Modern (saw plus sine)
+  rather than a new oscillator; OSC Reset Phase and Full map to retrigger and Tune to nothing;
+  ageing is not modelled; the "Analog" oscillator waits for a shaper and self-sync model.
 
 *Saturator fit* (engine renders through the plugin at osc level table[511], amp level
 table[431], against the `m2` probes; drive in the engine = offset + 0.75 dB × raw):
@@ -1306,6 +1312,178 @@ see the report), with a new check that the amp drive's off switch is a parameter
 event and is carried by the state. For `e1489f5` (plugin tests only): `oscairn-analog-tests` passed in the standard, ASan/UBSan and
 TSan builds with no sanitizer reports; `surge-testrunner` was not rerun (no engine change). CI:
 see the report for this session.
+
+**Sixth session (2026-10-31): milestone 3, voice level.** Batches `m3a`-`m3d` (sine at note 60
+unless noted, drift 0 unless it is the variable; the recorder plays one note per load, so
+statistics come from repeated loads).
+
+*Unison* (sine at note 84, detune and spread swept). Two voices sit at +-d cents, four at
++-2d and +-0.66d (span 4d), where d is the detune index times 0.9975 cents (index 8: +-7.98
+cents; four voices +-15.96 and +-5.27). Each voice plays at 1/sqrt(n) (0.707 and 0.500 of a
+single voice). Spread pans only by attenuating the far side, never boosting the near one; the
+far gains of two voices are whole multiples of 0.375 dB (1, 1, 2, 4, 5, 7, 9, 12, 15, 18, 23,
+27, 33, 39 steps for spread 2-15; spread 1 does nothing). With far = cos^2(pi x / 2), x for two
+voices is 0, 0.132, 0.132, 0.186, 0.261, 0.291, 0.342, 0.385, 0.439, 0.486, 0.527, 0.584,
+0.624, 0.675, 0.717 (spread 1-15, about 0.048 per step); four voices sit at 2x and 2x/3,
+which predicts the four-voice gains within 0.007. Unison voices drift independently (two voices
+at drift 127: -14.6 and +21.8 cents).
+
+*Engine: voice unison* (`bf59112`, generic). Scene parameters Voice Unison (voices per note),
+Voice Unison Detune (cents per unit offset, Surge's `ct_oscspread`) and Voice Unison Spread
+(0-100 %). Voice u of n has offset k from -n/2 to n/2, evenly spaced; pitch moves by k times
+the detune, pan position is k times the spread (clamped), the far side is scaled by cos^2 and
+each voice by 1/sqrt(n). Against the reference (engine at detune 0.08, spread 0.385 / 0.195 /
+0 for unison 2 and 4): offsets within 0.06 cents (the reference's inner four-voice offset is
+0.659 d, the engine's 2/3 d), channel gains within 0.009. The voices of a note share a group:
+they count against the polyphony limit, the mono modes legato and reclaim the whole group, and
+the host hears one note end when the last voice ends or is reclaimed. Decisions (for Jacob):
+any voice count 1-16 is allowed (the reference has 2 and 4); in the mono modes a reclaimed group
+keeps the size it started with if the count changes while the note is held (marked
+`shortcut:`). Proposed tolerance: offsets within 0.1 cent, channel gains within 0.02. Not done:
+a plugin check against the reference values (the `[unison]` tests check the engine's own
+formula).
+
+*Drift* (sine; drift 0-127; 6-43 loads per depth, 4 notes of 20 s at 127). With drift 0 the
+pitch is exact (0.01 cents). With drift on, each oscillator's pitch moves in straight lines
+between random values at nodes about 5.69 s apart (intervals 5.59-5.85 s from kinks in the long
+notes; a one-break piecewise-linear fit leaves 0.004 cents RMS on 4 s notes). Oscillators move
+independently, and so do the two voices of a unison note. The value at a note's start is spread
+like the interpolation of independent nodes (at 127: mean +11.9, deviation 19.9 cents, range
+-45.6 to +47.9, 43 loads; a Kolmogorov-Smirnov test against the engine below gives p = 0.30).
+Deviation of the value at note start, cents (loads): 16: 0.9 (10), 32: 0.9 (16), 48: 1.8 (10),
+64: 1.8 (16), 80: 3.6 (10), 96: 5.2 (16), 112: 10.5 (18), 127: 19.9 (43); means 0.1, 0.3, 1.2,
+2.1, 3.4, 3.0, 4.0, 11.9, so the reference drifts sharp on average (about 0.5 deviations; real
+in three separate batches, but the loads within a batch are correlated in time: consecutive
+loads often start close together, so the reference's generator seems to run on between loads).
+The cutoff drifts too (saw at note 36 through LPF24 at 512, harmonic 9 converted with the
+engine's 1.9 dB per semitone): deviation 0.30, 1.12 and 5.5 semitones at 64, 96 and 127, mean
+about 0, independent of the pitch drift, also in straight segments. Ageing (-100, 0, +100) has
+no measurable effect on pitch (one voice, four unison voices, or with drift 127); on the cutoff
+of voice 1 it moves harmonic 5 by +0.3 / -0.1 dB.
+
+*Multi-note probes* (batch `m3e`, the coordinator's new sequence recorder `esp_seq`, 8 notes
+of 1 s every 1.5 s on one key, or 12 of 0.8 s every 1.1 s). Drift 127 with each OSC Reset mode
+(two runs each): every note starts at an unrelated value in all four modes (for example Off:
+-2.1 after +19.7, +23.1 after +13.7), with one exception (Off, notes 1-2: +40.1, then +40.3).
+Which voice each note used is not known, so this doesn't separate "each voice keeps its own
+running generator" from "every note starts afresh"; the engine's per-note start is consistent
+with it. Ageing -100 / +100 with drift 0, 12 notes: pitch within 0.1 cents on every note, and
+the saw-through-LPF24 harmonic 9 identical on all 12 notes (-53.02 and -53.42 dB, against
+-53.3 at ageing 0): a fixed cutoff shift of about +0.16 / -0.05 semitones, no spread between
+notes. Ageing is not modelled; the converter can ignore it or fold that shift into the cutoff.
+
+*Engine: segment drift* (`fb304aa`, generic). One generator per oscillator pitch and per filter
+cutoff in each voice: normal nodes (mean 0, deviation 1) Segment Drift Time apart (2^value s,
+default 2.5 = 5.66 s), linear between them; a voice starts at a random point of a random
+segment. Segment Drift Pitch (semitones, shown in cents) and Segment Drift Cutoff (semitones)
+scale the nodes; Segment Drift Offset adds to every oscillator's pitch. The instantaneous
+deviation is sqrt(2/3) of the node deviation, so the converter sets Pitch = 1.22 x the table's
+deviation and Offset = the mean. Engine check (300 s note, Pitch 0.24, Offset 0.12, Time 2.508):
+mean 11.05, deviation 18.66 cents, segments 5.70 s, against the reference's 11.9, 19.9 and 5.69.
+Decisions (for Jacob): no memory between notes (every note starts at a random point; for one
+note this is the same distribution as a generator that never stops, but two notes in a row on
+one voice are not correlated as the reference's seem to be); normal nodes (the node
+distribution can't be told from 43 loads); Surge's own drift stays and the converter sets it to
+0. Proposed tolerance: the start-value distribution at 127 passes a two-sample
+Kolmogorov-Smirnov test at 5 %, segment time within 2 %. Not done: the drift table's fit (the
+deviations above are the converter's table, points 16 steps apart with a jump at 127); a plugin
+statistics check.
+
+*OSC Reset* (saw at note 48, three loads per mode): Phase and Full start every note at the same
+phase; Off and Tune at random phases. With drift 127, Tune and Full start notes at random
+offsets just as Off and Phase do (no reset to zero). What Tune resets cannot be seen in one note
+per load. Converter: Phase and Full set Surge's oscillator retrigger; segment drift already
+starts each note afresh, which is what a drift reset would do.
+
+*Oscillator waves* (note 48). Saw1 is a 1/n sawtooth. Saw2 is the sawtooth plus its own
+fundamental: harmonics 2-40 are 1.145 (1.12-1.18) times Saw1's, the fundamental 1.492 times.
+Surge's Modern oscillator gives this with the third shape set to sine at about -0.186 of the
+saw (deform type 2; rendered at -0.19, harmonics 1-6 relative to the second are within 0.04 dB
+of the reference's; -0.186 is interpolated), so
+Saw2 needs no engine change: Modern, saw 100 %, sine -18.6 %, level +1.18 dB. Pulse width:
+duty = raw / 255 (16: 0.065, 32: 0.130, 64: 0.254, 96: 0.377). Square, triangle and sine are
+Modern's.
+
+*Self sync is not hard sync.* At 1200 cents (raw 48) Surge's Classic and Modern sync give a
+clean octave saw; the reference keeps a fundamental at -11 dB. At 3600 cents its spectrum is a
+peak at harmonic 8 with symmetric sidebands. Period reconstructions show the slave restarting
+at the master period with a fade around the restart (on a sine at 2400 cents the slave's first
+cycle after the restart and the end of its last are attenuated; on a square the fade looks
+longer). Not fitted. The wave shaper is not fitted either: on a sine it doesn't follow the
+a sin(g x) curve that fits the saw probes up to 96 (fifth session; at 32 the sine's fifth
+harmonic is 17 dB under its third, where sin(g x) gives about 39 dB), so it may not be one
+static curve. The
+"Analog" oscillator (shaper, self sync) is therefore not built; Saw1, Saw2, square, triangle and
+sine map to Modern.
+
+*Pitch LFO* (sine carrier, depth raw 309). Depth: the LFO swings +-half the pitch EG depth's
+cents at the same raw value (raw 309: +-92.5; 280: +-23; 372: +-350; 494: +-2400; 128: -320,
+inverted), so the converter uses the pitch EG depth lookup halved. Waves with key-on reset:
+saw (rising, starts mid-ramp), square (high half first), triangle and sine (start at 0,
+rising), random (held per period). Phase 90 / 180 / 270 degrees start the sine at its peak / 0
+falling / trough. Key-on reset off: random phase per load. Delay: the LFO switches on fully
+after t = 0.64 s x (raw / 24)^1.53 (raw 8-72 within 0.01 s of the half-amplitude time; 80
+about 4.0 s from a coarse track; 4 not resolved).
+Fade-in: times double every 16 steps (to 90 %: 0.89, 1.78, 3.53, 5.34, 7.13 s at 160, 176,
+192, 200, 208), but 96 and 144 measured as instant; 144-160 needs probes. Speed: the amplitude
+LFO table (third session). Surge's voice LFO covers these; the converter's start phases per wave
+and the delay/attack mapping to Surge's LFO envelope are not checked against engine renders.
+
+*Oscillator EG* (pulse width 50 %, PW EG depth +127, duty from the second-to-first harmonic
+ratio): decay time constants 0.186 s (index 160) and 0.76 s (192) against the pitch EG's 0.196
+and 0.82 s, so the oscillator EGs share the pitch/filter EG curves within about 5 %. PW EG depth
++32 moves the duty by 0.246 (about 1/130 per step); +64 saturates. Mapping the oscillator EGs
+and LFOs (three each, plus pitch, filter, amp and modifier LFOs and the pitch and modifier EGs)
+needs the 6 -> 12 voice modulators of milestone 2, which are not built yet: changing
+`n_lfos_voice` renumbers the modulation sources that patches store by number, so it needs a
+migration. Part LFO: its rate table is fitted in the measurement repository for the FM engine
+(`fm/lfo_rate.py`, milestone M6 of that plan); the Part LFO is common to both engines but this
+was not checked on an analog Part.
+
+*Saturator level at high drive* (`204ac02`, generic). The saturators divided by the drive
+(small-signal gain 1), so a full-scale sine fell 18 dB at +20 dB of drive, while the reference
+stays within +0.6 to +3.6 dB of its clean level at every drive. They now divide by tanh(drive):
+the converter's level correction after each saturator goes from +0.6 ... +19.6 dB (amp) and
++0.9 ... +16.5 dB (filter) to: amp, raw 8-80: +0.63, +0.89, +1.81, +1.25, +2.42, +3.31, +1.43,
+-0.40 dB; filter: +1.19, +1.30, +0.91, +1.55, +2.25, +2.22, -0.74, -2.14 dB (`satgain.py`,
+reference against engine fundamental at full scale). The harmonics are unchanged (rechecked:
+amp raw 80 second harmonic -36.6 reference, -40.1 engine, as before). Still not met: the 3 dB
+proposal at raw 80 (3.5 and 3.1 dB), and the reference's low-level odd harmonics.
+
+*Render tool* (`3c0f557`, Oscairn-specific): `name.deform=n` sets a parameter's deform type.
+
+*Measurement repository* (`6822ce9`): `analog/voice.py` (unison partials and pan, drift tracks
+and segments) and `analog/shaper.py` (transfer curves, saturator fits, fundamental level, the
+folder's harmonic RMS), with self-tests. `shaper.transfer` now picks the input polarity whose
+output rises with the input (the symmetry search alone can return the curve mirrored; the
+saturators' fitted asymmetry signs from the fifth session may be flipped, which doesn't change
+their spectra). Not moved: the table gate (`gate.py`, local paths throughout) and the probe
+builders.
+
+**Tests run in the sixth session** (macOS arm64).
+On the tree of each code commit (`bf59112`, `fb304aa`, `204ac02`, `3c0f557`):
+`oscairn-analog-tests` passed in the standard, ASan/UBSan and TSan builds with no sanitizer
+reports (standard 71-79 s, ASan 72-80 s, TSan 316-366 s; the plugin exposes 330 parameters
+after unison, 334 after segment drift); `surge-testrunner` passed with `[reference]` included:
+195, 198, 198 and 198 test cases, "Compared 635 patches, skipped 6" each time. New tests:
+`[unison]` (offsets, pans and gains of four voices, one note end for the group, one voice
+changes nothing, far-side attenuation and the 1/sqrt(n) level, the polyphony limit, the four
+mono modes, reset on load and round trip) and `[segmentdrift]` (the generator's stationary
+deviation sqrt(2/3) and its segment count, off by default with an exact 440 Hz, the offset
+moving pitch by 50 cents, depth scaling each generator, reset on load and round trip); the amp
+saturator test now checks the level against the tanh(drive) scaling and was seen to fail with
+the old scaling. Measurement repository self-tests: 22 passed. CI: see the report for this
+session.
+
+**Where this stopped** (sixth session). Milestone 3: voice unison and segment drift are in, OSC
+reset maps to retrigger, Saw2 and the pulse width map to Modern, the pitch LFO's depth, waves,
+phase and delay are measured. Not done: the "Analog" oscillator's wave shaper and self sync
+(the shaper doesn't follow one simple curve and self sync isn't hard sync; more probes and a
+model needed), ageing (no spread between notes, only a fixed cutoff shift of at most 0.16
+semitones), the drift and spread tables committed as plugin checks, the LFO fade-in below 160,
+the 6 -> 12 voice modulators (needed for oscillator EGs and LFOs), and the time-boxed milestone
+1 and 2 items other than the saturator level (folder above 96 and Hard, saturator curve, filter
+saturator offsets for other types, resonance above 96, short envelopes, noise tone).
 
 **Where this stopped** (fifth session). Milestone 2 engine blocks are in (mixer invert and
 post-filter, saturators, filter output gain, pre-filter shaper), all off by default with
