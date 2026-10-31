@@ -60,6 +60,12 @@ void setParam(SurgeSynthesizer &synth, const std::string &name, double v)
         findParam(synth, name.substr(0, name.size() - 4))->deactivated = v > 0.5;
         return;
     }
+    // name.deform=n sets a parameter's deform type (an oscillator control's variant)
+    if (name.size() > 7 && name.compare(name.size() - 7, 7, ".deform") == 0)
+    {
+        findParam(synth, name.substr(0, name.size() - 7))->deform_type = (int)std::lround(v);
+        return;
+    }
     auto *p = findParam(synth, name);
     pdata d = p->val;
     if (p->valtype == vt_float)

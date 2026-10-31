@@ -12,8 +12,9 @@
  *
  * name is a Surge storage name (as --list prints: a_osc1_pitch, a_env1_release ...); value
  * is in Surge's own units (the plugin's parameter units); name.off=1 deactivates a parameter
- * that can be switched off (a_lowcut.off=1). mod:source:name=depth adds a
- * modulation routing from Surge modulation source number `source` (enum modsources) with
+ * that can be switched off (a_lowcut.off=1) and name.deform=n sets a parameter's deform type
+ * (a_osc1_param2.deform=2: the Modern oscillator's third shape is a sine). mod:source:name=depth
+ * adds a modulation routing from Surge modulation source number `source` (enum modsources) with
  * depth in Surge's 0..1 units. The patch is built with Surge's API, saved, and loaded into
  * the plugin as its state, so the render goes through the plugin's own path. Writes a
  * stereo 32-bit float WAV.
