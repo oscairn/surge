@@ -953,7 +953,7 @@ fitted from):
 | Amp EG attack | `a_env1_attack` | 100-208 | 14 of 14 | yes |
 | Amp EG decay | `a_env1_decay` | 100-244 | 16 of 16 | yes |
 | Amp EG release | `a_env1_release` | 112-244 | 14 of 14 | yes |
-| Cutoff, LPF24 | `a_filter1_cutoff` (LP 24 dB, resonance 0.06) | 320-1023 (notes 24 and 36) | 50 of 54 within 50 cents; the 4 misses (52-76 cents) are at indices 424, 680, 936, next to kinks | no |
+| Cutoff, LPF24 | `a_filter1_cutoff` (LP 24 dB, resonance 0.06) | 320-1023 (notes 24 and 36) | Fitted from every 8th index: 107 of 108 within 50 cents (median 3 cents at note 36, 7 at note 24); index 852 is 58 cents off, next to a kink. From every 16th index: 50 of 54 | no (one check fails) |
 
 Outside the valid spans, and why:
 
@@ -1003,8 +1003,8 @@ them (20 Hz-20 kHz): the engine (Surge's Classic oscillator) is between -88.5 an
 the reference between -100 and -87 dB, so the engine is 2-17 dB worse but under a -70 dB
 floor everywhere. The "Analog" oscillator of milestone 3 should be measured the same way.
 
-**Not done in milestone 1:** cutoff tables for the other 9 types and the remaining cutoff
-check (a step-4 validation sweep is recorded, not fitted); envelopes under index 100 and the
+**Not done in milestone 1:** the LPF24 cutoff table's last failing check (852) and cutoff
+tables for the other 9 types (a sweep of all types at steps of 32 is recorded, not fitted); envelopes under index 100 and the
 engine range extension above; the other envelopes and LFOs (pitch and filter LFO probes are
 recorded, not analysed; the other envelopes not probed); oscillator and mixer levels;
 resonance; the converter (open question 12: it goes in its own repository, not built here).
@@ -1014,7 +1014,7 @@ ASan/UBSan and TSan builds of commit `848e2c7`, no sanitizer reports), `surge-te
 patches compared within 1e-5 (6 skipped as nondeterministic). CI: see the report for this
 session.
 
-**Where this stopped.** Next steps, in order: fit the step-4 cutoff sweep (fit from all
-8-step data, check at the 4-offsets) and per-type cutoff tables; re-record LFO index 242;
+**Where this stopped.** Next steps, in order: the LPF24 cutoff near index 852 (a step-2
+sweep around the kinks, or knots placed at them) and per-type cutoff tables; re-record LFO index 242;
 average repeated renders for envelope times under 100; analyse the pitch and filter LFO
 probes (same speed curve?); probe the other envelopes and oscillator and mixer levels.
