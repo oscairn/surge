@@ -108,6 +108,7 @@ class alignas(16) SurgeSynthesizer
         virtual void surgeMacroUpdated(long macroNum, float) = 0;
     };
     SurgeSynthesizer(PluginLayer *parent, const std::string &suppliedDataPath = "");
+    SurgeSynthesizer(PluginLayer *parent, const SurgeStorage::SurgeStorageConfig &config);
     virtual ~SurgeSynthesizer();
 
     // Also see setNoteExpression() which allows you to control all note parameters polyphonically

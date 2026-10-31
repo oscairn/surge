@@ -53,7 +53,13 @@ namespace cutl = sst::cpputils;
 using CMSKey = ControllerModulationSourceVector<1>; // sigh see #4286 for failed first try
 
 SurgeSynthesizer::SurgeSynthesizer(PluginLayer *parent, const std::string &suppliedDataPath)
-    : storage(suppliedDataPath), hpA{cutl::make_array<BiquadFilter, n_hpBQ>(&storage)},
+    : SurgeSynthesizer(parent, SurgeStorage::SurgeStorageConfig::fromDataPath(suppliedDataPath))
+{
+}
+
+SurgeSynthesizer::SurgeSynthesizer(PluginLayer *parent,
+                                   const SurgeStorage::SurgeStorageConfig &config)
+    : storage(config), hpA{cutl::make_array<BiquadFilter, n_hpBQ>(&storage)},
       hpB{cutl::make_array<BiquadFilter, n_hpBQ>(&storage)}, _parent(parent), halfbandA(6, true),
       halfbandB(6, true), halfbandIN(6, true), mpeEnabled(storage.mpeEnabled)
 {
