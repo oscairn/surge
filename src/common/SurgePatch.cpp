@@ -695,6 +695,15 @@ SurgePatch::SurgePatch(SurgeStorage *storage)
             p_id.next(), id_s++, "amp_drive_asym", "Amp Drive Asymmetry",
             fmt::format("{:c}/amp/drive_asymmetry", 'a' + sc), ct_percent_bipolar,
             Surge::Skin::Scene::amp_drive_asymmetry, sc_id, cg_GLOBAL, 0, true));
+
+        a->push_back(scene[sc].prefilter_ws.type.assign(
+            p_id.next(), id_s++, "prews_type", "Pre-Filter Shaper Type",
+            fmt::format("{:c}/prefilter_shaper/type", 'a' + sc), ct_wstype,
+            Surge::Skin::Filter::prefilter_ws_type, sc_id, cg_GLOBAL, 0, false));
+        a->push_back(scene[sc].prefilter_ws.drive.assign(
+            p_id.next(), id_s++, "prews_drive", "Pre-Filter Shaper Drive",
+            fmt::format("{:c}/prefilter_shaper/drive", 'a' + sc), ct_decibel,
+            Surge::Skin::Filter::prefilter_ws_drive, sc_id, cg_GLOBAL, 0, true));
     }
 
     param_ptr.push_back(
@@ -2040,7 +2049,8 @@ void SurgePatch::load_xml(const void *data, int datasize, bool is_preset)
         for (auto *p : {&sc.filterunit[0].drive, &sc.filterunit[0].drive_asymmetry,
                          &sc.filterunit[0].output_gain, &sc.filterunit[1].drive,
                          &sc.filterunit[1].drive_asymmetry, &sc.filterunit[1].output_gain,
-                         &sc.amp_drive, &sc.amp_drive_asymmetry})
+                         &sc.amp_drive, &sc.amp_drive_asymmetry, &sc.prefilter_ws.type,
+                         &sc.prefilter_ws.drive})
         {
             p->val = p->val_default;
             p->deactivated = p->can_deactivate();

@@ -403,6 +403,7 @@ extern Surge::Skin::Connector balance, config, cutoff_1, cutoff_2, envmod_1, env
     waveshaper_jog, waveshaper_analyze, filter_analyze;
 // Per-unit saturator and output gain, without a control in the skin
 extern Surge::Skin::Connector drive[2], drive_asymmetry[2], output_gain[2];
+extern Surge::Skin::Connector prefilter_ws_type, prefilter_ws_drive;
 }
 namespace Global
 {

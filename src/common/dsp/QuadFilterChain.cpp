@@ -65,6 +65,17 @@ inline SIMD_M128 saturate(SIMD_M128 x, SIMD_M128 drive, SIMD_M128 asym, SIMD_M12
     return out;
 }
 
+// Shaper on the filter inputs, before the filters (a folder, for example): inL and inR are
+// the filter 1 and filter 2 inputs (left and right in Wide) from here on.
+#define MPreShape                                                                                  \
+    auto inL = d.DL[k], inR = d.DR[k];                                                             \
+    if (g.PreWSptr)                                                                                \
+    {                                                                                              \
+        d.PreDrive = SIMD_MM(add_ps)(d.PreDrive, d.dPreDrive);                                     \
+        inL = g.PreWSptr(&d.PreWSS[0], inL, d.PreDrive);                                           \
+        inR = g.PreWSptr(&d.PreWSS[1], inR, d.PreDrive);                                           \
+    }
+
 // Per-sample steps of the saturator and output gain interpolators
 #define MStepPost                                                                                  \
     for (int u = 0; u < 2; ++u)                                                                    \
@@ -117,8 +128,9 @@ void ProcessFBQuad(QuadFilterChainState &d, fbq_global &g, float *OutL, float *O
         for (int k = 0; k < BLOCK_SIZE_OS; k++)
         {
             MStepPost
-            auto input = d.DL[k];
-            auto x = input, y = d.DR[k];
+            MPreShape
+            auto input = inL;
+            auto x = input, y = inR;
             auto mask = SIMD_MM(load_ps)((float *)&d.FU[0].active);
 
             if (A)
@@ -159,11 +171,12 @@ void ProcessFBQuad(QuadFilterChainState &d, fbq_global &g, float *OutL, float *O
         for (int k = 0; k < BLOCK_SIZE_OS; k++)
         {
             MStepPost
+            MPreShape
             d.FB = SIMD_MM(add_ps)(d.FB, d.dFB);
             auto input = vMul(d.FB, d.FBlineL);
-            input = vAdd(d.DL[k], sdsp::softclip_ps(input));
+            input = vAdd(inL, sdsp::softclip_ps(input));
             auto mask = SIMD_MM(load_ps)((float *)&d.FU[0].active);
-            auto x = input, y = d.DR[k];
+            auto x = input, y = inR;
 
             if (A)
                 x = g.FU1ptr(&d.FU[0], x);
@@ -206,10 +219,11 @@ void ProcessFBQuad(QuadFilterChainState &d, fbq_global &g, float *OutL, float *O
         for (int k = 0; k < BLOCK_SIZE_OS; k++)
         {
             MStepPost
+            MPreShape
             d.FB = SIMD_MM(add_ps)(d.FB, d.dFB);
             auto input = vMul(d.FB, d.FBlineL);
-            input = vAdd(d.DL[k], sdsp::softclip_ps(input));
-            auto x = input, y = d.DR[k];
+            input = vAdd(inL, sdsp::softclip_ps(input));
+            auto x = input, y = inR;
             auto mask = SIMD_MM(load_ps)((float *)&d.FU[0].active);
 
             if (A)
@@ -254,11 +268,12 @@ void ProcessFBQuad(QuadFilterChainState &d, fbq_global &g, float *OutL, float *O
         for (int k = 0; k < BLOCK_SIZE_OS; k++)
         {
             MStepPost
+            MPreShape
             d.FB = SIMD_MM(add_ps)(d.FB, d.dFB);
             auto fb = SIMD_MM(mul_ps)(d.FB, d.FBlineL);
             fb = sdsp::softclip_ps(fb);
-            auto x = SIMD_MM(add_ps)(d.DL[k], fb);
-            auto y = SIMD_MM(add_ps)(d.DR[k], fb);
+            auto x = SIMD_MM(add_ps)(inL, fb);
+            auto y = SIMD_MM(add_ps)(inR, fb);
             auto mask = SIMD_MM(load_ps)((float *)&d.FU[0].active);
 
             if (A)
@@ -292,11 +307,12 @@ void ProcessFBQuad(QuadFilterChainState &d, fbq_global &g, float *OutL, float *O
         for (int k = 0; k < BLOCK_SIZE_OS; k++)
         {
             MStepPost
+            MPreShape
             d.FB = SIMD_MM(add_ps)(d.FB, d.dFB);
             auto fb = SIMD_MM(mul_ps)(d.FB, d.FBlineL);
             fb = sdsp::softclip_ps(fb);
-            auto x = SIMD_MM(add_ps)(d.DL[k], fb);
-            auto y = SIMD_MM(add_ps)(d.DR[k], fb);
+            auto x = SIMD_MM(add_ps)(inL, fb);
+            auto y = SIMD_MM(add_ps)(inR, fb);
             auto mask = SIMD_MM(load_ps)((float *)&d.FU[0].active);
 
             if (A)
@@ -330,11 +346,12 @@ void ProcessFBQuad(QuadFilterChainState &d, fbq_global &g, float *OutL, float *O
         for (int k = 0; k < BLOCK_SIZE_OS; k++)
         {
             MStepPost
+            MPreShape
             d.FB = SIMD_MM(add_ps)(d.FB, d.dFB);
             auto fb = SIMD_MM(mul_ps)(d.FB, d.FBlineL);
             fb = sdsp::softclip_ps(fb);
-            auto x = SIMD_MM(add_ps)(d.DL[k], fb);
-            auto y = SIMD_MM(add_ps)(d.DR[k], fb);
+            auto x = SIMD_MM(add_ps)(inL, fb);
+            auto y = SIMD_MM(add_ps)(inR, fb);
             auto mask = SIMD_MM(load_ps)((float *)&d.FU[0].active);
 
             if (A)
@@ -372,11 +389,12 @@ void ProcessFBQuad(QuadFilterChainState &d, fbq_global &g, float *OutL, float *O
         for (int k = 0; k < BLOCK_SIZE_OS; k++)
         {
             MStepPost
+            MPreShape
             d.FB = SIMD_MM(add_ps)(d.FB, d.dFB);
             auto fb = SIMD_MM(mul_ps)(d.FB, d.FBlineL);
             fb = sdsp::softclip_ps(fb);
-            auto x = SIMD_MM(add_ps)(d.DL[k], fb);
-            auto y = SIMD_MM(add_ps)(d.DR[k], fb);
+            auto x = SIMD_MM(add_ps)(inL, fb);
+            auto y = SIMD_MM(add_ps)(inR, fb);
             auto mask = SIMD_MM(load_ps)((float *)&d.FU[0].active);
 
             if (A)
@@ -417,11 +435,12 @@ void ProcessFBQuad(QuadFilterChainState &d, fbq_global &g, float *OutL, float *O
         for (int k = 0; k < BLOCK_SIZE_OS; k++)
         {
             MStepPost
+            MPreShape
             d.FB = SIMD_MM(add_ps)(d.FB, d.dFB);
             auto fbL = SIMD_MM(mul_ps)(d.FB, d.FBlineL);
             auto fbR = SIMD_MM(mul_ps)(d.FB, d.FBlineR);
-            auto xin = SIMD_MM(add_ps)(d.DL[k], sdsp::softclip_ps(fbL));
-            auto yin = SIMD_MM(add_ps)(d.DR[k], sdsp::softclip_ps(fbR));
+            auto xin = SIMD_MM(add_ps)(inL, sdsp::softclip_ps(fbL));
+            auto yin = SIMD_MM(add_ps)(inR, sdsp::softclip_ps(fbR));
             auto x = xin;
             auto y = yin;
 
@@ -570,6 +589,7 @@ void InitQuadFilterChainStateToZero(QuadFilterChainState *Q)
         Q->FGain[u] = SIMD_MM(set1_ps)(1.f);
     }
     Q->ADrive = Q->AAsym = Q->dADrive = Q->dAAsym = SIMD_MM(setzero_ps)();
+    Q->PreDrive = Q->dPreDrive = SIMD_MM(setzero_ps)();
     for (int i = 0; i < 6; ++i)
         Q->dcX[i] = Q->dcY[i] = SIMD_MM(setzero_ps)();
     Q->FBlineL = SIMD_MM(setzero_ps)();

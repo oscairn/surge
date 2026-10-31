@@ -324,3 +324,45 @@ TEST_CASE("Saturator Parameters Reset When A Patch Lacks Them", "[signalpath]")
     REQUIRE(patch.scene[0].filterunit[0].drive.val.f == 7);
     REQUIRE(patch.scene[0].amp_drive_asymmetry.val.f == 0.25f);
 }
+
+TEST_CASE("Pre-Filter Shaper Sits Before The Filters", "[signalpath]")
+{
+    auto make = [](bool shaper, float cutoff, bool filterOn, bool post) {
+        auto s = sineSurge();
+        auto &sc = s->storage.getPatch().scene[0];
+        sc.filterunit[0].type.val.i = sst::filters::fut_lp24;
+        sc.filterunit[0].cutoff.val.f = cutoff;
+        sc.filterunit[0].type.deactivated = !filterOn;
+        sc.filterunit[1].type.deactivated = true;
+        sc.prefilter_ws.type.val.i = (int)sst::waveshapers::WaveshaperType::wst_softfold;
+        sc.prefilter_ws.type.deactivated = !shaper;
+        sc.prefilter_ws.drive.val.f = 12;
+        sc.mix_postfilter[0].val.b = post;
+        return s;
+    };
+    {
+        auto s = sineSurge();
+        REQUIRE(s->storage.getPatch().scene[0].prefilter_ws.type.deactivated);
+    }
+    const size_t from = 24000;
+    auto folded = harmonics(render(*make(true, 0, false, false), 69, 1000), from, 440);
+    REQUIRE(folded[2] > -30); // odd harmonics from the folder
+    REQUIRE(folded[1] < -60); // and no even ones
+    // a 24 dB low-pass at the fundamental cuts them: the shaper comes first
+    auto filtered = harmonics(render(*make(true, 0, true, false), 69, 1000), from, 440);
+    REQUIRE(filtered[2] < folded[2] - 25);
+
+    // channels routed past the filters skip it too
+    auto clean = render(*make(false, 0, false, true), 69, 1000);
+    auto post = render(*make(true, 0, false, true), 69, 1000);
+    double worst = 0;
+    for (size_t i = 0; i < clean.size(); i++)
+        worst = std::max(worst, (double)std::fabs(clean[i] - post[i]));
+    REQUIRE(worst < 1e-6);
+
+    // reset when a patch lacks it
+    auto s = make(true, 0, false, false);
+    REQUIRE(s->loadPatchByPath("resources/test-data/patches/TestInitSaw.fxp", -1, "Test"));
+    REQUIRE(s->storage.getPatch().scene[0].prefilter_ws.type.deactivated);
+    REQUIRE(s->storage.getPatch().scene[0].prefilter_ws.drive.val.f == 0);
+}

@@ -396,6 +396,8 @@ Connector drive[2] = {Connector("filter.drive_1", 0, 0, Components::None),
                       Connector("filter.drive_2", 0, 0, Components::None)};
 Connector drive_asymmetry[2] = {Connector("filter.drive_asymmetry_1", 0, 0, Components::None),
                                 Connector("filter.drive_asymmetry_2", 0, 0, Components::None)};
+Connector prefilter_ws_type = Connector("filter.prefilter_ws_type", 0, 0, Components::None);
+Connector prefilter_ws_drive = Connector("filter.prefilter_ws_drive", 0, 0, Components::None);
 Connector output_gain[2] = {Connector("filter.output_gain_1", 0, 0, Components::None),
                             Connector("filter.output_gain_2", 0, 0, Components::None)};
 Connector config = Connector("filter.config", 455, 83, 134, 52, Components::MultiSwitch)

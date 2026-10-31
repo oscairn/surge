@@ -129,6 +129,8 @@ struct QuadFilterChainState
 {
     sst::filters::QuadFilterUnitState FU[4];      // 2 filters left and right
     sst::waveshapers::QuadWaveshaperState WSS[2]; // 1 shaper left and right
+    sst::waveshapers::QuadWaveshaperState PreWSS[2]; // shaper on the filter 1 and 2 inputs
+    SIMD_M128 PreDrive, dPreDrive;
 
     SIMD_M128 Gain, FB, Mix1, Mix2, Drive;
     SIMD_M128 dGain, dFB, dMix1, dMix2, dDrive;
@@ -158,6 +160,7 @@ struct fbq_global
 {
     sst::filters::FilterUnitQFPtr FU1ptr, FU2ptr;
     sst::waveshapers::QuadWaveshaperPtr WSptr;
+    sst::waveshapers::QuadWaveshaperPtr PreWSptr{nullptr}; // shaper before the filters, if on
     bool preAmp{false}; // run the stage between the filters and the amp gain
     bool filterDrive[2]{false, false}, ampDrive{false}; // saturators switched on
     SIMD_M128 dcR;                                      // DC blocker pole

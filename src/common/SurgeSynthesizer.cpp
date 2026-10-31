@@ -5187,6 +5187,13 @@ void SurgeSynthesizer::process()
             g.filterDrive[u] = !storage.getPatch().scene[s].filterunit[u].drive.deactivated;
         }
         g.ampDrive = !storage.getPatch().scene[s].amp_drive.deactivated;
+        auto &prews = storage.getPatch().scene[s].prefilter_ws;
+        if (!prews.type.deactivated &&
+            prews.type.val.i != (int)sst::waveshapers::WaveshaperType::wst_none)
+        {
+            g.PreWSptr = sst::waveshapers::GetQuadWaveshaper(
+                static_cast<sst::waveshapers::WaveshaperType>(prews.type.val.i));
+        }
         g.preAmp = g.preAmp || g.ampDrive;
         // DC blocker after the saturators, about 5 Hz at the oversampled rate
         g.dcR = SIMD_MM(set1_ps)(1.f - 2.f * M_PI * 5.f * storage.dsamplerate_os_inv);

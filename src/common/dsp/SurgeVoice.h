@@ -263,6 +263,12 @@ class alignas(16) SurgeVoice
     {
         float Gain, FB, Mix1, Mix2, OutL, OutR, Out2L, Out2R, Drive, wsLPF, FBlineL, FBlineR;
         float FDrive[2], FAsym[2], FGain[2], ADrive, AAsym, dcX[6], dcY[6];
+        float PreDrive;
+        int PreWSType; // shaper type the registers below were initialized for
+        struct
+        {
+            float R[sst::waveshapers::n_waveshaper_registers];
+        } PreWS[2];
         float Delay[4][sst::filters::utilities::MAX_FB_COMB +
                        sst::filters::utilities::SincTable::FIRipol_N];
         struct

@@ -1431,6 +1431,14 @@ void SurgeVoice::SetQFB(QuadFilterChainState *Q, int e) // Q == 0 means init(ial
         FGain[u] = db_to_linear(lc(fu.output_gain));
     }
     float ADrive = db_to_linear(lc(scene->amp_drive));
+    float PreDrive = db_to_linear(lc(scene->prefilter_ws.drive));
+    if (!Q || FBP.PreWSType != scene->prefilter_ws.type.val.i)
+    {
+        FBP.PreWSType = scene->prefilter_ws.type.val.i;
+        for (int c = 0; c < 2; ++c)
+            sst::waveshapers::initializeWaveshaperRegister(
+                static_cast<sst::waveshapers::WaveshaperType>(FBP.PreWSType), FBP.PreWS[c].R);
+    }
     float AAsym = lc(scene->amp_drive_asymmetry);
 
     if (Q)
@@ -1453,6 +1461,14 @@ void SurgeVoice::SetQFB(QuadFilterChainState *Q, int e) // Q == 0 means init(ial
             set1f(Q->dcX[i], e, FBP.dcX[i]);
             set1f(Q->dcY[i], e, FBP.dcY[i]);
         }
+        set1f(Q->PreDrive, e, FBP.PreDrive);
+        set1f(Q->dPreDrive, e, (PreDrive - FBP.PreDrive) * BLOCK_SIZE_OS_INV);
+        for (int c = 0; c < 2; ++c)
+        {
+            for (int i = 0; i < sst::waveshapers::n_waveshaper_registers; ++i)
+                set1f(Q->PreWSS[c].R[i], e, FBP.PreWS[c].R[i]);
+            set1ui(Q->PreWSS[c].init, e, 0xFFFFFFFF);
+        }
     }
     for (int u = 0; u < 2; ++u)
     {
@@ -1462,6 +1478,7 @@ void SurgeVoice::SetQFB(QuadFilterChainState *Q, int e) // Q == 0 means init(ial
     }
     FBP.ADrive = ADrive;
     FBP.AAsym = AAsym;
+    FBP.PreDrive = PreDrive;
 
     FBP.Gain = Gain;
     FBP.Drive = Drive;
@@ -1569,6 +1586,9 @@ void SurgeVoice::GetQFB()
         FBP.dcX[i] = get1f(fbq->dcX[i], fbqi);
         FBP.dcY[i] = get1f(fbq->dcY[i], fbqi);
     }
+    for (int c = 0; c < 2; ++c)
+        for (int i = 0; i < sst::waveshapers::n_waveshaper_registers; ++i)
+            FBP.PreWS[c].R[i] = get1f(fbq->PreWSS[c].R[i], fbqi);
     FBP.FBlineL = get1f(fbq->FBlineL, fbqi);
     FBP.FBlineR = get1f(fbq->FBlineR, fbqi);
     FBP.wsLPF = get1f(fbq->wsLPF, fbqi);
