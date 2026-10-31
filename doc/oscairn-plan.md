@@ -955,10 +955,11 @@ fitted from):
 | Amp EG decay | `a_env1_decay` | 100-255 | 17 of 17 | yes |
 | Amp EG release | `a_env1_release` | 112-255 | 16 of 16 (108: 8.4 % off, outside) | yes |
 | Cutoff, LPF24 | `a_filter1_cutoff` (LP 24 dB, resonance 0.06) | 320-1004 (note 24 below 384, note 36 from there) | Third session: fitted from every 8th index plus the first index after each kink, pieces between kinks interpolated separately: 154 of 154 within 50 cents, 51 of them next to kinks (median 3 cents at note 36, 7 at note 24; largest 20 and 35) | yes |
-| Cutoff, LPF18 / LPF12 / LPF6 | Legacy Ladder 18 / 12 / 6 dB | 384-992 / 384-912 / 384-944 | LPF24 shape plus a smooth difference from a step-32 sweep; 19 of 19 / 18 of 19 (944: 143 cents) / 18 of 19 (976: 50.4 cents) | yes, the valid spans |
+| Cutoff, LPF18 / LPF12 / LPF6 | Legacy Ladder 18 / 12 / 6 dB | 384-992 / 384-992 / 384-944 | LPF24 shape plus a smooth difference from a step-32 sweep; 19 of 19 / 24 of 24 (fourth session, with probes at 936-960; before: 18 of 19, 944 143 cents off) / 18 of 19 (976: 50.4 cents) | yes, the valid spans |
 | Cutoff, HPF18 / HPF12 / HPF6 | Xpander HP3 / OB-Xd 12 dB HP / Xpander HP1 | 384-992 | 19 of 19 each (largest 34, 25, 25 cents) | yes |
 | Cutoff, BPF12 / BPF6 | BP 24 dB / BP 12 dB | 416-992 / 384-992 | 18 of 18 / 19 of 19 | yes |
-| Cutoff, HPF24 | HP 24 dB, resonance 0.05 | 384-912 | 16 of 16 (largest 20 cents); 944 is 129 cents off. At resonance 0 (the first choice): 14 of 17 | yes |
+| Cutoff, HPF24 | HP 24 dB, resonance 0.05 | 384-992 | 24 of 24 (fourth session, with probes at 936-960; before: 16 of 16 up to 912, 944 129 cents off). At resonance 0 (the first choice): 14 of 17 | yes |
+| Oscillator 1 level | `a_level_o1` at `a_vca_level` = amp level table [431] | 80-511 | 14 of 14 within 0.1 dB (largest 0.022) | yes (fourth session) |
 
 Outside the valid spans, and why:
 
@@ -1006,7 +1007,10 @@ band-passes). At resonance 0 the reference's LPF24 has a sharper knee than any S
 896 (3-11 kHz corners) most choices are 0.7-2 dB off. The engine's cutoff
 for a given index differs between types by up to about 11 semitones (high-passes most), so each
 type needs its own cutoff table; a sweep of all types at steps of 32 is recorded but not yet
-fitted. Gain offsets go to the filter output gain of milestone 2. Resonance was recorded
+fitted. Gain offsets go to the filter output gain of milestone 2 (measured after the third session at
+the chosen filters, engine minus reference, median over the cutoff checks: LPF24 -1.4 dB, LPF18
++0.4, LPF12 +0.7, LPF6 +0.5, HPF24 +4.6 (varies with cutoff), HPF18 0.0, HPF12 +0.1, HPF6
+-2.65 (varies), BPF12 +1.7, BPF6 +2.0). Resonance was recorded
 (4 values per type at cutoff 512) but not fitted.
 
 **Aliasing.** Sawtooth and square at notes 72-108, power off the harmonics relative to on
@@ -1077,6 +1081,109 @@ no sanitizer reports; sanitizer builds check every 8th cutoff index (the full se
 6", both on the tree of `c65dfaf` (later commits touch only the plugin's tests). CI for the
 second session's last commits `d6bdbe1` and `93620f8`: all 5 jobs passed. CI for this
 session's push: see the report.
+
+**Fourth session (2026-10-31).**
+
+- *CI headroom.* The ASan job's test step took 38 of its 60 minutes (envelope checks render up
+  to 340 s of audio each). Sanitizer builds now check only envelope times whose render is under
+  30 s (as for cutoff, where they check every 8th index); standard builds check everything.
+  On CI (run 41221092760) the test step went from 37.9 to 30.8 minutes (fitted tables 17.3 to
+  10.3; the state round trips, 12.5 minutes, and the parameter test, 6, are unchanged). Locally
+  ASan went from 81 to 64 s and TSan from 8 to 4.5 minutes.
+- *Short analog decay: not an envelope limit.* The 28.3 ms decay floor came from Surge's scene
+  highpass (`a_lowcut`, on by default at 6.9 Hz, Q 0.4, after the voices): a burst a few blocks
+  long has a DC component, and the highpass's step response leaves a tail about 20 dB under the
+  peak at note 96 (27 dB at note 60) that takes about 25 ms more to reach -40 dB. With the
+  highpass off the engine decays to -40 dB in 2.5 ms at the shortest setting, and the averaged
+  short-envelope fit (indices 40-96, fitted from 40, 56, 72, 88, 96, checked at 48-80) passes
+  for decay too: 6 of 6 for attack, decay and release each, but only through the 5 ms floor
+  (largest differences 1.8 ms attack, 2.6 ms decay, 2.6 ms release). As before these aren't
+  committed (decision on the floor for averaged checks still open). Above index 100 the
+  highpass changes engine decay times by at most 0.6 % (1.2 % at 30 ms) and release not at
+  all, so the committed tables stand. Decision (for Jacob): the converter switches the scene
+  highpass off; the reference shows no such tail. The render tool takes `a_lowcut.off=1`.
+- *Envelope overshoot* (looked at, nothing changed). In isolation Surge's analog-mode ADSR
+  overshoots full level by about 40 % with the shortest attack (it charges toward 1.5 and
+  starts the decay two blocks after passing 1). Plugin renders show no such overshoot: with
+  attack -8, decay 2 and sustain 100 % the level is within 0.2 dB of the sustain level from the
+  third oscillator period on, the same as with attack -6, and the reference shows none either.
+  A storage option clamping the attack at 1 was written and dropped: it showed no level
+  difference in the plugin but moved the pitch-EG decay times below further from the
+  reference. Not understood why the voice's level differs from the bare envelope's.
+- *Pitch EG against the amp EG tables* (not fitted). Pitch EG probes at indices 128, 160 and
+  192 on a sine (depth raw 309, which gives 185 cents, not the 1200 the Data List's step
+  suggests), against Surge's filter EG in analog mode at the amp tables' values routed to
+  pitch (Sine oscillator, scene highpass off), 10-90 % times: attack -3.6 / +0.4 / +0.2 %, decay -1.9 / +12.8 / +7.1 %, release
+  -6.8 / -6.0 / -5.6 % (with the dropped attack clamp above, decay was +6.9 / +17.6 / +12.0 %). The attack can use the amp attack table; decay and release need their
+  own tables (dense probes next). The pitch EG decays exponentially in cents. Not probed: the
+  filter EG time course (one probe set is recorded: decay 160 and 192, attack, release and
+  sustain at cutoff 512, depth +4800 cents; not analysed), oscillator EGs.
+- *Levels.* Oscillator 1's out level follows the amp level curve within 0.02 dB (80-511);
+  committed as a table with 14 checks. Oscillators 2 and 3 measure the same as oscillator 1
+  within 0.01 dB at 128, 256, 384 and 511, so the converter can use the one table. Noise out
+  level is the same curve plus 0.45 dB; a table fitted from 128 and 511 passes at 256 and 384
+  (0.093 and 0.067 dB, against 0.1), not committed: two checks of a random signal, with the
+  noise tone not matched.
+- *Resonance* (LPF24, cutoffs 512 and 768, indices 0-255 step 16, cutoff searched ±6
+  semitones in 0.5 together with resonance 0-0.99 in 0.03). LP 24 dB matches to 0.35 dB RMS up
+  to index 48 and 0.9 dB up to 96, with resonance 0.09/0.15/0.24/0.30/0.36/0.45/0.48 (cutoff
+  512) and 0.06/0.12/0.21/0.30/0.36/0.42/0.48 (768) at indices 0-96, the cutoff within 0.5
+  semitone of the table. Above 96 nothing in Surge fits both cutoffs: LP 24 dB 0.9-1.3 dB (512)
+  and 1.0-3.5 dB (768); Legacy Ladder 24 dB, Vintage Ladder and OB-Xd 24 dB 2.1-2.7 dB at 512
+  and 0.9-4.1 dB at 768 (often at their resonance limit); Diode Ladder 4-10 dB. The reference behaves like a ladder: the pass band
+  drops as resonance rises (-14 dB at 255, a feedback gain of about 4) while the peak gets
+  narrow (+28 dB over the pass band at 768). Surge's LP 24 dB keeps its pass band, and its
+  ladders don't have the reference's knee at low resonance. A filter with both would be new
+  work (a ladder with LP 24 dB's knee); stopped here.
+
+**Milestone 2 measurements** (fourth session, raw probes at note 36 or 48; not yet in the
+engine):
+
+- *Filter out level* is exactly 0.375 dB per step: -12.04, -6.01, +0.07, +6.02, +12.10 dB at
+  raw 32, 48, 64, 80, 96. It also applies with the filter at Thru (+12.09 at 96). As long as
+  nothing after the filters is non-linear, the converter can fold it, and the gain offsets
+  above, into the VCA level; with saturators it needs the filter unit's own output gain.
+- *Out select "Amp"* bypasses the filters: oscillator 1 through a closed LPF24 measures
+  -42.8 dB routed to the filter and -27.3 dB routed to the amp, the same as with the filter at
+  Thru (-27.4). Same for noise (-56.2 and -26.8 dB).
+- *Out invert* is an exact polarity flip: two phase-reset saws at equal level, one inverted,
+  cancel to digital silence (peak 0).
+- *Saturators* (filter and amp, drive raw 0-80 = 0-60 dB, on a sine). Both are asymmetric
+  (second harmonic -55 dB at raw 8, -26 dB at raw 48; odd harmonics grow later) and nearly
+  level-compensated (fundamental +1 to +3.5 dB over the clean sine). The spectrum depends only
+  on drive plus input level: drive raw 40 at oscillator level 128 (24 dB lower) gives the
+  spectrum of drive raw 8 at level 511 (32 steps of 0.75 dB). The amp saturator has slightly
+  less second harmonic than the filter's at the same drive. The filter saturator is bypassed
+  when the filter is Thru. Position (before or after the filter, before or after the VCA) not
+  measured yet.
+- *Wave folder* (sine at note 48): odd harmonics only for Soft at every amount; Hard adds even
+  harmonics at high amounts (-48 dB at 255). Texture changes the fold pattern at amount 128
+  (third harmonic 0 to -36 dB over texture 0-255; 128 is the default).
+- *Wave shaper* on sine, saw and triangle at 0-255: on a sine mostly odd harmonics (third -19
+  dB at 64); on a saw the second harmonic overtakes the fundamental at 192 and above; on a
+  triangle 128 and above turn it into a different wave. Transfer curves not fitted.
+
+Engine work these imply (not started): a post-filter route and a polarity switch per mixer
+channel (the voice mixes into the two filter inputs, and the quad filter chain runs filter,
+shaper and VCA per voice lane, so the post-filter route needs a third input to the chain
+before the VCA), saturators, folder and shaper as new blocks (section 3). Each changes the
+patch format (new parameters, a revision and migration) and the plugin's parameter list.
+
+**Tests run in the fourth session** (macOS arm64). Each code commit's tree (`01be3b3`,
+`f967ac1`, `c7aa171`, `e3698df`): `oscairn-analog-tests` all passed in the standard,
+ASan/UBSan and TSan builds with no sanitizer reports. `surge-testrunner` (181 passed, 1
+skipped) and `[reference]` ("Compared 635 patches, skipped 6") on the trees of `01be3b3` and
+`e3698df` (the commits between touch only the plugin's tests and render tool). A shifted
+reference value (0.2 dB) makes the new oscillator level check fail (seen). CI for `01be3b3`:
+all 5 jobs passed (run 41221092760).
+
+**Where this stopped** (fourth session). Next steps: pitch EG decay and release tables (dense
+probes; attack can use the amp table); analyse the recorded filter EG probes; oscillator EGs;
+resonance above index 96 needs a new filter (ladder with LP 24 dB's knee) or stays approximate;
+milestone 2 engine work from the measurements above: post-filter route and polarity per mixer
+channel, then saturators (position to measure first), folder, shaper.
+
+Earlier (third session):
 
 **Where this stopped.** Next steps: index 944 for LPF12 and HPF24 (probe 940-950 for those
 types); resonance (LPF24 resonance 0-255 at cutoffs 512 and 768 is recorded,
