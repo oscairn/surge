@@ -674,6 +674,18 @@ static void testConcurrentState()
 }
 
 // --- fitted tables -------------------------------------------------------------------
+#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
+static constexpr bool sanitizerBuild = true;
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer)
+static constexpr bool sanitizerBuild = true;
+#else
+static constexpr bool sanitizerBuild = false;
+#endif
+#else
+static constexpr bool sanitizerBuild = false;
+#endif
+
 static std::vector<float> renderMono(oscairn_analog::RenderSpec spec)
 {
     spec.rate = 44100;
@@ -690,11 +702,12 @@ static void checkTable(const char *name, const float (&table)[N],
                        const oscairn_tables::Check (&checks)[K], double tolerance,
                        const std::function<double(float)> &measure,
                        const std::function<double(double, double)> &error,
-                       const std::function<bool(double)> &applies = [](double) { return true; })
+                       const std::function<bool(const oscairn_tables::Check &)> &applies =
+                           [](const oscairn_tables::Check &) { return true; })
 {
     for (auto &c : checks)
     {
-        if (!applies(c.reference))
+        if (!applies(c))
             continue;
         double got = measure(table[c.index]), err = error(c.reference, got);
         check(std::fabs(err) <= tolerance, std::string(name) + " at index " +
@@ -729,6 +742,14 @@ static void testFittedTables()
         return s;
     };
     const double w = 3.822;
+    // Sanitizer builds check only envelope times whose render is under 30 s: the longer
+    // ones (up to 340 s of audio) took most of the sanitizer run, and the standard builds
+    // check them all.
+    auto shortEnough = [&](const float *table) {
+        return [table](const oscairn_tables::Check &c) {
+            return !sanitizerBuild || 1.6 * std::pow(2.0, table[c.index]) + 0.5 < 30;
+        };
+    };
     auto pctFloor = [](double floor) {
         return [floor](double ref, double got) {
             return std::fabs(got - ref) <= floor ? 0.0 : 100 * (got / ref - 1);
@@ -737,18 +758,18 @@ static void testFittedTables()
     checkTable(
         "amp EG attack", T::ampAttack, T::ampAttackChecks, T::ampAttackTolerance,
         [&](float v) { return F::attackTime(renderMono(envSpec("a_env1_attack", v)), rate, w); },
-        pctFloor(0.005));
+        pctFloor(0.005), shortEnough(T::ampAttack));
     checkTable(
         "amp EG decay", T::ampDecay, T::ampDecayChecks, T::ampDecayTolerance,
         [&](float v) { return F::decayTime(renderMono(envSpec("a_env1_decay", v)), rate, w); },
-        pctFloor(0.005));
+        pctFloor(0.005), shortEnough(T::ampDecay));
     checkTable(
         "amp EG release", T::ampRelease, T::ampReleaseChecks, T::ampReleaseTolerance,
         [&](float v) {
             auto x = renderMono(envSpec("a_env1_release", v));
             return F::releaseTime(x, rate, F::onset(x, rate) + 0.4, 0.1, w);
         },
-        pctFloor(0.005));
+        pctFloor(0.005), shortEnough(T::ampRelease));
     // The zero-crossing rate here needs several periods and an envelope that follows the
     // modulation: checked from 1 to 40 Hz (the measurement repository checks the whole range).
     checkTable(
@@ -760,7 +781,7 @@ static void testFittedTables()
             double t0 = F::onset(x, rate);
             return F::lfoRate(x, rate, t0 + 0.3, x.size() / rate - 0.15);
         },
-        pct, [](double ref) { return ref >= 1 && ref <= 40; });
+        pct, [](const T::Check &c) { return c.reference >= 1 && c.reference <= 40; });
 
     // Cutoff: the engine cutoff whose response best matches the reference's in shape, from
     // renders at the table's value and half a semitone either side (a parabola through the
@@ -768,17 +789,7 @@ static void testFittedTables()
     std::map<int, std::vector<float>> thru;
     // Sanitizer builds check every 8th index: the renders take most of their time and the
     // standard builds check them all.
-#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
-    const size_t stride = 8;
-#elif defined(__has_feature)
-#if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer)
-    const size_t stride = 8;
-#else
-    const size_t stride = 1;
-#endif
-#else
-    const size_t stride = 1;
-#endif
+    const size_t stride = sanitizerBuild ? 8 : 1;
     auto cutoff = [&](const char *name, const auto &table, const auto &responses, double tolerance,
                       int type, int subtype, double resonance) {
         for (size_t i = 0; i < std::size(responses); i += stride)
