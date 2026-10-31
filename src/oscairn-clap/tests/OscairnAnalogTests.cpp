@@ -766,10 +766,24 @@ static void testFittedTables()
     // renders at the table's value and half a semitone either side (a parabola through the
     // three shape errors), must be within the tolerance of the table's value.
     std::map<int, std::vector<float>> thru;
+    // Sanitizer builds check every 8th index: the renders take most of their time and the
+    // standard builds check them all.
+#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
+    const size_t stride = 8;
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer)
+    const size_t stride = 8;
+#else
+    const size_t stride = 1;
+#endif
+#else
+    const size_t stride = 1;
+#endif
     auto cutoff = [&](const char *name, const auto &table, const auto &responses, double tolerance,
                       int type, int subtype, double resonance) {
-        for (auto &r : responses)
+        for (size_t i = 0; i < std::size(responses); i += stride)
         {
+            auto &r = responses[i];
             auto spec = [&](std::vector<std::pair<std::string, double>> p) {
                 return oscairn_analog::RenderSpec{r.note, 100, 1, 0.1, rate, std::move(p), {}};
             };
