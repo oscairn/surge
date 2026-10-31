@@ -780,6 +780,33 @@ static void testFittedTables()
             return F::releaseTime(x, rate, F::onset(x, rate) + 0.4, 0.1, w);
         },
         pctFloor(0.005), shortEnough(T::ampRelease));
+    // Pitch EG decay and release: Surge's filter EG (analog mode) routed to oscillator 1's
+    // pitch, a sine at note 60, offset 185.2 cents (the reference's depth raw 309).
+    auto pitchSpec = [&](bool rel, float v) {
+        double h = 1.5 * std::pow(2.0, v) + 0.5;
+        oscairn_analog::RenderSpec s{60, 100, rel ? 0.5 : h, rel ? h : 0.1, rate,
+                                     {{"a_lowcut.off", 1}, {"a_osc1_type", 1}, {"a_env2_mode", 1},
+                                      {"a_env2_attack", -8}},
+                                     {{16, "a_osc1_pitch", 185.2 / 1400}}};
+        if (rel)
+            s.params.insert(s.params.end(), {{"a_env2_sustain", 1}, {"a_env2_release", v},
+                                             {"a_env1_release", 5}});
+        else
+            s.params.insert(s.params.end(), {{"a_env2_decay", v}, {"a_env2_sustain", 0}});
+        return s;
+    };
+    const double c4 = 440 * std::pow(2.0, -9 / 12.0);
+    checkTable(
+        "pitch EG decay", T::pitchEgDecay, T::pitchEgDecayChecks, T::pitchEgDecayTolerance,
+        [&](float v) { return F::pitchFallTime(renderMono(pitchSpec(false, v)), rate, c4, 185.2, 0); },
+        pctFloor(0.005));
+    checkTable(
+        "pitch EG release", T::pitchEgRelease, T::pitchEgReleaseChecks,
+        T::pitchEgReleaseTolerance,
+        [&](float v) {
+            return F::pitchFallTime(renderMono(pitchSpec(true, v)), rate, c4, 185.2, 0.3);
+        },
+        pctFloor(0.005));
     // The zero-crossing rate here needs several periods and an envelope that follows the
     // modulation: checked from 1 to 40 Hz (the measurement repository checks the whole range).
     checkTable(

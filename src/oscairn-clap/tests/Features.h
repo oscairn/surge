@@ -109,6 +109,71 @@ inline double releaseTime(const std::vector<float> &x, double rate, double noteO
     return fallsTo(e, h - 40, noteOff - uncertainty + knee);
 }
 
+// 90 % to 10 % time of a sine's pitch offset falling exponentially in cents from fullCents
+// (relative to fRef), after start (seconds from onset): ln 9 over the slope of a straight
+// line fitted to log(cents) against time between the first 90 % and 10 % crossings of a
+// 9-period median of the zero-crossing pitch track. As pitch_fall_time in the measurement
+// repository.
+inline double pitchFallTime(const std::vector<float> &x, double rate, double fRef,
+                            double fullCents, double start)
+{
+    size_t a = (size_t)(onset(x, rate) * rate);
+    std::vector<double> t, c;
+    double prev = -1;
+    for (size_t i = a; i + 1 < x.size(); ++i)
+        if (x[i] < 0 && x[i + 1] >= 0) // upward crossing, interpolated (signbit as in Python)
+        {
+            double z = i + x[i] / (x[i] - x[i + 1]);
+            if (prev >= 0)
+            {
+                t.push_back(((prev + z) / 2 - a) / rate);
+                c.push_back(1200 * std::log2(rate / (z - prev) / fRef));
+            }
+            prev = z;
+        }
+    std::vector<double> tt, cc, sm;
+    for (size_t i = 0; i < t.size(); ++i)
+        if (t[i] > start)
+        {
+            tt.push_back(t[i]);
+            cc.push_back(c[i]);
+        }
+    for (size_t i = 0; i < cc.size(); ++i) // medfilt with zero padding, as scipy's
+    {
+        double w[9];
+        for (int k = 0; k < 9; ++k)
+        {
+            long j = (long)i + k - 4;
+            w[k] = j < 0 || j >= (long)cc.size() ? 0 : cc[j];
+        }
+        std::nth_element(w, w + 4, w + 9);
+        sm.push_back(w[4]);
+    }
+    long k0 = -1, k1 = -1;
+    for (size_t i = 0; i < sm.size() && k1 < 0; ++i)
+    {
+        if (k0 < 0 && sm[i] <= 0.9 * fullCents)
+            k0 = (long)i;
+        if (sm[i] <= 0.1 * fullCents)
+            k1 = (long)i;
+    }
+    if (k0 < 0 || k1 <= k0)
+        return -1;
+    double n = 0, st = 0, sl = 0, stt = 0, stl = 0;
+    for (long i = k0; i < k1; ++i)
+        if (cc[i] > 0.05 * fullCents)
+        {
+            double l = std::log(cc[i]);
+            n += 1;
+            st += tt[i];
+            sl += l;
+            stt += tt[i] * tt[i];
+            stl += tt[i] * l;
+        }
+    double slope = (n * stl - st * sl) / (n * stt - st * st);
+    return std::log(9.0) / -slope;
+}
+
 // Rate of a periodic level change between start and stop: rising crossings of the mean
 // (with hysteresis of a quarter of the standard deviation, so oscillator ripple doesn't
 // count) by the RMS amplitude over windowMs, interpolated, over whole periods. windowMs
