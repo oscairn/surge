@@ -58,6 +58,7 @@ const clap_plugin_descriptor_t descriptor = {
 };
 
 constexpr uint32_t renderSeed = 0x05CA1A4E;
+constexpr float longestEnvelopeTime = 8; // log2 seconds; Surge's own envelopes stop at 5
 
 struct HeadlessLayer : SurgeSynthesizer::PluginLayer
 {
@@ -736,6 +737,12 @@ bool pluginInit(const clap_plugin_t *p)
     config.scanWavetableAndPatches = false;
     s.synth = std::make_unique<SurgeSynthesizer>(&s.layer, config);
     s.synth->storage.saveFixedTempo = true;
+    // Envelope segments up to 2^8 s: the instrument this plugin matches reaches 44 s of attack
+    // (10-90 %), past Surge's 2^5 s. Only the range grows; the envelope code has no limit, and
+    // modulation depths are in seconds-exponent units, so existing patches sound the same.
+    for (auto &eg : s.synth->storage.getPatch().scene[0].adsr)
+        for (auto *t : {&eg.a, &eg.d, &eg.r})
+            t->val_max.f = longestEnvelopeTime;
     s.synth->setSamplerate((float)s.sampleRate);
     s.normalizePatch();
     s.synth->storage.perform_queued_wtloads();

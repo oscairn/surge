@@ -446,6 +446,10 @@ static void testPortsAndParams(const std::vector<std::string> &patches)
     config.scanWavetableAndPatches = false;
     auto refSynth = std::make_unique<SurgeSynthesizer>(&layer, config);
     auto &reference = *refSynth;
+    // The plugin's envelope segments reach 2^8 s instead of Surge's 2^5 s.
+    for (auto &eg : reference.storage.getPatch().scene[0].adsr)
+        for (auto *t : {&eg.a, &eg.d, &eg.r})
+            t->val_max.f = 8;
     int loaded = 0;
     for (auto &path : patches)
     {
