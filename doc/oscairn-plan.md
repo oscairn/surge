@@ -558,7 +558,8 @@ target is an Oscairn decision. Set polyphony from the measurement. Cheap paths:
 
 ## 5. Converting an AN-X Part
 
-The converter is an Oscairn tool, kept outside this fork. It reads the AN-X Part blocks of a
+The converter is kept outside this fork, in its own private repository
+(`oscairn/performance-converter`, open question 12). It reads the AN-X Part blocks of a
 Performance (the Data List's `4p 00`–`4p 05` and `7p 00` blocks, and the Part-common blocks
 `1p 00 01`–`1p 00 09`) and writes one scene of the engine's patch. Oscairn then prepares it as
 a sound context from patch text.
@@ -626,7 +627,7 @@ been offered upstream.
 | A multimode filter in sst-filters, new folder shapes in sst-waveshapers | Likely, as library additions |
 | "Analog" oscillator type | Possibly |
 | Oscairn CLAP target, sound contexts, one-scene build, Lua-free and file-free configuration | No: Oscairn-only |
-| Fitted tables, converter | No: they live in Oscairn's tools, not here |
+| Fitted tables, converter | No: the converter lives in its own repository; the fitted tables are in the Oscairn target's tests (`src/oscairn-clap/tests/FittedTables.h`) |
 
 Rule for the fork: keep generic changes in separate commits with neutral names, default off, and
 with Surge's tests passing, so they can be offered upstream as small PRs. The Oscairn target
@@ -726,9 +727,9 @@ Open questions (each to settle from the manual or by measurement):
 10. ~~The licence of Oscairn's extension headers~~ Settled: MIT (section 8).
 11. ~~Tuning~~ Settled: Oscairn is the MTS-ESP master and offers `clap.tuning` (RFC 0017);
     the plugin keeps Surge's MTS-ESP client (section 10).
-12. Where the converter (data list values to engine state) lives: the plan says Oscairn's
-    tools, which this fork's work can't change. Alternatives: a tool in this fork, or in the
-    measurement repository (which may not hold product names in identifiers).
+12. ~~Where the converter lives~~ Settled (Jacob, 2026-10-31): in its own private repository,
+    https://github.com/oscairn/performance-converter (empty for now). Not built in
+    milestone 1 (section 10).
 
 ### Not verified in writing this plan
 
@@ -885,49 +886,135 @@ arm64). Value text for oscillator controls reads the parameter's current
 type, which the audio thread changes when the oscillator type changes (marked `shortcut:` in
 the code).
 
-### Milestone 1: measurement and fitted tables (in progress, gate not met)
+### Milestone 1: measurement and fitted tables (in progress, gate partly met)
 
-Status on 2026-10-31. Analysis code is in the private `oscairn/measurement` repository
-(`analog/features.py`, `analog/fit.py`, `analog/tolerances.json`, commit `4a3e8d2`). Probe
-performances, reference renders, engine renders and the fitted tables stay in
-`forks/measurements/analog/` on Jacob's machine. `src/oscairn-clap/tools/OscairnAnalogRender.cpp`
-(`oscairn-analog-render`) renders one note through the plugin with given Surge parameters
-and modulation routings, for the engine side.
+Status on 2026-10-31 (second session). Analysis code is in the private `oscairn/measurement`
+repository (`analog/features.py`, `fit.py`, `export.py`, `tolerances.json`). Probe
+performances, reference renders, engine renders and fit outputs stay in
+`forks/measurements/analog/` on Jacob's machine. `oscairn-analog-render` renders the engine;
+its render code is now `src/oscairn-clap/tools/RenderNote.cpp`, shared with the tests.
 
-Method: the reference is swept in steps of 32 (64 for level), the engine over its own
-parameter range; a table maps each index to the engine value whose measured feature matches
-the reference's (`fit.py fit`). Checks use separate validation indices between the swept ones
-(`fit.py check`). Envelope probes use the amp envelope with a sawtooth oscillator, the LFO probe
-the amp LFO on the amp level, and the engine uses Surge's analog envelope mode, whose release
-is exponential like the reference's (time to −40 dB about twice the time to −20 dB on both).
+**Method.** A table maps the reference's parameter index to a Surge value. The reference is
+swept densely (steps of 4 or 8); the table is fitted from part of the sweep and checked at
+indices it was not fitted from, by rendering the engine at the table's value and measuring
+the same feature on both (`fit.py fit`/`check`). Passed tables are exported to
+`src/oscairn-clap/tests/FittedTables.h` (`export.py`) with the reference's measured value at
+every checked index, and `oscairn-analog-tests` ("fitted tables") renders those indices
+through the plugin and measures them again (`tests/Features.h`, the same definitions in
+C++). The test was seen to fail when a reference value is moved by 1 dB.
 
-Findings:
+Measurement changes from the first session:
 
-- The reference recorder's start latency varies by about 70 ms between renders, so times are
-  measured from each render's own onset, never from a fixed latency.
-- Envelope times are reliable here from about 0.05 s to the render length: indices 96–192 of
-  the amp envelope's attack, decay and release. Shorter times need finer analysis windows (a
-  higher note), longer ones longer renders; both not done yet.
-- The LFO-rate measurement is trusted from about 0.45 Hz to 45 Hz (indices 96–288).
-- The noise-based low-pass corner measurement is too unreliable to fit (non-monotonic
-  results at several indices). Cutoff needs a different probe (swept sine or a resonance peak).
+- Windows count from each render's own onset (the recorder's start varies by about 70 ms).
+- LFO rate: envelope spectrum refined by a Fourier-series fit (0.2 % on engine renders with
+  three periods); rates above about 45 Hz from the sidebands of a sine carrier at note 84.
+  Both agree where they overlap (indices 256-292).
+- Filters: the response is the ratio of a sawtooth's harmonics (note 36, or 24 for low
+  cutoffs) through the filter and with it off. Cutoff is matched by response shape (the
+  engine cutoff whose response is closest after removing a gain offset), because a -3 dB
+  corner read between harmonics wobbles by about 30 cents below 400 Hz. The noise probe is
+  gone.
+- Envelopes: release from the 1 dB knee to 40 dB down (independent of exactly when note-off
+  lands); analysis windows of whole oscillator periods (one at note 60, two at note 96).
+- The recorder occasionally writes a run of exact zeros mid-render (6 renders so far);
+  such renders are detected, not measured, and re-recorded.
 
-Check results (validation indices 80, 112, 144, 176 for envelopes; tolerances from
-`tolerances.json`):
+**Findings about the reference.**
 
-| Feature | Within tolerance | Notes |
+- LFO speed is piecewise linear in Hz between breakpoints (within a segment the step in
+  semitones shrinks as 1/rate; above index 290 the segments are 24 indices long and the slope
+  doubles from one to the next). It is interpolated in Hz. It reaches 1357 Hz at index 415.
+- Envelope times double every 16 indices in the long range and lie between log and linear
+  interpolation within those 16; log is closer. Times under about 30 ms vary by 1.5-3 ms
+  (standard deviation) between repeated renders of the same probe: the reference's own
+  timing resolution.
+- Cutoff has kinks every 64-80 indices; between them it is smooth.
+- Amp level is smooth; index 56 is -63 dB, 511 is -25 dB (relative to the probe's
+  full-scale saw).
+
+**Tolerances.** The first session's 10 % / 2 % / 0.5 dB / 50 cents were never approved. Now,
+for Jacob to confirm (`tolerances.json`):
+
+| Feature | Tolerance | Why |
 | --- | --- | --- |
-| Amp EG release, attack, decay time (10 %) | 3 of 4 each | All pass inside the fitted range (112–176, errors under 5 %); index 80 is below it and fails |
-| LFO rate (2 %) | 0 of 4 | Inside the fitted range errors are 2.3–3.1 %: steps of 32 are too coarse for interpolation; 48 and 336 are outside the trusted range |
-| Amp level (0.5 dB) | 3 of 4 | 96 is off by 1 dB: steps of 64 are too coarse at the low end |
-| Cutoff | not checked | measurement not usable yet |
+| Amp level | 0.1 dB | All checks within 0.04 dB |
+| LFO speed | 2 % | Measurement resolves 0.2 %; checks are within 0.7 % below index 290, but up to 1.95 % next to the breakpoints above it (8-index knots straddle them). Identifying the breakpoints would allow 1 % (the FM engine's gate) |
+| Envelope times | 2.5 % or 5 ms | Release and decay within 1.8 %, attack within 2.4 %, from 8-index knots; 5 ms is about twice the reference's render-to-render spread at short times. The FM gate (2 %) would need step-4 knots |
+| Cutoff | 50 cents | Unchanged |
+| Aliasing | floor -70 dB (power off the harmonics relative to on them) | Proposed; see below |
 
-Not started: the 11 filter types and the choice of one filter family, the other envelopes
-and LFOs, oscillator and mixer levels, aliasing against a floor, and the converter. The plan
-puts the converter in Oscairn's tools, where this work can't write; where it goes is a
-question for Jacob (open question 12). No fitted table is committed until its feature passes
-its gate.
+**Results** (Surge's analog envelope mode, drift off; "checks" are indices the table was not
+fitted from):
 
-Next steps: denser reference sweeps (steps of 8 for LFO speed and level), envelope probes at
-a higher note for short times and with long renders for long ones, and a swept-sine filter
-probe for cutoff and for comparing filter families.
+| Table | Surge parameter | Valid indices | Checks | Committed |
+| --- | --- | --- | --- | --- |
+| Amp level | `a_vca_level` | 56-511 (below: under -63 dB, clamped) | 57 of 57 within 0.1 dB | yes |
+| LFO speed | `a_lfo0_rate` | 18-380 | 45 of 45 within 2 %; index 242 not measured (dropout; re-record) | yes |
+| Amp EG attack | `a_env1_attack` | 100-208 | 14 of 14 | yes |
+| Amp EG decay | `a_env1_decay` | 100-244 | 16 of 16 | yes |
+| Amp EG release | `a_env1_release` | 112-244 | 14 of 14 | yes |
+| Cutoff, LPF24 | `a_filter1_cutoff` (LP 24 dB, resonance 0.06) | 320-1023 (notes 24 and 36) | 50 of 54 within 50 cents; the 4 misses (52-76 cents) are at indices 424, 680, 936, next to kinks | no |
+
+Outside the valid spans, and why:
+
+- Envelope times below index 100 (under about 60 ms): the reference's spread (above) makes
+  checks there meaningless at 2.5 %; averaging repeated renders would be needed. In
+  addition Surge's analog-mode decay cannot get shorter than about 28 ms to -40 dB (a slow
+  tail after a fast drop), while the reference decays in 6-26 ms at indices 40-76; release
+  bottoms out at about 7 ms.
+- Long times: the reference's attack reaches 44 s (10-90 %) and its release and decay 45-51 s
+  (to -40 dB) at index 252-255; Surge's envelope tops out at 32 s, and its analog-mode attack
+  covers 10-90 % in about 0.21 of the set time (6.8 s at most). Matching needs a longer
+  envelope range in the engine (an engine change; for Jacob to decide where it belongs).
+- LFO above index 380: past Surge's 512 Hz LFO maximum. Below 18 (under 0.05 Hz): renders
+  would need over a minute.
+- Cutoff below index 320 (about 30 Hz): under the probe's lowest harmonic.
+
+**Filter family.** Each of the 10 filter types (Thru aside) was rendered at cutoffs 256, 512,
+640, 768 and 896 with resonance 0 and compared in shape (RMS dB difference over the part of
+the response within 40 dB of its peak, below 16 kHz, gain offset removed) with 38 Surge
+filter types and subtypes, each swept over cutoff. Best matches (RMS dB at 512 / 640 / 768):
+
+| Type | Surge filter | Shape error | Gain offset |
+| --- | --- | --- | --- |
+| LPF24 | LP 24 dB (Standard), resonance 0.06 | 0.18-0.56 dB at resonance 0.05 and 0.075 (0.06, used, not measured itself) | about -3 dB (at resonance 0) |
+| LPF18 | Legacy Ladder, 18 dB | 0.05 / 0.25 / 0.58 | +0.4 dB |
+| LPF12 | Legacy Ladder, 12 dB | 0.07 / 0.24 / 0.91 | +0.9 dB |
+| LPF6 | Legacy Ladder, 6 dB | 0.43 / 0.40 / 0.35 | +0.4 dB |
+| HPF24 | HP 24 dB (Standard) | 0.30 / 0.60 / 0.59 | +6.3 dB |
+| HPF18 | OB-Xd Xpander, HP3 | 0.02 / 0.11 / 0.26 | +0.6 dB |
+| HPF12 | OB-Xd 12 dB HP | 0.02 / 0.07 / 0.30 | +0.6 dB |
+| HPF6 | OB-Xd Xpander, HP1 | 0.00 / 0.00 / 0.00 | -2.5 dB |
+| BPF12 | BP 24 dB (Standard) | 0.99 / 0.86 / 0.85 | +1.8 dB |
+| BPF6 | BP 12 dB (Standard) | 0.43 / 0.45 / 0.63 | +2.2 dB |
+
+No single Surge family is best for all types; the choice above is per type (Legacy Ladder
+for the low-passes but LPF24, the Xpander or OB-Xd for the high-passes, the standard
+band-passes). At resonance 0 the reference's LPF24 has a sharper knee than any Surge
+4-pole at resonance 0 (1.4 dB off); a little resonance (0.05-0.075) matches it. At cutoff
+896 (3-11 kHz corners) most choices are 0.7-2 dB off. The engine's cutoff
+for a given index differs between types by up to about 11 semitones (high-passes most), so each
+type needs its own cutoff table; a sweep of all types at steps of 32 is recorded but not yet
+fitted. Gain offsets go to the filter output gain of milestone 2. Resonance was recorded
+(4 values per type at cutoff 512) but not fitted.
+
+**Aliasing.** Sawtooth and square at notes 72-108, power off the harmonics relative to on
+them (20 Hz-20 kHz): the engine (Surge's Classic oscillator) is between -88.5 and -74.5 dB,
+the reference between -100 and -87 dB, so the engine is 2-17 dB worse but under a -70 dB
+floor everywhere. The "Analog" oscillator of milestone 3 should be measured the same way.
+
+**Not done in milestone 1:** cutoff tables for the other 9 types and the remaining cutoff
+check (a step-4 validation sweep is recorded, not fitted); envelopes under index 100 and the
+engine range extension above; the other envelopes and LFOs (pitch and filter LFO probes are
+recorded, not analysed; the other envelopes not probed); oscillator and mixer levels;
+resonance; the converter (open question 12: it goes in its own repository, not built here).
+
+**Tests run for these commits** (macOS arm64): `oscairn-analog-tests` all passed (standard,
+ASan/UBSan and TSan builds of commit `848e2c7`, no sanitizer reports), `surge-testrunner` 181 passed and 1 skipped, `[reference]` 635
+patches compared within 1e-5 (6 skipped as nondeterministic). CI: see the report for this
+session.
+
+**Where this stopped.** Next steps, in order: fit the step-4 cutoff sweep (fit from all
+8-step data, check at the 4-offsets) and per-type cutoff tables; re-record LFO index 242;
+average repeated renders for envelope times under 100; analyse the pitch and filter LFO
+probes (same speed curve?); probe the other envelopes and oscillator and mixer levels.
