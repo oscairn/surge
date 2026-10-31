@@ -766,30 +766,44 @@ static void testFittedTables()
     // renders at the table's value and half a semitone either side (a parabola through the
     // three shape errors), must be within the tolerance of the table's value.
     std::map<int, std::vector<float>> thru;
-    for (auto &r : T::cutoffLp24Responses)
-    {
-        auto spec = [&](std::vector<std::pair<std::string, double>> p) {
-            return oscairn_analog::RenderSpec{r.note, 100, 1, 0.1, rate, std::move(p), {}};
-        };
-        if (!thru.count(r.note))
-            thru[r.note] = renderMono(spec({}));
-        double v = T::cutoffLp24[r.index], e[3];
-        for (int k = 0; k < 3; ++k)
+    auto cutoff = [&](const char *name, const auto &table, const auto &responses, double tolerance,
+                      int type, int subtype, double resonance) {
+        for (auto &r : responses)
         {
-            auto x = renderMono(spec({{"a_filter1_type", 2},
-                                      {"a_filter1_subtype", 0},
-                                      {"a_filter1_resonance", 0.06},
-                                      {"a_filter1_cutoff", v + 0.5 * (k - 1)}}));
-            double t0 = F::onset(x, rate);
-            e[k] = F::shapeErrorDb(x, thru[r.note], rate, 440 * std::pow(2.0, (r.note - 69) / 12.0),
-                                   t0 + 0.3, t0 + 0.9, r.harmonic, r.gainDb, r.count);
+            auto spec = [&](std::vector<std::pair<std::string, double>> p) {
+                return oscairn_analog::RenderSpec{r.note, 100, 1, 0.1, rate, std::move(p), {}};
+            };
+            if (!thru.count(r.note))
+                thru[r.note] = renderMono(spec({}));
+            double v = table[r.index], e[3];
+            for (int k = 0; k < 3; ++k)
+            {
+                auto x = renderMono(spec({{"a_filter1_type", type},
+                                          {"a_filter1_subtype", subtype},
+                                          {"a_filter1_resonance", resonance},
+                                          {"a_filter1_cutoff", v + 0.5 * (k - 1)}}));
+                double t0 = F::onset(x, rate);
+                e[k] = F::shapeErrorDb(x, thru[r.note], rate,
+                                       440 * std::pow(2.0, (r.note - 69) / 12.0), t0 + 0.3,
+                                       t0 + 0.9, r.first, r.count, r.gainTenthDb);
+            }
+            double curv = e[0] - 2 * e[1] + e[2];
+            double best = curv > 0 ? 0.25 * (e[0] - e[2]) / curv : 1e9; // semitones from v
+            check(std::fabs(100 * best) <= tolerance,
+                  std::string(name) + " cutoff at index " + std::to_string(r.index) +
+                      ": best match " + std::to_string(100 * best) + " cents from the table");
         }
-        double curv = e[0] - 2 * e[1] + e[2];
-        double best = curv > 0 ? 0.25 * (e[0] - e[2]) / curv : 1e9; // semitones from v
-        check(std::fabs(100 * best) <= T::cutoffLp24Tolerance,
-              "LPF24 cutoff at index " + std::to_string(r.index) + ": best match " +
-                  std::to_string(100 * best) + " cents from the table");
-    }
+    };
+    // Each type's Surge filter (type, subtype, resonance) as chosen in the plan.
+    cutoff("LPF24", T::cutoffLp24, T::cutoffLp24Responses, T::cutoffLp24Tolerance, 2, 0, 0.06);
+    cutoff("LPF18", T::cutoffLp18, T::cutoffLp18Responses, T::cutoffLp18Tolerance, 3, 2, 0);
+    cutoff("LPF12", T::cutoffLp12, T::cutoffLp12Responses, T::cutoffLp12Tolerance, 3, 1, 0);
+    cutoff("LPF6", T::cutoffLp6, T::cutoffLp6Responses, T::cutoffLp6Tolerance, 3, 0, 0);
+    cutoff("HPF18", T::cutoffHp18, T::cutoffHp18Responses, T::cutoffHp18Tolerance, 35, 6, 0);
+    cutoff("HPF12", T::cutoffHp12, T::cutoffHp12Responses, T::cutoffHp12Tolerance, 20, 0, 0);
+    cutoff("HPF6", T::cutoffHp6, T::cutoffHp6Responses, T::cutoffHp6Tolerance, 35, 4, 0);
+    cutoff("BPF12", T::cutoffBp12, T::cutoffBp12Responses, T::cutoffBp12Tolerance, 23, 0, 0);
+    cutoff("BPF6", T::cutoffBp6, T::cutoffBp6Responses, T::cutoffBp6Tolerance, 6, 0, 0);
 }
 
 int main(int argc, char **argv)

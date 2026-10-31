@@ -202,21 +202,22 @@ inline double corner(std::vector<std::pair<double, double>> g, double dropDb, bo
         }
     return -1;
 }
-// RMS difference in dB between the filter's gain (filtered over thru) at the given harmonics
-// of f0 and a reference gain there, after removing their mean difference (a gain offset).
+// RMS difference in dB between the filter's gain (filtered over thru) at harmonics first ..
+// first + count - 1 of f0 and a reference gain there (tenths of a dB), after removing their
+// mean difference (a gain offset).
 inline double shapeErrorDb(const std::vector<float> &filtered, const std::vector<float> &thru,
-                           double rate, double f0, double start, double stop,
-                           const short *harmonics, const float *gainDb, int count)
+                           double rate, double f0, double start, double stop, int first,
+                           int count, const short *gainTenthDb)
 {
     size_t a = (size_t)(start * rate), n = (size_t)((stop - start) * rate);
     std::vector<double> d(count);
     double mean = 0;
     for (int i = 0; i < count; ++i)
     {
-        double f = harmonics[i] * f0;
+        double f = (first + i) * f0;
         d[i] = 20 * std::log10(std::max(magnitudeAt(filtered, a, n, f, rate), 1e-12) /
                                std::max(magnitudeAt(thru, a, n, f, rate), 1e-12)) -
-               gainDb[i];
+               0.1 * gainTenthDb[i];
         mean += d[i] / count;
     }
     double e = 0;
