@@ -167,6 +167,11 @@ add_subdirectory(common)
 add_subdirectory(lua)
 add_subdirectory(platform)
 
+option(SURGE_BUILD_OSCAIRN "Build the Oscairn Analog CLAP instrument (src/oscairn-clap)" OFF)
+if(SURGE_BUILD_OSCAIRN)
+  add_subdirectory(oscairn-clap)
+endif()
+
 if(SURGE_BUILD_TESTRUNNER AND NOT SURGE_SKIP_JUCE_FOR_RACK)
   add_subdirectory(surge-testrunner)
 endif()

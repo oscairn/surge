@@ -1,0 +1,70 @@
+# Oscairn Analog (src/oscairn-clap, doc/oscairn-plan.md): build the plugin and its tests
+# without JUCE, Lua or MTS-ESP on macOS and Linux ARM64, with sanitizers on Linux, and run
+# Surge's test runner on macOS.
+name: Oscairn
+on:
+  push:
+    branches:
+      - oscairn
+  workflow_dispatch:
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  plugin:
+    name: Oscairn Analog - ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS arm64
+            os: macos-14
+            flags: ""
+          - name: Linux ARM64
+            os: ubuntu-24.04-arm
+            flags: ""
+          - name: Linux ARM64 ASan UBSan
+            os: ubuntu-24.04-arm
+            flags: "-fsanitize=address,undefined -fno-omit-frame-pointer"
+          - name: Linux ARM64 TSan
+            os: ubuntu-24.04-arm
+            flags: "-fsanitize=thread"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install Ninja
+        run: |
+          if [[ "$RUNNER_OS" == "Linux" ]]; then sudo apt-get update && sudo apt-get install -y ninja-build; else brew install ninja; fi
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DSURGE_SKIP_JUCE_FOR_RACK=ON -DSURGE_SKIP_LUA=ON -DSURGE_SKIP_ODDSOUND_MTS=ON \
+            -DSURGE_BUILD_TESTRUNNER=OFF -DSURGE_BUILD_OSCAIRN=ON \
+            -DCMAKE_C_FLAGS="${{ matrix.flags }}" -DCMAKE_CXX_FLAGS="${{ matrix.flags }}" \
+            -DCMAKE_EXE_LINKER_FLAGS="${{ matrix.flags }}" -DCMAKE_MODULE_LINKER_FLAGS="${{ matrix.flags }}"
+      - name: Build
+        run: cmake --build build --target oscairn-analog oscairn-analog-tests
+      - name: Test
+        env:
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+          TSAN_OPTIONS: halt_on_error=1
+        run: ./build/src/oscairn-clap/oscairn-analog-tests
+
+  testrunner:
+    name: Surge test runner - macOS arm64
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Build
+        run: |
+          brew install ninja
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --target surge-testrunner
+      - name: Test
+        run: ./build/src/surge-testrunner/surge-testrunner

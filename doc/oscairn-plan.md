@@ -1,6 +1,7 @@
 # Oscairn extension plan: an analog-modelling engine on Surge XT
 
-Status: plan, 2026-10-30. Nothing here is implemented yet. This fork is
+Status: plan, 2026-10-30. Milestone 0 is being implemented on branch `oscairn`; section 10
+records what was built, how it was tested and where it departs from this plan. This fork is
 [oscairn/surge](https://github.com/oscairn/surge), forked from
 [surge-synthesizer/surge](https://github.com/surge-synthesizer/surge) at `5a4828a`.
 
@@ -647,13 +648,11 @@ The engine is a CLAP plugin, a separate work under RFC 0001's plugin boundary, a
 GPL-3.0. It isn't linked into the Oscairn core. GPL-3.0 code may be combined with AGPL-3.0 code
 (GPLv3 §13), so moving parts into the core later is possible.
 
-One point to raise with Oscairn: its extension headers (`oscairn/core/clap-ext/include/oscairn-clap/*.h`)
-are AGPL-3.0-or-later. Including them makes this plugin a GPL-3.0 + AGPL-3.0 combination. That is
-allowed, but RFC 0001 says plugins may use any licence, including proprietary ones, and
-AGPL headers contradict that for anyone else. A permissive licence for the ABI headers (as CLAP
-itself is MIT) would fix it. Until then, the fork can define the few structs it needs from the
-documented ABI instead of including the headers. That should be checked with Oscairn's
-maintainers before relying on it.
+Oscairn's extension headers (`oscairn/core/clap-ext/include/oscairn-clap/*.h`) are MIT-licensed
+since Oscairn commit `10a3c27` ("License the CLAP extension headers under MIT"), so including
+them (for sound contexts, milestone 5) adds no licence constraint. Oscairn's tests and tools
+(`oscairn-render`, the allocation guard in `core/engine/tests/AllocationGuard.h`) are still
+AGPL-3.0; the fork runs the built tools but doesn't copy their code.
 
 Keep Surge's copyright notices, `AUTHORS` and the sst-* licence files, and credit the Surge
 Synth Team in Oscairn's `CREDITS.md` when the plugin ships.
@@ -721,11 +720,120 @@ Open questions (each to settle from the manual or by measurement):
 8. AN-X polyphony, and the polyphony Oscairn wants on its device.
 9. Whether Oscairn will send polyphonic parameter modulation (Surge supports it; useful for
    controller boxes with per-voice destinations).
-10. The licence of Oscairn's extension headers (section 8).
+10. ~~The licence of Oscairn's extension headers~~ Settled: MIT (section 8).
 
 ### Not verified in writing this plan
 
-- Building the fork (desktop or Linux ARM64), running any test, or measuring CPU or memory.
-- That `SURGE_SKIP_JUCE_FOR_RACK` gives a JUCE-free `surge-common`.
-- That renders are identical across host block sizes once the RNG is seeded.
-- The exact parameter count at runtime (the numbers above come from constants).
+The first draft of this plan was written without building anything. Section 10 records what
+milestone 0 has since checked (macOS arm64 builds, tests, block-size independence, the
+parameter count). Still not verified: a Linux ARM64 build, and any CPU or memory measurement.
+
+## 10. Implementation log
+
+What has been built on branch `oscairn`, how it was tested, and where it departs from the
+sections above. Builds and tests ran on macOS arm64 (Apple clang, CMake 4.4, Ninja) unless a
+line says otherwise. Renders and reference files live outside the repository.
+
+### Milestone 0: groundwork
+
+**Seedable RNG** (generic, upstreamable). `SurgeSynthesizer::seedRandom(seed)` reseeds
+storage's RNG, the noise RNG, the scene random modulators and the scene LFOs' generators.
+Storage's RNG converts `minstd_rand` output itself instead of using std distributions.
+`DriftLFO` became a Surge-side copy with its own generator instead of C `rand()`; the Alias
+oscillator's 8-bit RNG and MSEG evaluator states are seeded from storage; random modulators no
+longer use `std::random_device`. Without `seedRandom`, storage is still clock-seeded, so the
+Surge XT plugins behave as before. Remaining sources of nondeterminism, none on the Oscairn
+target's voice path:
+
+- `sst::basic_blocks::dsp::RNG` (the noise RNG) and the LFO noise and MSEG generators still use
+  std distributions, so seeded output differs between libc++ and libstdc++. Fixing the first
+  needs a change in sst-basic-blocks (upstream).
+- The Fuzz waveshapers in sst-waveshapers keep a function-static generator shared across
+  instances.
+- Some effects (FX_Aggero, FX_Space Adventure 1) and Lua formulas keep their own random state.
+  The Oscairn target has neither.
+
+**Reference renders of the factory patches** (`[reference]` in the test runner). Every factory
+patch, two notes, seeded, compared with renders recorded earlier, at the golden tests' 1e-5
+tolerance. Recorded from commit `53886aa` (the RNG change, the first reproducible build); 633
+of 641 patches compared, 6 left out as nondeterministic (above), 2 more because they render
+differently twice within one process. This is the "old patches render as before" check every
+later milestone runs.
+
+**Oscairn CLAP target** (`src/oscairn-clap/`, `SURGE_BUILD_OSCAIRN=ON`). Written against
+CLAP directly over `surge-common`. Decisions taken in the code, replacing section 4's
+proposals where they differ:
+
+- *One scene, no effects.* `n_scenes` stays 2 at compile time; the target exposes only scene A
+  and three global parameters (volume, polyphony limit, character), and on every state load
+  forces single-scene mode, scene A active and every effect slot disabled. Effect memory is
+  still allocated. 272 parameters (counted by the test).
+- *Parameter values.* Surge's own values and ranges (`val_min`/`val_max`/`val_default`),
+  stepped for integer and boolean parameters. Parameters whose range or meaning follows
+  another parameter (the 7 controls of each oscillator, filter subtypes, filter 2's cutoff,
+  which switches between absolute and offset) are exposed as 0..1 with stable names
+  ("Control 1".."Control 7"); their value text comes from the current type. A test checks,
+  over all factory patches, that no parameter exposed in Surge's units changes range. IDs are
+  FNV-1a hashes of Surge's storage names. Module paths follow Surge's control groups
+  (`Oscillator 1`, `Mixer`, `Filter 1`, `Amp Envelope`, `Voice LFO 1`, `Scene LFO 1`, `Scene`,
+  `Global`); the finer paths of section 4 wait for the new blocks.
+- *Event timing.* Decided: keep Surge's internal block (32 samples) and apply each event at the
+  first internal block boundary at or after its time, counted from activation. Events are
+  never early, at most 31 samples late (0.65 ms at 48 kHz), and output doesn't depend on the
+  host's block size. Splitting internal blocks was not attempted. Oscairn's exact-sample
+  release tests need a tolerance of one internal block for this plugin.
+- *State loading.* The full context design (prepare off the audio thread, swap a pointer)
+  comes with sound contexts (milestone 5). Until then the main thread loads the patch itself:
+  it raises a flag, waits until `process()` is not running (at most one block), loads, and
+  clears the flag. `process()` never waits; while the flag is up it outputs silence. All
+  parsing, allocation and wavetable loading happen on the main thread. Notes ended by a load
+  get their `NOTE_END` in the next block. Saving doesn't stop audio: it retries if a parameter
+  change happened during the save and only then falls back to the same exclusion.
+- *State bytes.* Surge's patch (`sub3` header, XML, wavetables). Never written: the DAW extra
+  state. The patch's "tempo on save" is fixed at 120 BPM in this target
+  (`SurgeStorage::saveFixedTempo`) so the bytes don't depend on the host's tempo.
+  Surge's migrations are not idempotent for 83 older factory patches (revision 9/10): the first
+  save after loading one differs from the next save. The test therefore requires the fixed
+  point (save, load, save gives the same bytes) for every factory patch.
+- *Notes.* CLAP note-on with velocity 0 stays a note-on. MIDI note-on with velocity 0 is a
+  note-off, as MIDI defines. Note port dialects: CLAP (preferred) and MIDI; no MPE.
+- *No Lua.* Patches with a Formula modulator in scene A are refused (the previous state is
+  kept). Built with `SURGE_SKIP_LUA`, `SURGE_SKIP_ODDSOUND_MTS` and `SURGE_SKIP_JUCE_FOR_RACK`:
+  `surge-common` does build without JUCE (verified on macOS arm64).
+- *Allocation on the audio thread.* Found by the allocation guard and fixed: the voice and
+  hold-buffer `std::list`s allocated a node per note (now `Surge::FixedPoolAllocator`, with a
+  heap fallback past the pool size); `purgeHoldbuffer` and
+  `purgeDuplicateHeldVoicesInPolyMode` built temporary containers; queued wavetable loads ran
+  in `process()` (now done right after the state load).
+- *Files.* Storage is constructed with patch and wavetable scanning off and without creating
+  the user directory (new `SurgeSynthesizer` constructor taking a `SurgeStorageConfig`).
+  **Not done:** storage still resolves the user data path and reads `SurgeXTUserDefaults.xml`
+  if a Surge XT user folder exists, and constructs (but doesn't open) the patch database, and
+  rescans FX and modulator presets. On the device there is no such folder; on a desktop with
+  Surge XT installed, user defaults can change behaviour (smoothing modes, for example). TODO
+  before relying on desktop renders matching device renders.
+- *UBSan* found misaligned 16-bit wavetable copies in patch load and save (the data sits at
+  an odd offset after the XML). Now byte copies.
+
+Tests, all run in this session (macOS arm64):
+
+| Gate | How | Result |
+| --- | --- | --- |
+| Oscairn scanner accepts it | `oscairn-plugin-scan --worker oscairn-analog.clap` (Oscairn `10a3c27` build) | exit 0, descriptor listed |
+| Loads in the Oscairn host | `oscairn-render` with Oscairn's step sequencer playing it | loads, renders, peak 0.62 |
+| Identical renders, 37/512 frames | `oscairn-render` at 44.1, 48 and 96 kHz, `cmp` of the WAV files; also a repeat at 512 | identical |
+| Identical renders, plugin test | `oscairn-analog-tests`: 4 states × 3 rates × blocks 512/37/512/1, notes, choke, expression, MIDI, sustain, parameter changes, an oscillator type change | identical |
+| Byte-identical state round trip | `oscairn-analog-tests`: default state and 625 factory patches (16 refused for Formula) | pass (fixed point, see above) |
+| No allocation while rendering | `oscairn-analog-tests` with a replaced `operator new` around every `process()` | pass |
+| ASan, UBSan | `oscairn-analog-tests` built with `-fsanitize=address,undefined` | no reports |
+| TSan | `oscairn-analog-tests` built with `-fsanitize=thread`; state loads and saves while another thread renders notes | no reports |
+| Surge test runner | `surge-testrunner` (standard build) | 180 passed, 1 skipped (`[reference]` without its directory) |
+| Reference renders | `[reference]` against the `53886aa` recording | 633 patches identical within 1e-5 |
+| Linux ARM64, CI | `.github/workflows/oscairn.yml` (macOS arm64, Linux ARM64, ASan/UBSan and TSan on Linux ARM64, test runner on macOS) | written; first run on GitHub recorded below |
+
+Not covered by the TSan test: a parameter change concurrent with a state save. The save's
+retry makes the result correct, but the read it discards is still a data race in the C++
+sense; TSan would report it. Leak checking was off (LeakSanitizer isn't supported on macOS
+arm64). Value text for oscillator controls reads the parameter's current
+type, which the audio thread changes when the oscillator type changes (marked `shortcut:` in
+the code).
