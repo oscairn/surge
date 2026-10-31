@@ -303,8 +303,11 @@ bool Wavetable::BuildWT(void *wdata, wt_header &wh, bool AppendSilence)
     {
         for (int j = 0; j < wdata_tables; j++)
         {
-            mech::endian_copyblock16LE(&this->TableI16WeakPointers[0][j][FIRoffsetI16],
-                                       &((short *)wdata)[this->size * j], this->size);
+            // Byte copy: in a patch the data can sit at an odd offset. Little-endian only,
+            // as endian_copyblock16LE was.
+            memcpy(&this->TableI16WeakPointers[0][j][FIRoffsetI16],
+                   (const char *)wdata + sizeof(short) * this->size * j,
+                   sizeof(short) * this->size);
             if (this->flags & wtf_int16_is_16)
             {
                 i162float_block(&this->TableI16WeakPointers[0][j][FIRoffsetI16],

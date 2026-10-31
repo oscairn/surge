@@ -1432,13 +1432,15 @@ unsigned int SurgePatch::save_patch(void **data)
                 wth[sc][osc].flags = mech::endian_write_int16LE(wth[sc][osc].flags | wtf_int16);
 
                 memcpy(dw, &wth[sc][osc], sizeof(wt_header));
-                short *fp = (short *)(char *)(dw + sizeof(wt_header));
+                // Byte copy: the patch's XML size puts this at any offset. Little-endian
+                // only, as endian_copyblock16LE was.
+                char *fp = (char *)(dw + sizeof(wt_header));
 
                 for (int j = 0; j < n_tables; j++)
                 {
-                    mech::endian_copyblock16LE(
-                        &fp[j * n_samples],
-                        &scene[sc].osc[osc].wt.TableI16WeakPointers[0][j][FIRoffsetI16], n_samples);
+                    memcpy(fp + sizeof(short) * j * n_samples,
+                           &scene[sc].osc[osc].wt.TableI16WeakPointers[0][j][FIRoffsetI16],
+                           sizeof(short) * n_samples);
                 }
                 dw += wtsize;
             }
