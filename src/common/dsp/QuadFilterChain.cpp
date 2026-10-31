@@ -51,14 +51,15 @@ namespace sdsp = sst::basic_blocks::dsp;
     SIMD_MM(store_ss)                                                                              \
     (&OutR[k], SIMD_MM(add_ss)(SIMD_MM(load_ss)(&OutR[k]), mech::sum_ps_to_ss(outR)));
 
-// Saturator: tanh plus a square term for asymmetry, scaled back by the drive so the small
-// signal gain is 1, then a DC blocker for what the square term adds.
+// Saturator: tanh plus a square term for asymmetry, scaled back by tanh(drive): the small
+// signal gain is about 1 at low drive, and a full-scale input stays at full scale at high
+// drive. Then a DC blocker for what the square term adds.
 inline SIMD_M128 saturate(SIMD_M128 x, SIMD_M128 drive, SIMD_M128 asym, SIMD_M128 &dcX,
                           SIMD_M128 &dcY, SIMD_M128 dcR)
 {
     auto t = sdsp::fasttanhSSEclamped(SIMD_MM(mul_ps)(x, drive));
     auto y = SIMD_MM(div_ps)(SIMD_MM(add_ps)(t, SIMD_MM(mul_ps)(asym, SIMD_MM(mul_ps)(t, t))),
-                             drive);
+                             sdsp::fasttanhSSEclamped(drive));
     auto out = SIMD_MM(add_ps)(SIMD_MM(sub_ps)(y, dcX), SIMD_MM(mul_ps)(dcR, dcY));
     dcX = y;
     dcY = out;

@@ -216,14 +216,14 @@ TEST_CASE("Amp Saturator Shape And Position", "[signalpath]")
         auto G = std::pow(10.f, drive / 20.f);
         auto hs = harmonics(sat, from, 440);
         std::vector<double> he;
-        double bestErr = 1e9;
+        double bestErr = 1e9, bestK = 1, bestRms = 0;
         for (double k = 0.25; k < 2; k *= 1.01)
         {
             std::vector<float> expect(clean.size());
             for (size_t i = 0; i < clean.size(); i++)
             {
                 auto t = std::tanh(G * clean[i] / k);
-                expect[i] = (t + asym * t * t) / G;
+                expect[i] = (t + asym * t * t) / std::tanh(G);
             }
             auto h = harmonics(expect, from, 440);
             double err = 0;
@@ -234,8 +234,14 @@ TEST_CASE("Amp Saturator Shape And Position", "[signalpath]")
             {
                 bestErr = err;
                 he = h;
+                bestK = k;
+                bestRms = rms(expect, from);
             }
         }
+        // scaled back by tanh(drive): the level follows the curve too (without the square
+        // term, whose DC the engine's blocker removes)
+        if (asym == 0)
+            REQUIRE(rms(sat, from) == Catch::Approx(bestK * bestRms).epsilon(0.02));
         for (int h = 1; h < 6; h++)
         {
             INFO("harmonic " << h + 1);
