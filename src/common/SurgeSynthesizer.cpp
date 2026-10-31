@@ -3553,12 +3553,16 @@ bool SurgeSynthesizer::loadOscalgos()
                 }
 
                 // Notify audio thread param change listeners (OSC, e.g.)
-                // (which run on juce messenger thread)
-                std::stringstream sb;
-                sb << "/param/" << (char)('a' + s) << "/osc/" << i + 1 << "/type";
-                auto new_type = osc_st.queue_type;
-                for (const auto &it : audioThreadParamListeners)
-                    (it.second)(sb.str(), new_type, osc_type_names[new_type]);
+                // (which run on juce messenger thread). Only build the address when someone
+                // listens: building it allocates.
+                if (!audioThreadParamListeners.empty())
+                {
+                    std::stringstream sb;
+                    sb << "/param/" << (char)('a' + s) << "/osc/" << i + 1 << "/type";
+                    auto new_type = osc_st.queue_type;
+                    for (const auto &it : audioThreadParamListeners)
+                        (it.second)(sb.str(), new_type, osc_type_names[new_type]);
+                }
 
                 osc_st.type.val.i = osc_st.queue_type;
                 storage.getPatch().update_controls(false, &osc_st);
