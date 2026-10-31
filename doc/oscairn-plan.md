@@ -726,6 +726,9 @@ Open questions (each to settle from the manual or by measurement):
 10. ~~The licence of Oscairn's extension headers~~ Settled: MIT (section 8).
 11. ~~Tuning~~ Settled: Oscairn is the MTS-ESP master and offers `clap.tuning` (RFC 0017);
     the plugin keeps Surge's MTS-ESP client (section 10).
+12. Where the converter (data list values to engine state) lives: the plan says Oscairn's
+    tools, which this fork's work can't change. Alternatives: a tool in this fork, or in the
+    measurement repository (which may not hold product names in identifiers).
 
 ### Not verified in writing this plan
 
@@ -881,3 +884,50 @@ sense; TSan would report it. Leak checking was off (LeakSanitizer isn't supporte
 arm64). Value text for oscillator controls reads the parameter's current
 type, which the audio thread changes when the oscillator type changes (marked `shortcut:` in
 the code).
+
+### Milestone 1: measurement and fitted tables (in progress, gate not met)
+
+Status on 2026-10-31. Analysis code is in the private `oscairn/measurement` repository
+(`analog/features.py`, `analog/fit.py`, `analog/tolerances.json`, commit `4a3e8d2`). Probe
+performances, reference renders, engine renders and the fitted tables stay in
+`forks/measurements/analog/` on Jacob's machine. `src/oscairn-clap/tools/OscairnAnalogRender.cpp`
+(`oscairn-analog-render`) renders one note through the plugin with given Surge parameters
+and modulation routings, for the engine side.
+
+Method: the reference is swept in steps of 32 (64 for level), the engine over its own
+parameter range; a table maps each index to the engine value whose measured feature matches
+the reference's (`fit.py fit`). Checks use separate validation indices between the swept ones
+(`fit.py check`). Envelope probes use the amp envelope with a sawtooth oscillator, the LFO probe
+the amp LFO on the amp level, and the engine uses Surge's analog envelope mode, whose release
+is exponential like the reference's (time to −40 dB about twice the time to −20 dB on both).
+
+Findings:
+
+- The reference recorder's start latency varies by about 70 ms between renders, so times are
+  measured from each render's own onset, never from a fixed latency.
+- Envelope times are reliable here from about 0.05 s to the render length: indices 96–192 of
+  the amp envelope's attack, decay and release. Shorter times need finer analysis windows (a
+  higher note), longer ones longer renders; both not done yet.
+- The LFO-rate measurement is trusted from about 0.45 Hz to 45 Hz (indices 96–288).
+- The noise-based low-pass corner measurement is too unreliable to fit (non-monotonic
+  results at several indices). Cutoff needs a different probe (swept sine or a resonance peak).
+
+Check results (validation indices 80, 112, 144, 176 for envelopes; tolerances from
+`tolerances.json`):
+
+| Feature | Within tolerance | Notes |
+| --- | --- | --- |
+| Amp EG release, attack, decay time (10 %) | 3 of 4 each | All pass inside the fitted range (112–176, errors under 5 %); index 80 is below it and fails |
+| LFO rate (2 %) | 0 of 4 | Inside the fitted range errors are 2.3–3.1 %: steps of 32 are too coarse for interpolation; 48 and 336 are outside the trusted range |
+| Amp level (0.5 dB) | 3 of 4 | 96 is off by 1 dB: steps of 64 are too coarse at the low end |
+| Cutoff | not checked | measurement not usable yet |
+
+Not started: the 11 filter types and the choice of one filter family, the other envelopes
+and LFOs, oscillator and mixer levels, aliasing against a floor, and the converter. The plan
+puts the converter in Oscairn's tools, where this work can't write; where it goes is a
+question for Jacob (open question 12). No fitted table is committed until its feature passes
+its gate.
+
+Next steps: denser reference sweeps (steps of 8 for LFO speed and level), envelope probes at
+a higher note for short times and with long renders for long ones, and a swept-sine filter
+probe for cutoff and for comparing filter families.
