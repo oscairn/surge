@@ -490,11 +490,9 @@ static void testStateRoundTrip(const std::vector<std::string> &patches)
     Instance b;
     check(b.save() == first, "two fresh instances save the same bytes");
 
-    // Loading an older patch migrates it, and the first save after that can differ from the
-    // next one (Surge's migrations aren't idempotent for some revision-9/10 patches). The
-    // plugin's own state must be a fixed point: save -> load -> save gives the same bytes.
-    int tested = 0, migrated = 0;
-    Instance c; // one instance: constructing 625 is slow under ASan on Linux
+    // save -> load -> save gives the same bytes from the first save, also for older
+    // patches that loading migrates.
+    int tested = 0;
     for (auto &path : patches)
     {
         auto patch = patchFromFxp(path);
@@ -502,14 +500,10 @@ static void testStateRoundTrip(const std::vector<std::string> &patches)
             continue;
         auto s1 = a.save();
         check(b.load(s1), "load saved state: " + path);
-        auto s2 = b.save();
-        check(c.load(s2), "load saved state again: " + path);
-        check(c.save() == s2, "state round trip is byte-identical: " + path);
-        migrated += s1 != s2;
+        check(b.save() == s1, "state round trip is byte-identical: " + path);
         ++tested;
     }
-    std::printf("state round trips: %d (first save after migration differed for %d)\n", tested,
-                migrated);
+    std::printf("state round trips: %d\n", tested);
 }
 
 static std::vector<Event> testEvents(const std::map<std::string, clap_param_info_t> &params)
