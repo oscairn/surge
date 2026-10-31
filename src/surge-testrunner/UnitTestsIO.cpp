@@ -2550,6 +2550,9 @@ TEST_CASE("The Window Oscillator Plays Samples", "[dsp]")
         REQUIRE(wt.SourceFrameCount() == 8);
 
         osc->p[WindowOscillator::win_morph].val.f = morph;
+        // Without retrigger the window starts at a random position, and a late start's
+        // energy depended on it (0.002 and 0.085 against the 0.1 asserted, on CI)
+        osc->retrigger.val.b = true;
         osc->p[WindowOscillator::win_unison_voices].val.i = voices;
         osc->p[WindowOscillator::win_unison_voices].deform_type =
             asPlayCount ? WavetableOscillator::SAMPLE_PLAY_COUNT
