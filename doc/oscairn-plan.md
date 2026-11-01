@@ -1253,6 +1253,15 @@ Decisions taken (for Jacob to confirm):
   scene data after every load; the pitch LFO saw maps to Surge's ramp inverted with its phase
   moved by half a period; the proposed tolerance for the oscillator EG (duty fall) times is the
   envelope one (2.5 % or 5 ms).
+- Added in the ninth session (details there): the amp velocity amplitude law is a storage option
+  (off in Surge XT, on in the plugin, not streamed), with k = -(Velocity > VCA Gain) / 12 so the
+  existing parameter carries it; negative sensitivities are left to a velocity routing. Key-on
+  delay is a generic scene parameter in the engine (not the plugin), block-quantized, with a
+  fixed array of 128 waiting notes; a note released before it starts never sounds and is ended
+  at once (as the reference: silent), and the sustain pedal doesn't hold a note that hasn't
+  started. The plugin's portamento range reaches 2^3.99 s; Portamento Time 122-127 clamp
+  there. Proposed tolerances: key-on delay 2.5 % or 15 ms, portamento 5 % or 5 ms, amp
+  velocity 0.3 dB, cutoff drift spread 20 %, pitch LFO start phases 6 cents RMS.
 
 *Saturator fit* (engine renders through the plugin at osc level table[511], amp level
 table[431], against the `m2` probes; drive in the engine = offset + 0.75 dB × raw):
@@ -1740,6 +1749,134 @@ ASan/UBSan and TSan, for the engine changes: `fd6c495` (2687 s, 337 s) and the h
 (which holds `7264e87`'s): 2756 s, 364 s. This record (`doc/` only) was not run separately.
 Measurement repository (`e83746f`: duty track and `dutyfall`; `13332d5`: `glide_times`): self-tests
 24 passed.
+
+**Ninth session (2026-10-31 to 11-01): amp velocity law, key-on delay, portamento table, cutoff drift.**
+
+GitHub Actions stayed disabled (no runs since `cac0d8e`); every commit below was checked with the
+local Docker substitute for the Linux jobs (see "Tests run in the ninth session"), which is not CI.
+
+*Amp velocity sensitivity* (`2b2ac55` generic, `350d952` Oscairn). New storage option
+`vcaVelocityAmplitudeLaw`: the amp gain is a * a with a = 1 - k (1 - velocity/127), silent where
+a <= 0, and k = -(Velocity > VCA Gain) / 12, so the parameter's -48..0 dB spans k = 4..0; off by
+default and not streamed (Surge XT and `[reference]` unchanged), on in the plugin, like the
+attack clamp. Test `[signalpath]` "VCA Velocity Amplitude Law" (k = 0.5, 1, 2 at four
+velocities within 0.05 dB of 40 log10(a), silent where a <= 0, and the old dB-linear law when
+off; fails with the option ignored, seen). Converter: Velocity > VCA Gain = -12 k dB with
+k = 2^((S - 128)/64) for S > 0. Plugin check against the reference (`m8c`, `m8d`: S = +64, +128,
++192, 13 velocities): largest difference 0.136 dB, proposed tolerance 0.3 dB (fails with the
+option off, seen: -5.95 against -11.90 dB at S = 64, velocity 1). Not covered: S < 0 (the
+reference inverts velocity, a = 1 - k v/127; Surge's parameter can't go positive, so the
+converter needs a velocity-to-level routing instead, which is linear in dB) and S = +255 (only
+velocity 127 sounds; unresolved, as before).
+
+*Key-on delay* (`3c7e451` generic, `4062aae` Oscairn tests). New scene parameter Key-On Delay
+(`keyon_delay`, Surge's deactivatable envelope time: 2^value s, -8..5, off by default,
+tempo-syncable): `SurgeSynthesizer::playNote` holds a note-on back for its scene's delay in a
+fixed array of 128 waiting notes (past that a note starts at once, marked `shortcut:`), and
+`process` starts it at the start of the block its time comes in (block-quantized: 0.7 ms at
+44.1 kHz). A note released, choked, released by note ID, or ended by all-notes-off or a stop
+(a state load) before it starts never sounds, and its end is reported at the next block. The
+parameter is appended to the scene and reset before a patch loads. Tests: `[keyondelay]`
+(starts after 0.25 s to the block; tempo sync doubles it at 60 BPM; released before it starts,
+by key, by note ID or by all-notes-off: silent and ended; another key's waiting note
+unaffected; an old patch loads with it off) and plugin checks (a delayed note starts at 12000
+samples; released before it starts: silent, NOTE_END; loaded over: silent, NOTE_END). Undone
+once each: without the delay 4 assertions fail; without the cancel in `releaseNote` 2; without
+the cancel in `stopSound`/`allNotesOff` the load check fails.
+
+Reference (batches `m9b`, `m9d`, `m9e`, `m9f`: a sine at note 60, Key On Delay Time Length
+0-127, holds 4 or 16 s). The recorder's note times move between renders, but note-on and note-off
+move together: the time from note-off to the release knee read 6.8-7.0 or 19.1-19.2 ms at hold 4
+(four renders) and 33.6 ms at hold 16. That looks like the recorder's events landing on
+about 12 ms buffer boundaries (inferred, not verified). The delay is measured as
+hold + that lag (mean of the four at hold 4) - (onset to release knee) (`held_length`, fit kind
+`keyondelay`). 0 is no delay; 1: 21 ms, 2: 27, 3: 31, 4: 54, 8: 143 ms (means of three
+renders), 16: 0.36 s, 32: 1.04, 64: 2.91, 96: 5.33, 127: 8.10 s. Above about 64 it rises by
+about 90 ms per step. A note released before its delay ends never sounds (index 96 with a
+0.05 s hold: silent). Tempo sync at the default tempo 120 follows the note length: 16th 117 ms,
+8th 245, 4th 503, 2nd 1002, 4th x4 2001, 4th x8 3999 ms (within the recorder's step), so the
+converter sets Key-On Delay's tempo sync and 2^value = the note length at 120 BPM. Table
+`keyOnDelay` (exponent per index 1-127; fitted from 24 renders, checked at 19 others, the last
+6 at hold 16): 19 of 19 within 2.5 % or 15 ms, all within 2.5 % except index 5 (+9.0 ms,
++14.9 %) and 18 (-13.8 ms, -3.1 %), inside the floor. Proposed tolerance: 2.5 % or 15 ms (the
+recorder's step, not the envelope's 5 ms). The plugin test renders the table's values and
+checks the onsets (moving a reference value by 6.6 % fails it, seen).
+
+*Portamento* (`414c6d2`, `566c7a4`, both Oscairn). The render tool takes `--legato n
+--legato-at s` (a second note, the first released 0.1 s later). Reference (batches `m9a`,
+`m9c`, `m9g`, `m9h`: Time 1, an octave from 48 or, for the short glides, from 84; at an octave
+every time mode takes the same time, eighth session): 0 is no glide; 1: 24.5 ms, 8: 31.7 ms,
+32: 71 ms, 64 about 0.26 s, 88: 0.81 s, 100: 1.62 s, 112: 3.97 s, 116: 5.44 s, 120: 8.87 s,
+121: 11.3 s, 122: 13.1 s, 124: 18.5 s; 127 is longer than the 28 s the render allowed. Every
+glide is straight in cents ((t90 - t50)/(t50 - t10) 0.76-1.17 below 0.3 s, 0.98-1.03
+above). One `121` render had a dropout and was recorded again. Engine through the plugin: an
+octave takes 0.8 x 2^v s (10-90 %) within 1 % for v >= -3 and 0.2 % for v >= -1.5 (below -3
+the measurement reads 0.77-1.05 of it, the resolution of the track). The plugin's portamento
+range now reaches 2^3.99 s (Surge stops at 2^2; the engine clamps at 2^4); loaded values above
+Surge's range already played, so this only fixes the parameter's range. Table
+`portamentoTime` (Surge's portamento per index 1-121; fitted from 20 renders, checked at 16):
+16 of 16 within 5 % or 5 ms (a proposed tolerance; under the envelope tolerance, 2.5 % or
+5 ms, 14 of 16: 60 is +2.7 % (6.1 ms) and 117 -4.2 %; the largest errors at the top come from
+the curve steepening between probes). Index 0 maps to Surge's minimum (off); 122-127 glide
+longer than the engine can and clamp at 2^3.99 s. Rate 1 maps to constant rate and Time 1 to
+constant time with the same table; the "2" modes' octave jump has no engine equivalent (not
+built). Plugin test: mono fingered portamento, an octave
+from note 84 at the table's values (moving a reference by 5.8 % fails it, seen).
+
+*Cutoff drift in the plugin* (`3a7ce21`, test only). The reference's cutoff drift (sixth
+session: 10 loads per depth in `m3d`), with 30 more loads at 96 and 127 (`m9i`): harmonic 9 of a
+saw at note 36 through LPF24 at index 512, measured at the note's own pitch (the pitch drifts
+too; measured at the nominal pitch, the Hann window's scalloping had read 4.48 and 25.9 dB):
+spread 0.58 dB at 64 (10 loads), 2.28 dB at 96 and 9.80 dB at 127 (40 loads each), that is
+0.29, 1.16 and 4.97 semitones at the engine's 1.97 dB per semitone there (sixth session: 0.30,
+1.12, 5.5). The plugin test plays 150 notes with Segment Drift Cutoff = 1.22 x the deviation
+(1.37 and 6.71 semitones) and gets 2.01 and 9.69 dB (-12 % and -1 %); proposed tolerance 20 %,
+as for the pitch. Without the 1.22 factor 96 fails (1.65 dB, seen); 127 alone would not
+(7.99 dB, -18 %).
+
+*Pitch LFO start phases in the plugin* (`aa71d84`, test only). The eighth session's
+comparison as a plugin check: voice LFO 1 at 2.397 Hz on oscillator 1's pitch, +-92.5 cents,
+key trigger, against the `m3b` probes; the mean pitch of each 50 ms from 0.05 to 1.25 s after
+the onset. RMS over the 24 bins: sine 2.20, triangle 2.02, square 4.33, saw (ramp inverted at
+phase 0.5) 2.56, sine at 90/180/270 degrees 2.88/2.18/2.62 cents; an inverted LFO is 96-170
+cents off. Proposed tolerance 6 cents (the reference's onset latency of about 2 ms stays in).
+The saw mapped as a plain ramp at phase 0 fails (39.8 cents, seen).
+
+*Not done this session* (time-boxed or blocked): folder above 96 and Hard, saturator curve at
+high drive, filter saturator offsets for other types, resonance above 96 (each needs a new
+curve or filter; not started); short envelopes (still waiting for the decision on the floor for
+averaged checks); the noise tone's tilt filter (not started); the pitch LFO delay at 4 (not
+looked at again); self sync and the wave shaper (no model).
+
+**Tests run in the ninth session.** macOS arm64 gates (`analog_gates2.sh`) on each commit's
+tree: `2b2ac55`: `surge-testrunner` 205 test cases passed, `[reference]` 635 compared, 6
+skipped; `oscairn-analog-tests` ASan/UBSan (96 s) and TSan (446 s) passed with 0 reports; the
+standard plugin run (93 s, passed) is not counted: its binary was rebuilt with uncommitted
+changes while the gate script ran, possibly before that run started (the Docker standard job
+covers that tree, and `350d952`'s macOS runs hold the same engine). `350d952`: testrunner 205
+passed, `[reference]` 635/6, plugin tests standard (92 s), ASan (126 s), TSan (535 s) passed, 0
+reports. `3c7e451`: testrunner 206 passed, `[reference]` 635/6, standard (81 s), ASan (90 s),
+TSan (436 s), 0 reports. `4062aae`, `414c6d2`, `566c7a4` and `3a7ce21` (plugin tests only: the
+testrunner doesn't build anything they change, so it was not rerun): standard 81, 81, 85, 91 s;
+ASan 93, 93, 96, 110 s; TSan 456, 460, 466, 574 s; all passed, 0 reports. `aa71d84` (plugin
+tests only, the plan's edits uncommitted in the tree): standard (86 s), ASan (103 s), TSan (539
+s) passed, 0 reports. A full testrunner run in a separate build of `3c7e451` plus the then
+uncommitted plugin changes also passed (206). Docker Linux (local substitute for CI, as in the
+eighth session; each job exited 0 with "all passed" and no sanitizer reports): standard on
+`2b2ac55` (85 s of tests), `350d952` (86 s), `3c7e451` (87 s), `4062aae` (89 s), `414c6d2` (92
+s), `566c7a4` (89 s), `3a7ce21` (93 s), `aa71d84` (91 s); ASan/UBSan and TSan on the head of
+each push, which holds the engine changes before it: `350d952` (2788 s, 363 s; covers `2b2ac55`)
+and `566c7a4` (2946 s, 394 s; covers `3c7e451`). This record (`doc/` only) was not run
+separately. Measurement repository (`07ffb9c`: `held_length`; `8f89922`: fit kinds `glide` and
+`keyondelay`, per-render options, proposed tolerances): self-tests 25 passed.
+
+**Where this stopped** (ninth session). The amp velocity law, key-on delay (engine, table,
+note-end checks) and the portamento time table are in, and cutoff drift and the pitch LFO start
+phases have plugin checks. Next: the portamento "2" modes' octave jump and Portamento Time
+122-127 (an engine limit), negative amp velocity sensitivity, the noise tone's tilt filter,
+averaged short-envelope checks once the floor is decided, the remaining milestone 1/2 curve
+items (folder above 96 and Hard, saturator at high drive, filter saturator offsets for other
+types, resonance above 96), and self sync and the wave shaper.
 
 **Where this stopped** (eighth session). The Linux CI jobs run locally in Docker while Actions
 is off; oscillator EG tables are in; a first-block bug in the plugin was found and fixed, which
