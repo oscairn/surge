@@ -848,6 +848,38 @@ static void testFittedTables()
             return F::pitchFallTime(renderMono(pitchSpec(true, v)), rate, c4, 185.2, 0.3);
         },
         pctFloor(0.005));
+    // Oscillator EG decay and release: voice LFO 1 as an analog-mode envelope on the Modern
+    // pulse's width (0.254 + 0.123), a pulse at note 48 (the reference's PW EG depth +16 at
+    // pulse width 64), the duty's fall measured.
+    auto oscEgSpec = [&](bool rel, float v) {
+        double h = 3.0 * std::pow(2.0, v) + 0.6;
+        oscairn_analog::RenderSpec s{48, 100, rel ? 0.6 : h, rel ? h : 0.1, rate,
+                                     {{"a_lowcut.off", 1}, {"a_osc1_type", 8}, {"a_osc1_param0", 0},
+                                      {"a_osc1_param1", 1}, {"a_osc1_param3", 0.254},
+                                      {"a_lfo0_shape", 6}, {"a_lfo0_envmode", 1},
+                                      {"a_lfo0_attack", -8}, {"a_env1_release", 5}},
+                                     {{17, "a_osc1_param3", 0.123}}};
+        if (rel)
+            s.params.insert(s.params.end(), {{"a_lfo0_sustain", 1}, {"a_lfo0_decay", -5},
+                                             {"a_lfo0_release", v}});
+        else
+            s.params.insert(s.params.end(), {{"a_lfo0_decay", v}, {"a_lfo0_sustain", 0}});
+        return s;
+    };
+    const double c3 = 440 * std::pow(2.0, -21 / 12.0);
+    checkTable(
+        "oscillator EG decay", T::oscEgDecay, T::oscEgDecayChecks, T::oscEgDecayTolerance,
+        [&](float v) {
+            return F::dutyFallTime(renderMono(oscEgSpec(false, v)), rate, c3, 0.254, 0.123, 0);
+        },
+        pctFloor(0.005));
+    checkTable(
+        "oscillator EG release", T::oscEgRelease, T::oscEgReleaseChecks,
+        T::oscEgReleaseTolerance,
+        [&](float v) {
+            return F::dutyFallTime(renderMono(oscEgSpec(true, v)), rate, c3, 0.254, 0.123, 0.6);
+        },
+        pctFloor(0.005));
     // The zero-crossing rate here needs several periods and an envelope that follows the
     // modulation: checked from 1 to 40 Hz (the measurement repository checks the whole range).
     checkTable(

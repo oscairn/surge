@@ -109,6 +109,56 @@ inline double releaseTime(const std::vector<float> &x, double rate, double noteO
     return fallsTo(e, h - 40, noteOff - uncertainty + knee);
 }
 
+// 90 % to 10 % time of an offset c(t) falling exponentially from full, after start: ln 9
+// over the slope of a straight line fitted to log(c) against time between the first 90 %
+// and 10 % crossings of a 9-point median of the track. The fit is pitch_fall_time's and
+// duty_fall_time's in the measurement repository.
+inline double fallTime(const std::vector<double> &t, const std::vector<double> &c, double full,
+                       double start)
+{
+    std::vector<double> tt, cc, sm;
+    for (size_t i = 0; i < t.size(); ++i)
+        if (t[i] > start)
+        {
+            tt.push_back(t[i]);
+            cc.push_back(c[i]);
+        }
+    for (size_t i = 0; i < cc.size(); ++i) // medfilt with zero padding, as scipy's
+    {
+        double w[9];
+        for (int k = 0; k < 9; ++k)
+        {
+            long j = (long)i + k - 4;
+            w[k] = j < 0 || j >= (long)cc.size() ? 0 : cc[j];
+        }
+        std::nth_element(w, w + 4, w + 9);
+        sm.push_back(w[4]);
+    }
+    long k0 = -1, k1 = -1;
+    for (size_t i = 0; i < sm.size() && k1 < 0; ++i)
+    {
+        if (k0 < 0 && sm[i] <= 0.9 * full)
+            k0 = (long)i;
+        if (sm[i] <= 0.1 * full)
+            k1 = (long)i;
+    }
+    if (k0 < 0 || k1 <= k0)
+        return -1;
+    double n = 0, st = 0, sl = 0, stt = 0, stl = 0;
+    for (long i = k0; i < k1; ++i)
+        if (cc[i] > 0.05 * full)
+        {
+            double l = std::log(cc[i]);
+            n += 1;
+            st += tt[i];
+            sl += l;
+            stt += tt[i] * tt[i];
+            stl += tt[i] * l;
+        }
+    double slope = (n * stl - st * sl) / (n * stt - st * st);
+    return std::log(9.0) / -slope;
+}
+
 // 90 % to 10 % time of a sine's pitch offset falling exponentially in cents from fullCents
 // (relative to fRef), after start (seconds from onset): ln 9 over the slope of a straight
 // line fitted to log(cents) against time between the first 90 % and 10 % crossings of a
@@ -131,47 +181,38 @@ inline double pitchFallTime(const std::vector<float> &x, double rate, double fRe
             }
             prev = z;
         }
-    std::vector<double> tt, cc, sm;
-    for (size_t i = 0; i < t.size(); ++i)
-        if (t[i] > start)
-        {
-            tt.push_back(t[i]);
-            cc.push_back(c[i]);
-        }
-    for (size_t i = 0; i < cc.size(); ++i) // medfilt with zero padding, as scipy's
+    return fallTime(t, c, fullCents, start);
+}
+
+// 90 % to 10 % time of a pulse wave's duty cycle falling exponentially from base + full
+// toward base, after start (seconds from onset). The duty, one value per period, is
+// acos(h2 / h1) / pi from the first two harmonics over Hann windows `periods` periods long
+// (a duty above 0.5 reads as 1 - duty). As duty_fall_time in the measurement repository.
+inline double dutyFallTime(const std::vector<float> &x, double rate, double f0, double base,
+                           double full, double start, int periods = 4)
+{
+    size_t a = (size_t)(onset(x, rate) * rate);
+    size_t n = (size_t)std::lround(periods * rate / f0);
+    std::vector<double> t, c;
+    const double pi = 3.14159265358979323846;
+    for (double s = 0; a + (size_t)s + n < x.size(); s += rate / f0)
     {
-        double w[9];
-        for (int k = 0; k < 9; ++k)
+        size_t s0 = a + (size_t)s;
+        double r1 = 0, i1 = 0, r2 = 0, i2 = 0;
+        for (size_t k = 0; k < n; ++k)
         {
-            long j = (long)i + k - 4;
-            w[k] = j < 0 || j >= (long)cc.size() ? 0 : cc[j];
+            double v = x[s0 + k] * (0.5 - 0.5 * std::cos(2 * pi * k / (n - 1)));
+            double p = 2 * pi * f0 * k / rate;
+            r1 += v * std::cos(p);
+            i1 -= v * std::sin(p);
+            r2 += v * std::cos(2 * p);
+            i2 -= v * std::sin(2 * p);
         }
-        std::nth_element(w, w + 4, w + 9);
-        sm.push_back(w[4]);
+        double ratio = std::hypot(r2, i2) / std::max(std::hypot(r1, i1), 1e-12);
+        t.push_back(((size_t)s + n / 2.0) / rate);
+        c.push_back((std::acos(std::clamp(ratio, 0.0, 1.0)) / pi - base) / full);
     }
-    long k0 = -1, k1 = -1;
-    for (size_t i = 0; i < sm.size() && k1 < 0; ++i)
-    {
-        if (k0 < 0 && sm[i] <= 0.9 * fullCents)
-            k0 = (long)i;
-        if (sm[i] <= 0.1 * fullCents)
-            k1 = (long)i;
-    }
-    if (k0 < 0 || k1 <= k0)
-        return -1;
-    double n = 0, st = 0, sl = 0, stt = 0, stl = 0;
-    for (long i = k0; i < k1; ++i)
-        if (cc[i] > 0.05 * fullCents)
-        {
-            double l = std::log(cc[i]);
-            n += 1;
-            st += tt[i];
-            sl += l;
-            stt += tt[i] * tt[i];
-            stl += tt[i] * l;
-        }
-    double slope = (n * stl - st * sl) / (n * stt - st * st);
-    return std::log(9.0) / -slope;
+    return fallTime(t, c, 1.0, start);
 }
 
 // Rate of a periodic level change between start and stop: rising crossings of the mean
