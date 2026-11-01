@@ -776,6 +776,12 @@ bool pluginInit(const clap_plugin_t *p)
     for (auto &eg : s.synth->storage.getPatch().scene[0].adsr)
         for (auto *t : {&eg.a, &eg.d, &eg.r})
             t->val_max.f = longestEnvelopeTime;
+    // The same for the voice LFOs' attack and decay, which serve as the pitch, oscillator and
+    // modifier envelopes. Not release: an LFO release at its maximum means it never releases.
+    for (int l = 0; l < n_lfos_voice; l++)
+        for (auto *t : {&s.synth->storage.getPatch().scene[0].lfo[l].attack,
+                        &s.synth->storage.getPatch().scene[0].lfo[l].decay})
+            t->val_max.f = longestEnvelopeTime;
     s.synth->setSamplerate((float)s.sampleRate);
     s.normalizePatch();
     s.synth->storage.perform_queued_wtloads();

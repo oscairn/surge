@@ -444,6 +444,14 @@ static void testPortsAndParams(const std::vector<std::string> &patches)
               moduleOf("a_lfo17_rate") == "Voice LFO 12" &&
               moduleOf("a_lfo6_rate") == "Scene LFO 1" && moduleOf("a_lfo11_rate") == "Scene LFO 6",
           "LFO parameters are grouped by their LFO");
+    auto maxOf = [&](const char *name) {
+        auto it = infos.find(fnv1a(name));
+        return it == infos.end() ? -1.0 : it->second.max_value;
+    };
+    check(maxOf("a_env1_attack") == 8 && maxOf("a_lfo0_attack") == 8 &&
+              maxOf("a_lfo17_decay") == 8 && maxOf("a_lfo0_release") == 5 &&
+              maxOf("a_lfo6_attack") == 5,
+          "envelopes and voice LFO attack and decay reach 2^8 s; LFO release and scene LFOs 2^5");
 
     // Ranges hold for every factory patch: a parameter exposed in Surge's own units must have
     // the same range whatever patch is loaded (those whose range follows another parameter
@@ -458,6 +466,10 @@ static void testPortsAndParams(const std::vector<std::string> &patches)
     // The plugin's envelope segments reach 2^8 s instead of Surge's 2^5 s.
     for (auto &eg : reference.storage.getPatch().scene[0].adsr)
         for (auto *t : {&eg.a, &eg.d, &eg.r})
+            t->val_max.f = 8;
+    for (int l = 0; l < n_lfos_voice; l++)
+        for (auto *t : {&reference.storage.getPatch().scene[0].lfo[l].attack,
+                        &reference.storage.getPatch().scene[0].lfo[l].decay})
             t->val_max.f = 8;
     int loaded = 0;
     for (auto &path : patches)
