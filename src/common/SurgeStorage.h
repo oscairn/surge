@@ -1706,6 +1706,9 @@ class alignas(16) SurgeStorage
     // silent where a <= 0, and k = -sensitivity / 12 (0 to 4 over the parameter's -48..0 dB),
     // instead of sensitivity x (1 - velocity) dB. Not streamed.
     bool vcaVelocityAmplitudeLaw{false};
+    // The filter and amp saturators use u / sqrt(1 + u^2) instead of tanh(u) (a softer knee),
+    // scaled back by the same curve at the drive. Not streamed.
+    bool saturatorAlgebraicCurve{false};
     float unstreamedTempo{120.f};             // this one is in actual BPM
     double songpos;
     bool isPlaying{false}; // host transport state

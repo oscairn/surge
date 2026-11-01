@@ -53,13 +53,22 @@ namespace sdsp = sst::basic_blocks::dsp;
 
 // Saturator: tanh plus a square term for asymmetry, scaled back by tanh(drive): the small
 // signal gain is about 1 at low drive, and a full-scale input stays at full scale at high
-// drive. Then a DC blocker for what the square term adds.
-inline SIMD_M128 saturate(SIMD_M128 x, SIMD_M128 drive, SIMD_M128 asym, SIMD_M128 &dcX,
-                          SIMD_M128 &dcY, SIMD_M128 dcR)
+// drive. Then a DC blocker for what the square term adds. With algebraic set, the curve is
+// u / sqrt(1 + u^2) in place of tanh(u), scaled back by the same curve at the drive.
+inline SIMD_M128 algebraicSigmoid(SIMD_M128 u)
 {
-    auto t = sdsp::fasttanhSSEclamped(SIMD_MM(mul_ps)(x, drive));
+    auto one = SIMD_MM(set1_ps)(1.f);
+    return SIMD_MM(div_ps)(u, SIMD_MM(sqrt_ps)(SIMD_MM(add_ps)(one, SIMD_MM(mul_ps)(u, u))));
+}
+
+inline SIMD_M128 saturate(SIMD_M128 x, SIMD_M128 drive, SIMD_M128 asym, SIMD_M128 &dcX,
+                          SIMD_M128 &dcY, SIMD_M128 dcR, bool algebraic)
+{
+    auto u = SIMD_MM(mul_ps)(x, drive);
+    auto t = algebraic ? algebraicSigmoid(u) : sdsp::fasttanhSSEclamped(u);
     auto y = SIMD_MM(div_ps)(SIMD_MM(add_ps)(t, SIMD_MM(mul_ps)(asym, SIMD_MM(mul_ps)(t, t))),
-                             sdsp::fasttanhSSEclamped(drive));
+                             algebraic ? algebraicSigmoid(drive)
+                                       : sdsp::fasttanhSSEclamped(drive));
     auto out = SIMD_MM(add_ps)(SIMD_MM(sub_ps)(y, dcX), SIMD_MM(mul_ps)(dcR, dcY));
     dcX = y;
     dcY = out;
@@ -92,7 +101,7 @@ inline SIMD_M128 saturate(SIMD_M128 x, SIMD_M128 drive, SIMD_M128 asym, SIMD_M12
 // its output gain, which also applies with the filter off.
 #define MFilterPost(x, u, dc, active)                                                              \
     if ((active) && g.filterDrive[u])                                                              \
-        x = saturate(x, d.FDrive[u], d.FAsym[u], d.dcX[dc], d.dcY[dc], g.dcR);                     \
+        x = saturate(x, d.FDrive[u], d.FAsym[u], d.dcX[dc], d.dcY[dc], g.dcR, g.algebraicSat);    \
     x = SIMD_MM(mul_ps)(x, d.FGain[u]);
 
 // The stage between the filters and the amp gain: mixer channels routed past the filters join
@@ -102,7 +111,7 @@ inline SIMD_M128 preAmpStage(QuadFilterChainState &d, const fbq_global &g, SIMD_
 {
     x = SIMD_MM(add_ps)(x, post);
     if (g.ampDrive)
-        x = saturate(x, d.ADrive, d.AAsym, d.dcX[4 + c], d.dcY[4 + c], g.dcR);
+        x = saturate(x, d.ADrive, d.AAsym, d.dcX[4 + c], d.dcY[4 + c], g.dcR, g.algebraicSat);
     return x;
 }
 

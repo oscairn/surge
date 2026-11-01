@@ -188,8 +188,13 @@ TEST_CASE("Mixer Switches Reset When A Patch Lacks Them", "[signalpath]")
 
 TEST_CASE("Amp Saturator Shape And Position", "[signalpath]")
 {
-    auto make = [](float drive, float asym, float vca) {
+    // tanh, or with saturatorAlgebraicCurve u / sqrt(1 + u^2)
+    bool alg = GENERATE(false, true);
+    INFO("algebraic curve " << alg);
+    auto curve = [alg](double u) { return alg ? u / std::sqrt(1 + u * u) : std::tanh(u); };
+    auto make = [alg](float drive, float asym, float vca) {
         auto s = sineSurge();
+        s->storage.saturatorAlgebraicCurve = alg;
         auto &sc = s->storage.getPatch().scene[0];
         sc.vca_level.val.f = vca;
         sc.amp_drive.deactivated = drive < -100;
@@ -222,8 +227,8 @@ TEST_CASE("Amp Saturator Shape And Position", "[signalpath]")
             std::vector<float> expect(clean.size());
             for (size_t i = 0; i < clean.size(); i++)
             {
-                auto t = std::tanh(G * clean[i] / k);
-                expect[i] = (t + asym * t * t) / std::tanh(G);
+                auto t = curve(G * clean[i] / k);
+                expect[i] = (t + asym * t * t) / curve(G);
             }
             auto h = harmonics(expect, from, 440);
             double err = 0;
@@ -238,7 +243,7 @@ TEST_CASE("Amp Saturator Shape And Position", "[signalpath]")
                 bestRms = rms(expect, from);
             }
         }
-        // scaled back by tanh(drive): the level follows the curve too (without the square
+        // scaled back by the curve at the drive: the level follows the curve too (without the square
         // term, whose DC the engine's blocker removes)
         if (asym == 0)
             REQUIRE(rms(sat, from) == Catch::Approx(bestK * bestRms).epsilon(0.02));

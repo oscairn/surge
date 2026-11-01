@@ -5348,6 +5348,7 @@ void SurgeSynthesizer::process()
             g.filterDrive[u] = !storage.getPatch().scene[s].filterunit[u].drive.deactivated;
         }
         g.ampDrive = !storage.getPatch().scene[s].amp_drive.deactivated;
+        g.algebraicSat = storage.saturatorAlgebraicCurve;
         auto &prews = storage.getPatch().scene[s].prefilter_ws;
         if (!prews.type.deactivated &&
             prews.type.val.i != (int)sst::waveshapers::WaveshaperType::wst_none)

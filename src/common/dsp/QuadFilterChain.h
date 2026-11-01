@@ -163,6 +163,7 @@ struct fbq_global
     sst::waveshapers::QuadWaveshaperPtr PreWSptr{nullptr}; // shaper before the filters, if on
     bool preAmp{false}; // run the stage between the filters and the amp gain
     bool filterDrive[2]{false, false}, ampDrive{false}; // saturators switched on
+    bool algebraicSat{false}; // saturators use u / sqrt(1 + u^2) instead of tanh
     SIMD_M128 dcR;                                      // DC blocker pole
 };
 
