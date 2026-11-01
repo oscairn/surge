@@ -1012,6 +1012,79 @@ static void testCutoffDriftAgainstReference()
     }
 }
 
+// Pitch LFO start phases against the reference (sixth session, batch m3b: a sine at note 60,
+// Pitch LFO Speed 176, depth raw 309, Key On Reset on), with the converter's mapping: voice
+// LFO 1 at 2.397 Hz on oscillator 1's pitch, +-92.5 cents, key trigger; sine, triangle and
+// square at phase 0, the saw as Surge's ramp with the depth negated at phase 0.5, and phases
+// 90/180/270 degrees as 0.25/0.5/0.75 on the sine. The mean pitch of each 50 ms from 0.05 to
+// 1.25 s after the onset; the RMS difference over those 24 bins must be within 6 cents (a
+// proposed tolerance; the reference starts about 2 ms late, which the bins don't remove; an
+// inverted LFO is 96-170 cents off).
+static void testPitchLfoPhasesAgainstReference()
+{
+    namespace F = oscairn_features;
+    const double rate = 44100, c4 = 440 * std::pow(2.0, -9 / 12.0), depth = 92.5 / 1400;
+    struct Case
+    {
+        const char *name;
+        int shape;
+        double phase, sign;
+        double ref[24];
+    };
+    const Case cases[] = {
+        {"sine", 0, 0, 1, {80.9, 86.1, 44.8, -20.2, -75.7, -89.0, -53.7, 10.9, 69.5, 90.5, 63.5, 1.7,
+                           -61.1, -90.3, -70.1, -11.0, 52.4, 88.4, 78.2, 25.6, -42.8, -85.7, -83.5, -37.4}},
+        {"triangle", 1, 0, 1, {65.4, 73.9, 29.9, -14.0, -59.1, -79.2, -37.9, 6.6, 50.0, 81.2, 45.4, 0.2,
+                               -42.7, -80.2, -52.5, -7.6, 36.2, 78.0, 60.9, 17.8, -26.5, -71.7, -68.9, -25.4}},
+        {"square", 2, 0, 1, {92.6, 92.6, 92.6, -50.2, -92.6, -92.6, -92.6, 30.2, 92.6, 92.6, 92.6, 10.8,
+                             -92.6, -92.6, -92.6, -35.6, 92.5, 92.6, 92.6, 72.0, -92.7, -92.6, -92.6, -92.6}},
+        {"saw", 3, 0.5, -1, {32.9, 55.2, 77.2, -50.1, -63.3, -41.4, -19.0, 3.2, 25.1, 47.5, 69.6, 8.0,
+                             -70.7, -48.7, -26.2, -3.9, 18.0, 39.7, 62.0, 67.6, -78.9, -56.0, -34.3, -12.8}},
+        {"sine at 90 degrees", 0, 0.25, 1, {40.3, -27.7, -78.7, -87.6, -49.7, 15.8, 72.8, 89.9, 58.1, -6.0, -65.1, -90.2,
+                                            -66.9, -8.6, 56.1, 89.6, 75.4, 20.9, -45.0, -86.9, -80.0, -30.1, 35.8, 82.7}},
+        {"sine at 180 degrees", 0, 0.5, 1, {-81.4, -86.2, -44.2, 21.7, 75.8, 89.4, 55.4, -9.4, -69.0, -90.4, -62.3, 0.1,
+                                            60.8, 90.0, 70.5, 12.4, -52.4, -88.7, -78.3, -26.8, 41.1, 85.1, 83.6, 35.6}},
+        {"sine at 270 degrees", 0, 0.75, 1, {-41.0, 27.5, 79.2, 88.0, 50.8, -13.0, -71.4, -90.1, -59.5, 3.7, 64.9, 90.3,
+                                             66.8, 8.9, -55.4, -89.4, -74.6, -18.2, 46.5, 86.7, 80.1, 30.0, -36.1, -82.9}},
+    };
+    for (auto &c : cases)
+    {
+        auto x = renderMono({60, 100, 1.6, 0.1, rate,
+                             {{"a_lowcut.off", 1}, {"a_osc1_type", 1},
+                              {"a_lfo0_rate", std::log2(2.397)}, {"a_lfo0_shape", c.shape},
+                              {"a_lfo0_phase", c.phase}, {"a_lfo0_trigmode", 1}},
+                             {{17, "a_osc1_pitch", c.sign * depth}}});
+        double t0 = F::onset(x, rate), sum[24] = {}, err = 0;
+        int count[24] = {}, prevSet = 0;
+        double prev = 0;
+        for (size_t i = 0; i + 1 < x.size(); ++i)
+            if (x[i] < 0 && x[i + 1] >= 0)
+            {
+                double z = i + x[i] / (x[i] - x[i + 1]);
+                if (prevSet)
+                {
+                    int b = (int)std::floor(((prev + z) / 2 / rate - t0) / 0.05) - 1;
+                    if (b >= 0 && b < 24)
+                    {
+                        sum[b] += 1200 * std::log2(rate / (z - prev) / c4);
+                        ++count[b];
+                    }
+                }
+                prev = z;
+                prevSet = 1;
+            }
+        for (int b = 0; b < 24; ++b)
+        {
+            double d = (count[b] ? sum[b] / count[b] : 0) - c.ref[b];
+            err += d * d / 24;
+        }
+        err = std::sqrt(err);
+        check(err <= 6, std::string("pitch LFO ") + c.name + " from the note's start: " +
+                            std::to_string(err) + " cents RMS from the reference");
+        std::printf("  pitch LFO %s: %.2f cents RMS\n", c.name, err);
+    }
+}
+
 // Amp velocity sensitivity against the reference (eighth session, batches m8c and m8d: a sine at
 // note 60, sensitivity S = +64, +128, +192, level 0.2-0.7 s after the onset relative to velocity
 // 127), with the converter's mapping Velocity > VCA Gain = -12 k dB, k = 2^((S - 128) / 64).
@@ -1308,6 +1381,7 @@ int main(int argc, char **argv)
         run("unison against the reference", [] { testUnisonAgainstReference(); });
         run("drift against the reference", [] { testDriftAgainstReference(); });
         run("cutoff drift against the reference", [] { testCutoffDriftAgainstReference(); });
+        run("pitch LFO phases against the reference", [] { testPitchLfoPhasesAgainstReference(); });
         run("velocity against the reference", [] { testVelocityAgainstReference(); });
         run("fitted tables", [] { testFittedTables(); });
     }
