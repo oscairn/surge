@@ -1702,14 +1702,14 @@ class alignas(16) SurgeStorage
     bool saveFixedTempo{false};
     // Analog-mode envelopes (scene envelopes and LFO envelopes) switch from attack to decay in
     // the block their level passes 1, held at 1, instead of two blocks later, which overshoots
-    // by up to 40 % with the shortest attack. Not streamed.
+    // by up to 40 % with the shortest attack. Saved in the patch; off when absent.
     bool analogEnvelopeAttackClamp{false};
     // Velocity > VCA Gain as an amplitude law: the gain is a * a with a = 1 - k (1 - velocity),
     // silent where a <= 0, and k = -sensitivity / 12 (0 to 4 over the parameter's -48..0 dB),
-    // instead of sensitivity x (1 - velocity) dB. Not streamed.
+    // instead of sensitivity x (1 - velocity) dB. Saved in the patch; off when absent.
     bool vcaVelocityAmplitudeLaw{false};
     // The filter and amp saturators use u / sqrt(1 + u^2) instead of tanh(u) (a softer knee),
-    // scaled back by the same curve at the drive. Not streamed.
+    // scaled back by the same curve at the drive. Saved in the patch; off when absent.
     bool saturatorAlgebraicCurve{false};
     float unstreamedTempo{120.f};             // this one is in actual BPM
     double songpos;

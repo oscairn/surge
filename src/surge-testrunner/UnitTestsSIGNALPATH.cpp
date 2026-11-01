@@ -477,3 +477,49 @@ TEST_CASE("Noise Tilt Is A First-Order Shelf", "[signalpath]")
     REQUIRE(patch.scene[0].noise_tilt.val.f == -20);
     REQUIRE(patch.scene[0].noise_tilt_freq.val.f == 30);
 }
+
+TEST_CASE("Engine Options Are Saved In The Patch", "[signalpath]")
+{
+    auto surge = Surge::Headless::createSurge(48000);
+    auto &st = surge->storage;
+    auto &patch = st.getPatch();
+    auto save = [&] {
+        void *data = nullptr;
+        auto size = patch.save_patch(&data);
+        return std::vector<char>((char *)data, (char *)data + size);
+    };
+    auto options = [&] {
+        return std::vector<bool>{st.analogEnvelopeAttackClamp, st.vcaVelocityAmplitudeLaw,
+                                 st.saturatorAlgebraicCurve};
+    };
+    auto set = [&](bool a, bool b, bool c) {
+        st.analogEnvelopeAttackClamp = a;
+        st.vcaVelocityAmplitudeLaw = b;
+        st.saturatorAlgebraicCurve = c;
+    };
+
+    // off by default, and a patch saved with them off doesn't mention them
+    REQUIRE(options() == std::vector<bool>{false, false, false});
+    auto off = save();
+    REQUIRE(std::string(off.begin(), off.end()).find("saturatorAlgebraicCurve") ==
+            std::string::npos);
+
+    // each round trips on its own
+    for (int i = 0; i < 3; i++)
+    {
+        INFO("option " << i);
+        set(i == 0, i == 1, i == 2);
+        auto on = save();
+        set(false, false, false);
+        patch.load_patch(on.data(), (int)on.size(), false);
+        REQUIRE(options() == std::vector<bool>{i == 0, i == 1, i == 2});
+    }
+
+    // a patch without them turns them off
+    set(true, true, true);
+    patch.load_patch(off.data(), (int)off.size(), false);
+    REQUIRE(options() == std::vector<bool>{false, false, false});
+    set(true, true, true);
+    REQUIRE(surge->loadPatchByPath("resources/test-data/patches/TestInitSaw.fxp", -1, "Test"));
+    REQUIRE(options() == std::vector<bool>{false, false, false});
+}

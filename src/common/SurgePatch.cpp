@@ -2553,6 +2553,9 @@ void SurgePatch::load_xml(const void *data, int datasize, bool is_preset)
     // Default hardclip value
     storage->hardclipMode = SurgeStorage::HARDCLIP_TO_18DBFS;
     storage->useSustainAsModulatorOnly = false;
+    storage->analogEnvelopeAttackClamp = false;
+    storage->vcaVelocityAmplitudeLaw = false;
+    storage->saturatorAlgebraicCurve = false;
 
     for (int sc = 0; sc < n_scenes; ++sc)
     {
@@ -2641,6 +2644,18 @@ void SurgePatch::load_xml(const void *data, int datasize, bool is_preset)
             {
                 storage->useSustainAsModulatorOnly.store(tv);
             }
+        }
+
+        // engine options a patch can turn on; absent means off
+        for (auto [name, option] :
+             {std::pair{"analogEnvelopeAttackClamp", &storage->analogEnvelopeAttackClamp},
+              {"vcaVelocityAmplitudeLaw", &storage->vcaVelocityAmplitudeLaw},
+              {"saturatorAlgebraicCurve", &storage->saturatorAlgebraicCurve}})
+        {
+            bool tv;
+            auto *el = TINYXML_SAFE_TO_ELEMENT(nonparamconfig->FirstChild(name));
+            if (el && el->QueryBoolAttribute("v", &tv) == TIXML_SUCCESS)
+                *option = tv;
         }
 
         auto *hcs = TINYXML_SAFE_TO_ELEMENT(nonparamconfig->FirstChild("hardclipmodes"));
@@ -4466,6 +4481,19 @@ unsigned int SurgePatch::save_xml(void **data) // allocates mem, must be freed b
         hcs.SetAttribute(an, (int)(storage->sceneHardclipMode[sc]));
     }
     nonparamconfig.InsertEndChild(hcs);
+
+    // engine options, written only when on so other patches save as before
+    for (auto [name, on] : {std::pair{"analogEnvelopeAttackClamp",
+                                      (bool)storage->analogEnvelopeAttackClamp},
+                            {"vcaVelocityAmplitudeLaw", (bool)storage->vcaVelocityAmplitudeLaw},
+                            {"saturatorAlgebraicCurve", (bool)storage->saturatorAlgebraicCurve}})
+    {
+        if (!on)
+            continue;
+        TiXmlElement el(name);
+        el.SetAttribute("v", 1);
+        nonparamconfig.InsertEndChild(el);
+    }
 
     // Revision 16 adds the TAM
     TiXmlElement tam("tuningApplicationMode");
