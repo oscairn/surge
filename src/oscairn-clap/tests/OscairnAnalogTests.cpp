@@ -1274,6 +1274,81 @@ static void testNoiseToneAgainstReference()
                 worstShape, worstLevel);
 }
 
+// Portamento "Time 2" against the reference (batches m8e and m10b: mono, fingered, Portamento
+// Time 64, a sine, legato intervals over an octave): the converter's mapping is the time table
+// plus Portamento Octave Limit. A glide over more than an octave jumps to an octave from the
+// target and glides the rest: the straight line through the pitch track between 20 and 80 % of
+// that last octave, read at the moment the pitch leaves the first note, lands within 0.5
+// semitone of where the reference's does, and its slope is within 5 % (proposed tolerances).
+static void testPortamentoOctaveLimitAgainstReference()
+{
+    namespace T = oscairn_tables;
+    const double rate = 44100;
+    struct Case
+    {
+        int from, to;
+        double jump, slope; // semitones from the target, semitones per second
+    };
+    const Case cases[] = {{48, 65, -11.92, 36.54}, {48, 72, -11.96, 36.56},
+                          {48, 84, -11.87, 36.59}, {84, 60, 11.91, 36.48},
+                          {84, 67, 11.89, 36.56}};
+    double worstJump = 0, worstSlope = 0;
+    for (auto &c : cases)
+    {
+        oscairn_analog::RenderSpec s{c.from, 100, 1.6, 0.1, rate,
+                                     {{"a_lowcut.off", 1}, {"a_osc1_type", 1}, {"a_polymode", 3},
+                                      {"a_portamento", T::portamentoTime[64]},
+                                      {"a_portamento_octave_limit", 1}},
+                                     {}};
+        s.legatoNote = c.to;
+        s.legatoAt = 1;
+        auto x = renderMono(s);
+        // pitch in semitones from the first note, one value per period
+        const double f = 440 * std::pow(2.0, (c.from - 69) / 12.0);
+        std::vector<double> t, k;
+        double prev = -1;
+        for (size_t i = 0; i + 1 < x.size(); ++i)
+            if (x[i] < 0 && x[i + 1] >= 0)
+            {
+                double z = i + x[i] / (x[i] - x[i + 1]);
+                if (prev >= 0)
+                {
+                    t.push_back((prev + z) / 2 / rate);
+                    k.push_back(12 * std::log2(rate / (z - prev) / f));
+                }
+                prev = z;
+            }
+        int iv = c.to - c.from;
+        double d = iv > 0 ? 1 : -1, tj = -1;
+        for (size_t i = 0; i < t.size() && tj < 0; ++i)
+            if (t[i] > 0.9 && std::fabs(k[i]) > 0.3)
+                tj = t[i];
+        double lo = iv - 12 * d + 0.2 * 12 * d, hi = iv - 12 * d + 0.8 * 12 * d;
+        double n = 0, st = 0, sk = 0, stt = 0, stk = 0;
+        for (size_t i = 0; i < t.size(); ++i)
+            if (tj >= 0 && t[i] > tj && d * k[i] >= d * lo && d * k[i] <= d * hi)
+            {
+                n += 1;
+                st += t[i];
+                sk += k[i];
+                stt += t[i] * t[i];
+                stk += t[i] * k[i];
+            }
+        double slope = n > 2 ? (n * stk - st * sk) / (n * stt - st * st) : 0;
+        double jump = n > 2 ? (sk - slope * st) / n + slope * tj - iv : 1e9;
+        worstJump = std::max(worstJump, std::fabs(jump - c.jump));
+        worstSlope = std::max(worstSlope, std::fabs(std::fabs(slope) / c.slope - 1));
+        check(std::fabs(jump - c.jump) <= 0.5 && std::fabs(std::fabs(slope) / c.slope - 1) <= 0.05,
+              "portamento octave limit " + std::to_string(c.from) + " to " +
+                  std::to_string(c.to) + ": jump to " + std::to_string(jump) +
+                  " semitones from the target (reference " + std::to_string(c.jump) +
+                  "), slope " + std::to_string(std::fabs(slope)) + " semitones/s (reference " +
+                  std::to_string(c.slope) + ")");
+    }
+    std::printf("  portamento octave limit: largest jump difference %.2f semitones, slope %.1f %%\n",
+                worstJump, 100 * worstSlope);
+}
+
 template <size_t N, size_t K>
 static void checkTable(const char *name, const float (&table)[N],
                        const oscairn_tables::Check (&checks)[K], double tolerance,
@@ -1532,6 +1607,8 @@ int main(int argc, char **argv)
         run("velocity against the reference", [] { testVelocityAgainstReference(); });
         run("saturators against the reference", [] { testSaturatorsAgainstReference(); });
         run("noise tone against the reference", [] { testNoiseToneAgainstReference(); });
+        run("portamento octave limit against the reference",
+            [] { testPortamentoOctaveLimitAgainstReference(); });
         run("fitted tables", [] { testFittedTables(); });
     }
     catch (const std::exception &e)
