@@ -447,7 +447,7 @@ extern Surge::Skin::Connector unison_voices, unison_detune, unison_spread;
 // Segment drift, without a control in the skin
 extern Surge::Skin::Connector segdrift_pitch, segdrift_offset, segdrift_cutoff, segdrift_time;
 extern Surge::Skin::Connector keyon_delay;
-extern Surge::Skin::Connector noise_tilt, noise_tilt_freq;
+extern Surge::Skin::Connector noise_tilt, noise_tilt_freq, portamento_octave_limit;
 }
 
 namespace ModSources

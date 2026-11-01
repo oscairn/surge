@@ -685,6 +685,15 @@ void SurgeVoice::update_portamento()
         quantStep = storage->currentScale.count;
     }
 
+    // octave limit: a glide over more than an octave starts an octave (scale length) from the
+    // target, so both time modes take one octave's time
+    if (scene->portamento_octave_limit.val.b)
+    {
+        float target = state.getPitch(storage);
+        state.portasrc_key =
+            std::clamp(state.portasrc_key, target - (float)quantStep, target + (float)quantStep);
+    }
+
     // portamento constant rate mode (multiply portamento time with every octave traversed
     // (or scale length in case of microtuning)
     if (scene->portamento.porta_constrate)

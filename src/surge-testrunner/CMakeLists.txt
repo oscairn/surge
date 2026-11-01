@@ -29,6 +29,7 @@ add_executable(${PROJECT_NAME}
   UnitTestsMSEG.cpp
   UnitTestsNOTEID.cpp
   UnitTestsPARAM.cpp
+  UnitTestsPORTAMENTO.cpp
   UnitTestsQUERY.cpp
   UnitTestsREFERENCE.cpp
   UnitTestsSEGMENTDRIFT.cpp

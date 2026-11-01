@@ -224,6 +224,8 @@ Connector segdrift_time = Connector("scene.segdrift_time", 0, 0, Components::Non
 Connector keyon_delay = Connector("scene.keyon_delay", 0, 0, Components::None);
 Connector noise_tilt = Connector("scene.noise_tilt", 0, 0, Components::None);
 Connector noise_tilt_freq = Connector("scene.noise_tilt_freq", 0, 0, Components::None);
+Connector portamento_octave_limit =
+    Connector("scene.portamento_octave_limit", 0, 0, Components::None);
 Connector amp_drive_asymmetry = Connector("scene.amp_drive_asymmetry", 0, 0, Components::None);
 Connector polylimit =
     Connector("scene.polylimit", 100, 41, 43, 14, Components::NumberField)

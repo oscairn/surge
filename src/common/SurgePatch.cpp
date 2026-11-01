@@ -781,6 +781,10 @@ SurgePatch::SurgePatch(SurgeStorage *storage)
             p_id.next(), id_s++, "noise_tilt_freq", "Noise Tilt Frequency",
             fmt::format("{:c}/mixer/noise/tilt_frequency", 'a' + sc), ct_freq_audible,
             Surge::Skin::Scene::noise_tilt_freq, sc_id, cg_GLOBAL, 0, true));
+        a->push_back(scene[sc].portamento_octave_limit.assign(
+            p_id.next(), id_s++, "portamento_octave_limit", "Portamento Octave Limit",
+            fmt::format("{:c}/portamento/octave_limit", 'a' + sc), ct_bool,
+            Surge::Skin::Scene::portamento_octave_limit, sc_id, cg_GLOBAL, 0, false));
     }
 
     param_ptr.push_back(
@@ -2131,7 +2135,7 @@ void SurgePatch::load_xml(const void *data, int datasize, bool is_preset)
                          &sc.prefilter_ws.drive, &sc.unison_voices, &sc.unison_detune,
                          &sc.unison_spread, &sc.segdrift_pitch, &sc.segdrift_offset,
                          &sc.segdrift_cutoff, &sc.segdrift_time, &sc.keyon_delay,
-                         &sc.noise_tilt, &sc.noise_tilt_freq})
+                         &sc.noise_tilt, &sc.noise_tilt_freq, &sc.portamento_octave_limit})
         {
             p->val = p->val_default;
             p->deactivated = p->can_deactivate();
