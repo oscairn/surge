@@ -1567,7 +1567,7 @@ void ModulationSideControls::showAddTargetMenu()
 
                 if (cg == cg_LFO)
                 {
-                    if (cge >= ms_lfo1 && cge <= ms_lfo6)
+                    if (cge >= ms_lfo1 && cge < ms_lfo1 + n_lfos_voice)
                     {
                         cg = (ControlGroup)1000;
                     }

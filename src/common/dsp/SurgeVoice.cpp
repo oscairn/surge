@@ -287,6 +287,14 @@ SurgeVoice::SurgeVoice(SurgeStorage *storage, SurgeSceneStorage *oscene, pdata *
 
     for (int i = 0; i < n_lfos_voice; i++)
     {
+        // Voice LFOs 7-12 only run in voices that start with a use for them, so that other
+        // voices draw the same random numbers as before they existed
+        if (i >= 6 && !lfoNeeded(i))
+        {
+            modsources[ms_lfo1 + i] = nullptr;
+            continue;
+        }
+
         lfo[i].assign(storage, &scene->lfo[i], localcopy, &state,
                       &storage->getPatch().stepsequences[state.scene_id][i],
                       &storage->getPatch().msegs[state.scene_id][i],
@@ -385,7 +393,10 @@ SurgeVoice::SurgeVoice(SurgeStorage *storage, SurgeSceneStorage *oscene, pdata *
 
     for (int i = 0; i < n_lfos_voice; i++)
     {
-        lfo[i].attack();
+        if (lfoRunning(i))
+        {
+            lfo[i].attack();
+        }
     }
 
     calc_ctrldata<true>(0, 0); // init interpolators
@@ -647,7 +658,10 @@ void SurgeVoice::release()
 
     for (int i = 0; i < n_lfos_voice; i++)
     {
-        lfo[i].release();
+        if (lfoRunning(i))
+        {
+            lfo[i].release();
+        }
     }
 
     state.gate = false;
@@ -769,6 +783,11 @@ template <bool first> void SurgeVoice::calc_ctrldata(QuadFilterChainState *Q, in
 
     for (int i = 0; i < n_lfos_voice; i++)
     {
+        if (!lfoRunning(i))
+        {
+            continue;
+        }
+
         if (scene->lfo[i].shape.val.i == lt_formula)
         {
             Surge::Formula::setupEvaluatorStateFrom(lfo[i].formulastate, storage->getPatch(),
@@ -791,6 +810,11 @@ template <bool first> void SurgeVoice::calc_ctrldata(QuadFilterChainState *Q, in
 
     for (int i = 0; i < n_lfos_voice; ++i)
     {
+        if (!lfoRunning(i))
+        {
+            continue;
+        }
+
         if (lfo[i].retrigger_AEG)
         {
             auto ms = ((ADSRModulationSource *)modsources[ms_ampeg]);
@@ -1638,7 +1662,10 @@ void SurgeVoice::freeAllocatedElements()
     }
     for (int i = 0; i < n_lfos_voice; ++i)
     {
-        lfo[i].completedModulation();
+        if (lfoRunning(i))
+        {
+            lfo[i].completedModulation();
+        }
     }
 }
 
@@ -1711,6 +1738,11 @@ void SurgeVoice::retriggerLFOEnvelopes()
 {
     for (int i = 0; i < n_lfos_voice; ++i)
     {
+        if (!lfoRunning(i))
+        {
+            continue;
+        }
+
         auto &anLfo = lfo[i];
         auto &lfoData = scene->lfo[i];
 

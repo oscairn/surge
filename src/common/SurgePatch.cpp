@@ -554,89 +554,98 @@ SurgePatch::SurgePatch(SurgeStorage *storage)
                                                        false, kNoPopup));
         }
 
-        for (int l = 0; l < n_lfos; l++)
-        {
+        // Voice LFOs 7-12 come last in the scene (below) so the other parameters keep their order
+        auto addLfoParams = [&](int l) {
             char label[LABEL_SIZE];
             const int lid = (l % n_lfos_voice) + 1;
+            const int sl = lfoStreamedIndex(l);
             std::string lt = (l < n_lfos_voice) ? "vlfo" : "slfo";
 
-            snprintf(label, LABEL_SIZE, "lfo%i_shape", l);
+            snprintf(label, LABEL_SIZE, "lfo%i_shape", sl);
             a->push_back(scene[sc].lfo[l].shape.assign(
                 p_id.next(), id_s++, label, "Type",
                 fmt::format("{:c}/{}/{}/type", 'a' + sc, lt, lid), ct_lfotype,
                 Surge::Skin::LFO::shape, sc_id, cg_LFO, ms_lfo1 + l));
 
-            snprintf(label, LABEL_SIZE, "lfo%i_rate", l);
+            snprintf(label, LABEL_SIZE, "lfo%i_rate", sl);
             a->push_back(scene[sc].lfo[l].rate.assign(
                 p_id.next(), id_s++, label, "Rate",
                 fmt::format("{:c}/{}/{}/rate", 'a' + sc, lt, lid), ct_lforate_deactivatable,
                 Surge::Skin::LFO::rate, sc_id, cg_LFO, ms_lfo1 + l, true, sceasy, false));
 
-            snprintf(label, LABEL_SIZE, "lfo%i_phase", l);
+            snprintf(label, LABEL_SIZE, "lfo%i_phase", sl);
             a->push_back(scene[sc].lfo[l].start_phase.assign(
                 p_id.next(), id_s++, label, "Phase / Shuffle",
                 fmt::format("{:c}/{}/{}/phase", 'a' + sc, lt, lid), ct_lfophaseshuffle,
                 Surge::Skin::LFO::phase, sc_id, cg_LFO, ms_lfo1 + l, true));
 
-            snprintf(label, LABEL_SIZE, "lfo%i_magnitude", l);
+            snprintf(label, LABEL_SIZE, "lfo%i_magnitude", sl);
             a->push_back(scene[sc].lfo[l].magnitude.assign(
                 p_id.next(), id_s++, label, "Amplitude",
                 fmt::format("{:c}/{}/{}/amplitude", 'a' + sc, lt, lid), ct_lfoamplitude,
                 Surge::Skin::LFO::amplitude, sc_id, cg_LFO, ms_lfo1 + l, true, sceasy));
 
-            snprintf(label, LABEL_SIZE, "lfo%i_deform", l);
+            snprintf(label, LABEL_SIZE, "lfo%i_deform", sl);
             a->push_back(scene[sc].lfo[l].deform.assign(
                 p_id.next(), id_s++, label, "Deform",
                 fmt::format("{:c}/{}/{}/deform", 'a' + sc, lt, lid), ct_lfodeform,
                 Surge::Skin::LFO::deform, sc_id, cg_LFO, ms_lfo1 + l, true));
 
-            snprintf(label, LABEL_SIZE, "lfo%i_trigmode", l);
+            snprintf(label, LABEL_SIZE, "lfo%i_trigmode", sl);
             a->push_back(scene[sc].lfo[l].trigmode.assign(
                 p_id.next(), id_s++, label, "Trigger Mode",
                 fmt::format("{:c}/{}/{}/trigger_mode", 'a' + sc, lt, lid), ct_lfotrigmode,
                 Surge::Skin::LFO::trigger_mode, sc_id, cg_LFO, ms_lfo1 + l, false, kNoPopup));
 
-            snprintf(label, LABEL_SIZE, "lfo%i_unipolar", l);
+            snprintf(label, LABEL_SIZE, "lfo%i_unipolar", sl);
             a->push_back(scene[sc].lfo[l].unipolar.assign(
                 p_id.next(), id_s++, label, "Unipolar",
                 fmt::format("{:c}/{}/{}/unipolar", 'a' + sc, lt, lid), ct_bool_unipolar,
                 Surge::Skin::LFO::unipolar, sc_id, cg_LFO, ms_lfo1 + l, false));
 
-            snprintf(label, LABEL_SIZE, "lfo%i_delay", l);
+            snprintf(label, LABEL_SIZE, "lfo%i_delay", sl);
             a->push_back(scene[sc].lfo[l].delay.assign(
                 p_id.next(), id_s++, label, "Delay",
                 fmt::format("{:c}/{}/{}/eg/delay", 'a' + sc, lt, lid), ct_envtime_deactivatable,
                 Surge::Skin::LFO::delay, sc_id, cg_LFO, ms_lfo1 + l, true, kMini));
 
-            snprintf(label, LABEL_SIZE, "lfo%i_attack", l);
+            snprintf(label, LABEL_SIZE, "lfo%i_attack", sl);
             a->push_back(scene[sc].lfo[l].attack.assign(
                 p_id.next(), id_s++, label, "Attack",
                 fmt::format("{:c}/{}/{}/eg/attack", 'a' + sc, lt, lid), ct_envtime,
                 Surge::Skin::LFO::attack, sc_id, cg_LFO, ms_lfo1 + l, true, kMini));
 
-            snprintf(label, LABEL_SIZE, "lfo%i_hold", l);
+            snprintf(label, LABEL_SIZE, "lfo%i_hold", sl);
             a->push_back(scene[sc].lfo[l].hold.assign(
                 p_id.next(), id_s++, label, "Hold",
                 fmt::format("{:c}/{}/{}/eg/hold", 'a' + sc, lt, lid), ct_envtime,
                 Surge::Skin::LFO::hold, sc_id, cg_LFO, ms_lfo1 + l, true, kMini));
 
-            snprintf(label, LABEL_SIZE, "lfo%i_decay", l);
+            snprintf(label, LABEL_SIZE, "lfo%i_decay", sl);
             a->push_back(scene[sc].lfo[l].decay.assign(
                 p_id.next(), id_s++, label, "Decay",
                 fmt::format("{:c}/{}/{}/eg/decay", 'a' + sc, lt, lid), ct_envtime,
                 Surge::Skin::LFO::decay, sc_id, cg_LFO, ms_lfo1 + l, true, kMini));
 
-            snprintf(label, LABEL_SIZE, "lfo%i_sustain", l);
+            snprintf(label, LABEL_SIZE, "lfo%i_sustain", sl);
             a->push_back(scene[sc].lfo[l].sustain.assign(
                 p_id.next(), id_s++, label, "Sustain",
                 fmt::format("{:c}/{}/{}/eg/sustain", 'a' + sc, lt, lid), ct_percent,
                 Surge::Skin::LFO::sustain, sc_id, cg_LFO, ms_lfo1 + l, true, kMini));
 
-            snprintf(label, LABEL_SIZE, "lfo%i_release", l);
+            snprintf(label, LABEL_SIZE, "lfo%i_release", sl);
             a->push_back(scene[sc].lfo[l].release.assign(
                 p_id.next(), id_s++, label, "Release",
                 fmt::format("{:c}/{}/{}/eg/release", 'a' + sc, lt, lid), ct_envtime_lfodecay,
                 Surge::Skin::LFO::release, sc_id, cg_LFO, ms_lfo1 + l, true, kMini));
+        };
+
+        for (int l = 0; l < n_lfos; l++)
+        {
+            if (l < 6 || l >= n_lfos_voice)
+            {
+                addLfoParams(l);
+            }
         }
 
         // Mixer channel switches with no place in the skin yet, in lag_entries order
@@ -740,6 +749,11 @@ SurgePatch::SurgePatch(SurgeStorage *storage)
             Surge::Skin::Scene::segdrift_time, sc_id, cg_GLOBAL, 0, false));
         scene[sc].segdrift_time.val_default.f = 2.5f; // about 5.7 s
         scene[sc].segdrift_time.val.f = 2.5f;
+
+        for (int l = 6; l < n_lfos_voice; l++)
+        {
+            addLfoParams(l);
+        }
     }
 
     param_ptr.push_back(
@@ -2093,6 +2107,35 @@ void SurgePatch::load_xml(const void *data, int datasize, bool is_preset)
             p->val = p->val_default;
             p->deactivated = p->can_deactivate();
         }
+
+        // Voice LFOs 7-12, as a patch that streams them with no flags would leave them
+        for (int l = 6; l < n_lfos_voice; l++)
+        {
+            for (auto *q = &sc.lfo[l].rate; q <= &sc.lfo[l].release; q++)
+            {
+                q->val = q->val_default;
+                q->clear_flags();
+                q->deactivated = false;
+                q->deform_type = 0;
+            }
+        }
+    }
+
+    for (int sc = 0; sc < n_scenes; sc++)
+    {
+        for (int l = 6; l < n_lfos_voice; l++)
+        {
+            auto &ss = stepsequences[sc][l];
+
+            for (int i = 0; i < n_stepseqsteps; i++)
+            {
+                ss.steps[i] = 0.f;
+            }
+            ss.trigmask = 0;
+            ss.loop_start = 0;
+            ss.loop_end = 15;
+            ss.shuffle = 0.f;
+        }
     }
 
     TiXmlElement *p;
@@ -2328,6 +2371,8 @@ void SurgePatch::load_xml(const void *data, int datasize, bool is_preset)
                             modsource++;
                         }
                     }
+
+                    modsource = modsourceFromStreamed(modsource);
 
                     // see GitHub issue #6424
                     if (revision < 21 && param_ptr[i] == &volume)
@@ -3159,7 +3204,7 @@ void SurgePatch::load_xml(const void *data, int datasize, bool is_preset)
             (p->QueryIntAttribute("i", &lfo) == TIXML_SUCCESS) && within_range(0, sc, 1) &&
             within_range(0, lfo, n_lfos - 1))
         {
-            stepSeqFromXmlElement(&(stepsequences[sc][lfo]), p);
+            stepSeqFromXmlElement(&(stepsequences[sc][lfoStreamedIndex(lfo)]), p);
         }
 
         p = TINYXML_SAFE_TO_ELEMENT(p->NextSibling("sequence"));
@@ -3226,7 +3271,7 @@ void SurgePatch::load_xml(const void *data, int datasize, bool is_preset)
             continue;
         }
 
-        auto *ms = &(msegs[sc][mi]);
+        auto *ms = &(msegs[sc][lfoStreamedIndex(mi)]);
 
         msegFromXMLElement(ms, p, userPrefRestoreMSEGFromPatch);
         p = TINYXML_SAFE_TO_ELEMENT(p->NextSibling("mseg"));
@@ -3284,7 +3329,7 @@ void SurgePatch::load_xml(const void *data, int datasize, bool is_preset)
             continue;
         }
 
-        auto *fs = &(formulamods[sc][mi]);
+        auto *fs = &(formulamods[sc][lfoStreamedIndex(mi)]);
 
         formulaFromXMLElement(fs, p);
         p = TINYXML_SAFE_TO_ELEMENT(p->NextSibling("formula"));
@@ -3318,7 +3363,8 @@ void SurgePatch::load_xml(const void *data, int datasize, bool is_preset)
                     l->QueryIntAttribute("extraAmplitude", &val) == TIXML_SUCCESS && sc >= 0 &&
                     id >= 0 && sc < n_scenes && id < n_lfos)
                 {
-                    scene[sc].lfo[id].lfoExtraAmplitude = (LFOStorage::LFOExtraOutputAmplitude)val;
+                    scene[sc].lfo[lfoStreamedIndex(id)].lfoExtraAmplitude =
+                        (LFOStorage::LFOExtraOutputAmplitude)val;
                 }
                 l = TINYXML_SAFE_TO_ELEMENT(l->NextSiblingElement("lfo"));
             }
@@ -3393,7 +3439,8 @@ void SurgePatch::load_xml(const void *data, int datasize, bool is_preset)
                 lb->QueryIntAttribute("scene", &scene) == TIXML_SUCCESS && lv &&
                 within_range(0, scene, n_scenes - 1) && within_range(0, lfo, n_lfos - 1) &&
                 within_range(0, idx, max_lfo_indices - 1))
-                strxcpy(LFOBankLabel[scene][lfo][idx], lv, CUSTOM_CONTROLLER_LABEL_SIZE);
+                strxcpy(LFOBankLabel[scene][lfoStreamedIndex(lfo)][idx], lv,
+                        CUSTOM_CONTROLLER_LABEL_SIZE);
             lb = TINYXML_SAFE_TO_ELEMENT(lb->NextSibling("label"));
         }
     }
@@ -3511,7 +3558,7 @@ void SurgePatch::load_xml(const void *data, int datasize, bool is_preset)
 
                 if (p->QueryIntAttribute("modsource", &ival) == TIXML_SUCCESS)
                 {
-                    dawExtraState.editor.modsource = (modsources)ival;
+                    dawExtraState.editor.modsource = (modsources)modsourceFromStreamed(ival);
                 }
 
                 if (p->QueryIntAttribute("isMSEGOpen", &ival) == TIXML_SUCCESS)
@@ -3577,13 +3624,15 @@ void SurgePatch::load_xml(const void *data, int datasize, bool is_preset)
 
                     if (p->QueryIntAttribute(con, &ival) == TIXML_SUCCESS)
                     {
-                        dawExtraState.editor.modsource_editor[sc] = (modsources)ival;
+                        dawExtraState.editor.modsource_editor[sc] =
+                            (modsources)modsourceFromStreamed(ival);
                     }
 
                     for (int lf = 0; lf < n_lfos; ++lf)
                     {
                         std::string msns =
-                            "mseg_state_" + std::to_string(sc) + "_" + std::to_string(lf);
+                            "mseg_state_" + std::to_string(sc) + "_" +
+                            std::to_string(lfoStreamedIndex(lf));
                         auto mss = TINYXML_SAFE_TO_ELEMENT(p->FirstChild(msns));
 
                         if (mss)
@@ -3699,7 +3748,8 @@ void SurgePatch::load_xml(const void *data, int datasize, bool is_preset)
                     for (int lf = 0; lf < n_lfos; ++lf)
                     {
                         std::string fsns =
-                            "formula_state_" + std::to_string(sc) + "_" + std::to_string(lf);
+                            "formula_state_" + std::to_string(sc) + "_" +
+                            std::to_string(lfoStreamedIndex(lf));
                         auto fss = TINYXML_SAFE_TO_ELEMENT(p->FirstChild(fsns));
 
                         if (fss)
@@ -4277,7 +4327,7 @@ unsigned int SurgePatch::save_xml(void **data) // allocates mem, must be freed b
                             // if you add something here make sure to replicated it in the
                             // global below
                             TiXmlElement mr("modrouting");
-                            mr.SetAttribute("source", r->at(b).source_id);
+                            mr.SetAttribute("source", modsourceToStreamed(r->at(b).source_id));
                             mr.SetAttribute("depth", float_to_clocalestr(r->at(b).depth));
                             mr.SetAttribute("muted", r->at(b).muted);
                             mr.SetAttribute("source_index", r->at(b).source_index);
@@ -4295,7 +4345,7 @@ unsigned int SurgePatch::save_xml(void **data) // allocates mem, must be freed b
                     if (r->at(b).destination_id == i)
                     {
                         TiXmlElement mr("modrouting");
-                        mr.SetAttribute("source", r->at(b).source_id);
+                        mr.SetAttribute("source", modsourceToStreamed(r->at(b).source_id));
                         mr.SetAttribute("depth", float_to_clocalestr(r->at(b).depth));
                         mr.SetAttribute("muted", r->at(b).muted);
                         mr.SetAttribute("source_index", r->at(b).source_index);
@@ -4453,7 +4503,7 @@ unsigned int SurgePatch::save_xml(void **data) // allocates mem, must be freed b
             {
                 TiXmlElement p("sequence");
                 p.SetAttribute("scene", sc);
-                p.SetAttribute("i", l);
+                p.SetAttribute("i", lfoStreamedIndex(l));
 
                 stepSeqToXmlElement(&(stepsequences[sc][l]), p, l < n_lfos_voice);
 
@@ -4472,7 +4522,7 @@ unsigned int SurgePatch::save_xml(void **data) // allocates mem, must be freed b
             {
                 TiXmlElement p("mseg");
                 p.SetAttribute("scene", sc);
-                p.SetAttribute("i", l);
+                p.SetAttribute("i", lfoStreamedIndex(l));
 
                 auto *ms = &(msegs[sc][l]);
                 msegToXMLElement(ms, p);
@@ -4491,7 +4541,7 @@ unsigned int SurgePatch::save_xml(void **data) // allocates mem, must be freed b
             {
                 TiXmlElement p("formula");
                 p.SetAttribute("scene", sc);
-                p.SetAttribute("i", l);
+                p.SetAttribute("i", lfoStreamedIndex(l));
 
                 auto *fs = &(formulamods[sc][l]);
                 formulaToXMLElement(fs, p);
@@ -4508,7 +4558,7 @@ unsigned int SurgePatch::save_xml(void **data) // allocates mem, must be freed b
         {
             TiXmlElement p("lfo");
             p.SetAttribute("scene", sc);
-            p.SetAttribute("i", l);
+            p.SetAttribute("i", lfoStreamedIndex(l));
 
             p.SetAttribute("extraAmplitude", scene[sc].lfo[l].lfoExtraAmplitude);
             extralfo.InsertEndChild(p);
@@ -4545,7 +4595,7 @@ unsigned int SurgePatch::save_xml(void **data) // allocates mem, must be freed b
                 if (LFOBankLabel[s][i][d][0] != 0)
                 {
                     TiXmlElement L("label");
-                    L.SetAttribute("lfo", i);
+                    L.SetAttribute("lfo", lfoStreamedIndex(i));
                     L.SetAttribute("idx", d);
                     L.SetAttribute("scene", s);
                     L.SetAttribute("v", LFOBankLabel[s][i][d]);
@@ -4616,7 +4666,7 @@ unsigned int SurgePatch::save_xml(void **data) // allocates mem, must be freed b
         TiXmlElement eds("editor");
         eds.SetAttribute("current_scene", dawExtraState.editor.current_scene);
         eds.SetAttribute("current_fx", dawExtraState.editor.current_fx);
-        eds.SetAttribute("modsource", dawExtraState.editor.modsource);
+        eds.SetAttribute("modsource", modsourceToStreamed(dawExtraState.editor.modsource));
 
         TiXmlElement over("overlays");
         for (auto ol : dawExtraState.editor.activeOverlays)
@@ -4653,15 +4703,15 @@ unsigned int SurgePatch::save_xml(void **data) // allocates mem, must be freed b
             std::string con = "current_osc_" + std::to_string(sc);
             eds.SetAttribute(con, dawExtraState.editor.current_osc[sc]);
             con = "modsource_editor_" + std::to_string(sc);
-            eds.SetAttribute(con, dawExtraState.editor.modsource_editor[sc]);
+            eds.SetAttribute(con, modsourceToStreamed(dawExtraState.editor.modsource_editor[sc]));
 
             if (dawExtraState.editor.msegStateIsPopulated)
             {
                 for (int lf = 0; lf < n_lfos; ++lf)
                 {
                     auto q = &(dawExtraState.editor.msegEditState[sc][lf]);
-                    std::string msns =
-                        "mseg_state_" + std::to_string(sc) + "_" + std::to_string(lf);
+                    std::string msns = "mseg_state_" + std::to_string(sc) + "_" +
+                                       std::to_string(lfoStreamedIndex(lf));
                     TiXmlElement mss(msns);
                     /*
                      * We still write this from model to DAS even though we don't read it unless
@@ -4677,7 +4727,8 @@ unsigned int SurgePatch::save_xml(void **data) // allocates mem, must be freed b
             for (int lf = 0; lf < n_lfos; ++lf)
             {
                 auto q = &(dawExtraState.editor.formulaEditState[sc][lf]);
-                std::string fsns = "formula_state_" + std::to_string(sc) + "_" + std::to_string(lf);
+                std::string fsns = "formula_state_" + std::to_string(sc) + "_" +
+                                   std::to_string(lfoStreamedIndex(lf));
                 TiXmlElement fss(fsns);
 
                 // debugger

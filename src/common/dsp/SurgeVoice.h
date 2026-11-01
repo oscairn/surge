@@ -298,6 +298,21 @@ class alignas(16) SurgeVoice
     void retriggerPortaIfKeyChanged();
 
     LFOModulationSource lfo[n_lfos_voice];
+    bool lfoRunning(int i) const { return modsources[ms_lfo1 + i] != nullptr; }
+    // A voice LFO is needed when a voice routing uses it or its step sequencer retriggers an EG
+    bool lfoNeeded(int i) const
+    {
+        for (auto &r : scene->modulation_voice)
+        {
+            if (r.source_id == ms_lfo1 + i)
+            {
+                return true;
+            }
+        }
+
+        return scene->lfo[i].shape.val.i == lt_stepseq &&
+               storage->getPatch().stepsequences[state.scene_id][i].trigmask != 0;
+    }
 
     // Filterblock state storage
     void SetQFB(QuadFilterChainState *, int); // Set the parameters & registers

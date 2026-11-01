@@ -71,9 +71,25 @@ static_assert(std::is_same<std::string, decltype(std::declval<fs::path>().u8stri
 // patch layer
 
 const int n_oscs = 3;
-const int n_lfos_voice = 6;
+const int n_lfos_voice = 12;
 const int n_lfos_scene = 6;
 const int n_lfos = n_lfos_voice + n_lfos_scene;
+
+/*
+ * Storage keeps the voice LFOs first and then the scene LFOs. Streams (parameter names, the
+ * step sequencer, MSEG, formula and label entries) keep the numbering from before voice LFOs
+ * 7-12 were added: voice LFOs 1-6 are 0-5, scene LFOs 6-11 and voice LFOs 7-12 are 12-17.
+ * The mapping is its own inverse.
+ */
+inline int lfoStreamedIndex(int l)
+{
+    if (l >= 6 && l < n_lfos_voice)
+        return l + n_lfos_scene;
+    if (l >= n_lfos_voice && l < n_lfos)
+        return l - n_lfos_scene;
+    return l;
+}
+
 const int max_lfo_indices = 16;
 const int n_osc_params = 7;
 const int n_egs = 2;
@@ -155,7 +171,7 @@ const int FIRoffsetI16 = FIRipolI16_N >> 1;
 
 const int ff_revision = 31;
 
-const int n_scene_params = 302;
+const int n_scene_params = 380;
 const int n_global_params = 11 + n_fx_slots * (n_fx_params + 1); // each param plus a type
 const int n_global_postparams = 1;
 const int n_total_params = n_global_params + 2 * n_scene_params + n_global_postparams;

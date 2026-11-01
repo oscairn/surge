@@ -30,6 +30,7 @@ add_executable(${PROJECT_NAME}
   UnitTestsQUERY.cpp
   UnitTestsREFERENCE.cpp
   UnitTestsSEGMENTDRIFT.cpp
+  UnitTestsVOICELFOS.cpp
   UnitTestsSIGNALPATH.cpp
   UnitTestsUNISON.cpp
   UnitTestsTUN.cpp

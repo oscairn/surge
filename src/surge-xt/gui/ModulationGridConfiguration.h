@@ -106,6 +106,9 @@ struct ModulationGrid : juce::DeletedAtShutdown
 
     std::unordered_map<modsources, Entry> data;
 
+    // Voice LFOs 7-12 have no place in the grid yet
+    bool has(modsources ms) const { return data.find(ms) != data.end(); }
+
     const Entry &get(modsources ms) const
     {
         jassert(data.find(ms) != data.end());

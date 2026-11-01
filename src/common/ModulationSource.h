@@ -62,6 +62,12 @@ enum modsources
     ms_lfo4,
     ms_lfo5,
     ms_lfo6,
+    ms_lfo7,
+    ms_lfo8,
+    ms_lfo9,
+    ms_lfo10,
+    ms_lfo11,
+    ms_lfo12,
     ms_slfo1,
     ms_slfo2,
     ms_slfo3,
@@ -111,6 +117,12 @@ const int modsource_display_order[n_modsources] = {
     ms_lfo4,
     ms_lfo5,
     ms_lfo6,
+    ms_lfo7,
+    ms_lfo8,
+    ms_lfo9,
+    ms_lfo10,
+    ms_lfo11,
+    ms_lfo12,
     ms_slfo1,
     ms_slfo2,
     ms_slfo3,
@@ -142,6 +154,9 @@ const char modsource_names_button[n_modsources][32] = {
     "LFO 1",       "LFO 2",
     "LFO 3",       "LFO 4",
     "LFO 5",       "LFO 6",
+    "LFO 7",       "LFO 8",
+    "LFO 9",       "LFO 10",
+    "LFO 11",      "LFO 12",
     "S-LFO 1",     "S-LFO 2",
     "S-LFO 3",     "S-LFO 4",
     "S-LFO 5",     "S-LFO 6",
@@ -178,6 +193,12 @@ const char modsource_names[n_modsources][32] = {
     "Voice LFO 4",
     "Voice LFO 5",
     "Voice LFO 6",
+    "Voice LFO 7",
+    "Voice LFO 8",
+    "Voice LFO 9",
+    "Voice LFO 10",
+    "Voice LFO 11",
+    "Voice LFO 12",
     "Scene LFO 1",
     "Scene LFO 2",
     "Scene LFO 3",
@@ -203,9 +224,10 @@ const char modsource_names_tag[n_modsources][32] = {
     "off",     "vel",     "keytrk",  "pat",        "at",          "pb",         "mw",
     "macro_1", "macro_2", "macro_3", "macro_4",    "macro_5",     "macro_6",    "macro_7",
     "macro_8", "aeg",     "feg",     "vlfo_1",     "vlfo_2",      "vlfo_3",     "vlfo_4",
-    "vlfo_5",  "vlfo_6",  "slfo_1",  "slfo_2",     "slfo_3",      "slfo_4",     "slfo_5",
-    "slfo_6",  "timbre",  "rel_vel", "rand_bi",    "rand_uni",    "alt_bi",     "alt_uni",
-    "breath",  "expr",    "sus",     "lowest_key", "highest_key", "latest_key",
+    "vlfo_5",  "vlfo_6",  "vlfo_7",  "vlfo_8",     "vlfo_9",      "vlfo_10",    "vlfo_11",
+    "vlfo_12", "slfo_1",  "slfo_2",  "slfo_3",     "slfo_4",      "slfo_5",     "slfo_6",
+    "timbre",  "rel_vel", "rand_bi", "rand_uni",   "alt_bi",      "alt_uni",    "breath",
+    "expr",    "sus",     "lowest_key", "highest_key", "latest_key",
 };
 
 inline bool isScenelevel(modsources ms)
@@ -254,6 +276,34 @@ inline bool isVoiceModulator(modsources ms) { return !((ms >= ms_slfo1) && (ms <
 inline bool canModulateVoiceModulators(modsources ms)
 {
     return (ms <= ms_ctrl8) || ms == ms_timbre;
+}
+
+/*
+ * Voice LFOs 7 to 12 were added after the stream format had numbered the sources, so streams
+ * keep the older numbers: voice LFOs 1-6, the scene LFOs and the rest as before, then voice
+ * LFOs 7-12 after Latest Key. These convert between a streamed number and a modsources value
+ * (anything out of range is returned unchanged).
+ */
+inline int modsourceToStreamed(int ms)
+{
+    constexpr int added = ms_slfo1 - ms_lfo7;
+
+    if (ms >= ms_lfo7 && ms < ms_slfo1)
+        return n_modsources - added + ms - ms_lfo7;
+    if (ms >= ms_slfo1 && ms < n_modsources)
+        return ms - added;
+    return ms;
+}
+
+inline int modsourceFromStreamed(int s)
+{
+    constexpr int added = ms_slfo1 - ms_lfo7;
+
+    if (s >= ms_lfo7 && s < n_modsources - added)
+        return s + added;
+    if (s >= n_modsources - added && s < n_modsources)
+        return ms_lfo7 + s - (n_modsources - added);
+    return s;
 }
 
 class SurgeStorage;

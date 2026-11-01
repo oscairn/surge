@@ -4009,7 +4009,7 @@ void SurgeSynthesizer::prepareModsourceDoProcess(int scenemask)
             for (int i = 0; i < n_modsources; i++)
             {
                 bool setTo = false;
-                if (i >= ms_lfo1 && i <= ms_lfo6)
+                if (i >= ms_lfo1 && i < ms_lfo1 + n_lfos_voice)
                 {
                     auto lf = &(storage.getPatch().scene[scene].lfo[i - ms_lfo1]);
                     if (lf->shape.val.i == lt_stepseq)

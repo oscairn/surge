@@ -1754,6 +1754,12 @@ void SurgeGUIEditor::openOrRecreateEditor()
     for (int k = 1; k < n_modsources; k++)
     {
         modsources ms = (modsources)k;
+
+        if (!Surge::GUI::ModulationGrid::getModulationGrid()->has(ms))
+        {
+            continue;
+        }
+
         auto e = Surge::GUI::ModulationGrid::getModulationGrid()->get(ms);
 
         if (e.isPrimary)
@@ -2009,7 +2015,7 @@ void SurgeGUIEditor::openOrRecreateEditor()
             lfoEditSwitch->setValue(isAnyOverlayPresent(MSEG_EDITOR) ||
                                     isAnyOverlayPresent(FORMULA_EDITOR));
 
-            if ((q >= ms_lfo1 && q <= ms_lfo6) || (q >= ms_slfo1 && q <= ms_slfo6))
+            if (q >= ms_lfo1 && q <= ms_slfo6)
             {
                 auto *lfodata = &(synth->storage.getPatch().scene[current_scene].lfo[q - ms_lfo1]);
 
@@ -5259,7 +5265,7 @@ SurgeGUIEditor::layoutComponentForSkin(std::shared_ptr<Surge::GUI::Skin::Control
             lfoDisplay->setMSEGStorage(&synth->storage.getPatch().msegs[current_scene][lfo_id]);
             lfoDisplay->setFormulaStorage(
                 &synth->storage.getPatch().formulamods[current_scene][lfo_id]);
-            lfoDisplay->setCanEditEnvelopes(lfo_id >= 0 && lfo_id <= (ms_lfo6 - ms_lfo1));
+            lfoDisplay->setCanEditEnvelopes(lfo_id >= 0 && lfo_id < n_lfos_voice);
             lfoDisplay->setupAccessibility();
 
             lfoDisplay->addListener(this);

@@ -711,7 +711,7 @@ TEST_CASE("Voice Features And Flags", "[formula]")
     {
         auto surge = Surge::Test::surgeOnSine();
         surge->storage.getPatch().scene[0].lfo[0].shape.val.i = lt_formula;
-        surge->storage.getPatch().scene[0].lfo[6].shape.val.i = lt_formula;
+        surge->storage.getPatch().scene[0].lfo[n_lfos_voice].shape.val.i = lt_formula;
         auto pitchId = surge->storage.getPatch().scene[0].osc[0].pitch.id;
         surge->setModDepth01(pitchId, ms_lfo1, 0, 0, 0.1);
         surge->setModDepth01(pitchId, ms_slfo1, 0, 0, 0.1);
@@ -753,7 +753,7 @@ end)FN");
     {
         auto surge = Surge::Test::surgeOnSine();
         surge->storage.getPatch().scene[0].lfo[0].shape.val.i = lt_formula;
-        surge->storage.getPatch().scene[0].lfo[6].shape.val.i = lt_formula;
+        surge->storage.getPatch().scene[0].lfo[n_lfos_voice].shape.val.i = lt_formula;
         surge->storage.getPatch().scene[0].adsr[0].r.val.f = 2;
         auto pitchId = surge->storage.getPatch().scene[0].osc[0].pitch.id;
         surge->setModDepth01(pitchId, ms_lfo1, 0, 0, 0.1);

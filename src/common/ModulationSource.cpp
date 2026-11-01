@@ -39,8 +39,8 @@ std::string modulatorName(const SurgeStorage *s, int i, bool button, int current
     if ((i >= ms_lfo1 && i <= ms_slfo6))
     {
         int idx = i - ms_lfo1;
-        bool isS = idx >= 6;
-        int fnum = idx % 6;
+        bool isS = idx >= n_lfos_voice;
+        int fnum = isS ? idx - n_lfos_voice : idx;
         auto useScene = forScene >= 0 ? forScene : current_scene;
         auto *lfodata = &(s->getPatch().scene[useScene].lfo[i - ms_lfo1]);
 
