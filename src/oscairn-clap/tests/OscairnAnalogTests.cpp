@@ -957,6 +957,61 @@ static void testDriftAgainstReference()
     }
 }
 
+// Segment drift on the cutoff against the reference (sixth session batch m3d and ninth
+// session batch m9i: a saw at note 36 through LPF24 at cutoff index 512, Voltage Drift 96 and
+// 127, 40 loads each): the spread of harmonic 9's level (Hann DFT 0.05-0.5 s after each note's
+// start, at the note's own pitch), with the converter's mapping Segment Drift Cutoff = 1.22 x
+// the deviation in semitones (1.37 and 6.71; harmonic 9 moves about 1.97 dB per semitone
+// there). 150 notes in one instance. Proposed tolerance: 20 %, as for the pitch.
+static void testCutoffDriftAgainstReference()
+{
+    namespace T = oscairn_tables;
+    const double rate = 44100, f9 = 9 * 440 * std::pow(2.0, (36 - 69) / 12.0);
+    for (auto [semitones, refDb] : {std::pair{1.12, 2.28}, {5.5, 9.80}})
+    {
+        Instance a(rate);
+        std::vector<Event> ev{paramEvent(0, fnv1a("a_filter1_type"), 2),
+                              paramEvent(0, fnv1a("a_filter1_subtype"), 0),
+                              paramEvent(0, fnv1a("a_filter1_resonance"), 0.06),
+                              paramEvent(0, fnv1a("a_filter1_cutoff"), T::cutoffLp24[512]),
+                              paramEvent(0, fnv1a("a_lowcut.off"), 1),
+                              paramEvent(0, fnv1a("a_drift"), 0),
+                              paramEvent(0, fnv1a("a_segdrift_cutoff"), 1.22 * semitones)};
+        const int n = 150;
+        const uint32_t step = (uint32_t)(0.7 * rate);
+        for (int i = 0; i < n; ++i)
+        {
+            ev.push_back(noteEvent(1000 + i * step, CLAP_EVENT_NOTE_ON, i, 36, 0.8));
+            ev.push_back(noteEvent(1000 + i * step + (uint32_t)(0.6 * rate), CLAP_EVENT_NOTE_OFF,
+                                   i, 36, 0));
+        }
+        auto lr = a.render(1000 + n * step, 512, ev);
+        double sum = 0, sum2 = 0;
+        for (int i = 0; i < n; ++i)
+        {
+            size_t from = 1000 + i * step + (size_t)(0.05 * rate),
+                   len = (size_t)(0.45 * rate);
+            double re = 0, im = 0, ws = 0;
+            for (size_t k = 0; k < len; ++k)
+            {
+                double w = 0.5 - 0.5 * std::cos(2 * M_PI * k / (len - 1));
+                double x = 0.5 * (lr[2 * (from + k)] + lr[2 * (from + k) + 1]);
+                re += x * w * std::cos(2 * M_PI * f9 * k / rate);
+                im += x * w * std::sin(2 * M_PI * f9 * k / rate);
+                ws += w;
+            }
+            double db = 20 * std::log10(2 * std::hypot(re, im) / ws);
+            sum += db;
+            sum2 += db * db;
+        }
+        double sd = std::sqrt((sum2 - sum * sum / n) / (n - 1));
+        check(std::fabs(sd / refDb - 1) <= 0.2,
+              "segment drift spread of the cutoff: reference " + std::to_string(refDb) +
+                  " dB, engine " + std::to_string(sd) + " over " + std::to_string(n) + " notes");
+        std::printf("  cutoff drift: reference %.2f dB, engine %.2f\n", refDb, sd);
+    }
+}
+
 // Amp velocity sensitivity against the reference (eighth session, batches m8c and m8d: a sine at
 // note 60, sensitivity S = +64, +128, +192, level 0.2-0.7 s after the onset relative to velocity
 // 127), with the converter's mapping Velocity > VCA Gain = -12 k dB, k = 2^((S - 128) / 64).
@@ -1252,6 +1307,7 @@ int main(int argc, char **argv)
         run("first block after a load", [] { testFirstBlockAfterLoad(); });
         run("unison against the reference", [] { testUnisonAgainstReference(); });
         run("drift against the reference", [] { testDriftAgainstReference(); });
+        run("cutoff drift against the reference", [] { testCutoffDriftAgainstReference(); });
         run("velocity against the reference", [] { testVelocityAgainstReference(); });
         run("fitted tables", [] { testFittedTables(); });
     }
