@@ -663,6 +663,51 @@ static void testNotes()
         a.render(256, 256);
         check(hasNoteEnd(a, 9), "NOTE_END for a note ended by a state load");
     }
+    // Key-on delay (0.25 s): the note starts late; released or loaded over before it starts,
+    // it never sounds and still ends.
+    auto peak = [](const std::vector<float> &lr, size_t from, size_t to) {
+        float m = 0;
+        for (size_t i = 2 * from; i < 2 * to && i < lr.size(); ++i)
+            m = std::max(m, std::fabs(lr[i]));
+        return m;
+    };
+    auto delayed = [](uint32_t t) {
+        return std::vector<Event>{paramEvent(t, fnv1a("a_keyon_delay"), -2),
+                                  paramEvent(t, fnv1a("a_keyon_delay.off"), 0)};
+    };
+    {
+        Instance a;
+        auto ev = delayed(0);
+        ev.push_back(noteEvent(0, CLAP_EVENT_NOTE_ON, 21, 60, 0.9));
+        auto lr = a.render(24000, 256, ev);
+        size_t first = 0;
+        while (first < lr.size() / 2 && std::fabs(lr[2 * first]) < 1e-4f)
+            ++first;
+        check(first >= 12000 - 64 && first <= 12000 + 64,
+              "a delayed note starts after its key-on delay: " + std::to_string(first) +
+                  " samples");
+        a.render(48000 * 4, 256, {noteEvent(a.position + 1, CLAP_EVENT_NOTE_OFF, 21, 60, 0)});
+        check(hasNoteEnd(a, 21), "NOTE_END for a delayed note");
+    }
+    {
+        Instance a;
+        auto ev = delayed(0);
+        ev.push_back(noteEvent(0, CLAP_EVENT_NOTE_ON, 22, 60, 0.9));
+        ev.push_back(noteEvent(4800, CLAP_EVENT_NOTE_OFF, 22, 60, 0));
+        auto lr = a.render(48000, 256, ev);
+        check(peak(lr, 0, 48000) == 0, "a note released before its key-on delay never sounds");
+        check(hasNoteEnd(a, 22), "NOTE_END for a note released before its key-on delay");
+    }
+    {
+        Instance a;
+        a.render(256, 256, delayed(0));
+        auto st = a.save();
+        a.render(4800, 256, {noteEvent(a.position + 1, CLAP_EVENT_NOTE_ON, 23, 60, 0.9)});
+        check(a.load(st), "state load while a note waits for its key-on delay");
+        auto lr = a.render(24000, 256);
+        check(peak(lr, 0, 24000) == 0 && hasNoteEnd(a, 23),
+              "a state load ends a note waiting for its key-on delay");
+    }
 }
 
 static void testFormulaRefused()
@@ -1093,6 +1138,17 @@ static void testFittedTables()
             return F::dutyFallTime(renderMono(oscEgSpec(true, v)), rate, c3, 0.254, 0.123, 0.6);
         },
         pctFloor(0.005));
+    // Key-on delay: the onset of a sine whose note-on is at the render's start.
+    checkTable(
+        "key-on delay", T::keyOnDelay, T::keyOnDelayChecks, T::keyOnDelayTolerance,
+        [&](float v) {
+            auto x = renderMono({60, 100, std::pow(2.0, v) + 0.3, 0.1, rate,
+                                 {{"a_lowcut.off", 1}, {"a_osc1_type", 1}, {"a_keyon_delay", v},
+                                  {"a_keyon_delay.off", 0}},
+                                 {}});
+            return F::onset(x, rate);
+        },
+        pctFloor(0.015));
     // The zero-crossing rate here needs several periods and an envelope that follows the
     // modulation: checked from 1 to 40 Hz (the measurement repository checks the whole range).
     checkTable(
