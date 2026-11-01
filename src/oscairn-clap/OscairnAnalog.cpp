@@ -798,6 +798,9 @@ bool pluginInit(const clap_plugin_t *p)
         for (auto *t : {&s.synth->storage.getPatch().scene[0].lfo[l].attack,
                         &s.synth->storage.getPatch().scene[0].lfo[l].decay})
             t->val_max.f = longestEnvelopeTime;
+    // Portamento up to just under the engine's limit of 2^4 s (Surge's range stops at 2^2):
+    // the instrument this plugin matches glides an octave in 8.9 s (10-90 %) at time 120.
+    s.synth->storage.getPatch().scene[0].portamento.val_max.f = 3.99f;
     s.synth->setSamplerate((float)s.sampleRate);
     s.normalizePatch();
     s.refreshSceneData();

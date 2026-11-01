@@ -452,6 +452,7 @@ static void testPortsAndParams(const std::vector<std::string> &patches)
               maxOf("a_lfo17_decay") == 8 && maxOf("a_lfo0_release") == 5 &&
               maxOf("a_lfo6_attack") == 5,
           "envelopes and voice LFO attack and decay reach 2^8 s; LFO release and scene LFOs 2^5");
+    check(maxOf("a_portamento") == 3.99f, "portamento reaches 2^3.99 s");
 
     // Ranges hold for every factory patch: a parameter exposed in Surge's own units must have
     // the same range whatever patch is loaded (those whose range follows another parameter
@@ -471,6 +472,8 @@ static void testPortsAndParams(const std::vector<std::string> &patches)
         for (auto *t : {&reference.storage.getPatch().scene[0].lfo[l].attack,
                         &reference.storage.getPatch().scene[0].lfo[l].decay})
             t->val_max.f = 8;
+    // and portamento 2^3.99 s instead of 2^2 s
+    reference.storage.getPatch().scene[0].portamento.val_max.f = 3.99f;
     int loaded = 0;
     for (auto &path : patches)
     {
@@ -1149,6 +1152,23 @@ static void testFittedTables()
             return F::onset(x, rate);
         },
         pctFloor(0.015));
+    // Portamento: an octave glide (10-90 %) on a sine from note 84, legato, mono with
+    // fingered portamento. The engine's glide doesn't depend on the note; the reference's
+    // short glides were measured from note 84 and the long ones from 48.
+    checkTable(
+        "portamento time", T::portamentoTime, T::portamentoTimeChecks,
+        T::portamentoTimeTolerance,
+        [&](float v) {
+            oscairn_analog::RenderSpec s{84, 100, 1.3 + 1.3 * std::pow(2.0, v), 0.1, rate,
+                                         {{"a_lowcut.off", 1}, {"a_osc1_type", 1},
+                                          {"a_polymode", 3}, {"a_portamento", v}},
+                                         {}};
+            s.legatoNote = 96;
+            s.legatoAt = 1;
+            const double c6 = 440 * std::pow(2.0, 15 / 12.0);
+            return F::glideTime(renderMono(s), rate, c6, 12, 0.5);
+        },
+        pctFloor(0.005));
     // The zero-crossing rate here needs several periods and an envelope that follows the
     // modulation: checked from 1 to 40 Hz (the measurement repository checks the whole range).
     checkTable(

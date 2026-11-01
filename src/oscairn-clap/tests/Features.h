@@ -184,6 +184,57 @@ inline double pitchFallTime(const std::vector<float> &x, double rate, double fRe
     return fallTime(t, c, fullCents, start);
 }
 
+// 10 % to 90 % time of a sine's pitch glide of `semitones` (portamento), the glide starting
+// after `after` seconds from the onset, relative to the median pitch over before0..before1 s
+// from the onset: a 5-period median of the zero-crossing pitch track. As glide_times in the
+// measurement repository (fit kind glide).
+inline double glideTime(const std::vector<float> &x, double rate, double fRef, double semitones,
+                        double after, double before0 = 0.2, double before1 = 0.9)
+{
+    double t0 = onset(x, rate);
+    std::vector<double> t, c;
+    double prev = -1;
+    for (size_t i = 0; i + 1 < x.size(); ++i)
+        if (x[i] < 0 && x[i + 1] >= 0)
+        {
+            double z = i + x[i] / (x[i] - x[i + 1]);
+            if (prev >= 0)
+            {
+                t.push_back((prev + z) / 2 / rate);
+                c.push_back(1200 * std::log2(rate / (z - prev) / fRef) / (100 * semitones));
+            }
+            prev = z;
+        }
+    std::vector<double> m(c.size());
+    for (size_t i = 0; i < c.size(); ++i) // as scipy's medfilt: zeros past the ends
+    {
+        double w[5];
+        for (int k = -2; k <= 2; ++k)
+            w[k + 2] = (i + k < c.size()) ? c[i + k] : 0.0; // i + k wraps when negative
+        std::sort(w, w + 5);
+        m[i] = w[2];
+    }
+    std::vector<double> held;
+    for (size_t i = 0; i < m.size(); ++i)
+        if (t[i] > t0 + before0 && t[i] < t0 + before1)
+            held.push_back(m[i]);
+    if (held.empty())
+        return -1;
+    std::nth_element(held.begin(), held.begin() + held.size() / 2, held.end());
+    double base = held[held.size() / 2];
+    double t10 = -1;
+    for (size_t i = 0; i < m.size(); ++i)
+    {
+        if (t[i] <= t0 + after)
+            continue;
+        if (t10 < 0 && m[i] - base >= 0.1)
+            t10 = t[i];
+        if (t10 >= 0 && m[i] - base >= 0.9)
+            return t[i] - t10;
+    }
+    return -1;
+}
+
 // 90 % to 10 % time of a pulse wave's duty cycle falling exponentially from base + full
 // toward base, after start (seconds from onset). The duty, one value per period, is
 // acos(h2 / h1) / pi from the first two harmonics over Hann windows `periods` periods long
