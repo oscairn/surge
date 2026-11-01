@@ -913,9 +913,13 @@ static constexpr bool sanitizerBuild = false;
 static constexpr bool sanitizerBuild = false;
 #endif
 
+// The sample rate the reference checks render at: the reference was measured at 44.1 kHz, and
+// the checks run again at 48 and 96 kHz (see main).
+static double checkRate = 44100;
+
 static std::vector<float> renderMono(oscairn_analog::RenderSpec spec)
 {
-    spec.rate = 44100;
+    spec.rate = checkRate;
     spec.referenceMatching = true; // every use compares against the reference
     spec.params.insert(spec.params.begin(), {{"a_drift", 0}, {"a_env1_mode", 1}});
     auto lr = oscairn_analog::renderNote(spec);
@@ -1312,7 +1316,7 @@ static void testSaturatorsAgainstReference()
 {
     namespace F = oscairn_features;
     namespace T = oscairn_tables;
-    const double rate = 44100, f0 = 440 * std::pow(2.0, -21 / 12.0);
+    const double rate = checkRate, f0 = 440 * std::pow(2.0, -21 / 12.0);
     struct Case
     {
         bool amp;
@@ -1603,11 +1607,11 @@ static void checkTable(const char *name, const float (&table)[N],
     }
 }
 
-static void testFittedTables()
+static void testFittedTables(bool cutoffTables = true)
 {
     namespace F = oscairn_features;
     namespace T = oscairn_tables;
-    const double rate = 44100;
+    const double rate = checkRate;
     auto db = [](double ref, double got) { return got - ref; };
     checkTable(
         "amp level", T::ampLevel, T::ampLevelChecks, T::ampLevelTolerance,
@@ -1802,6 +1806,8 @@ static void testFittedTables()
                       ": best match " + std::to_string(100 * best) + " cents from the table");
         }
     };
+    if (!cutoffTables)
+        return;
     // Each type's Surge filter (type, subtype, resonance) as chosen in the plan.
     cutoff("LPF24", T::cutoffLp24, T::cutoffLp24Responses, T::cutoffLp24Tolerance, 2, 0, 0.06);
     cutoff("LPF18", T::cutoffLp18, T::cutoffLp18Responses, T::cutoffLp18Tolerance, 3, 2, 0);
@@ -1845,6 +1851,21 @@ int main(int argc, char **argv)
         run("portamento octave limit against the reference",
             [] { testPortamentoOctaveLimitAgainstReference(); });
         run("fitted tables", [] { testFittedTables(); });
+        // The same checks at the plugin's other rates (the reference was measured at 44.1 kHz),
+        // in the standard build only: they check numbers, not memory or threads, and would
+        // add most of an hour to the TSan run. Not the cutoff tables, which hold only at
+        // 44.1 kHz near the top of their range (see the plan).
+        if (!sanitizerBuild)
+        {
+            for (double r : {48000.0, 96000.0})
+            {
+                checkRate = r;
+                std::printf("at %g Hz:\n", r);
+                run("saturators against the reference", [] { testSaturatorsAgainstReference(); });
+                run("fitted tables but cutoff", [] { testFittedTables(false); });
+            }
+            checkRate = 44100;
+        }
     }
     catch (const std::exception &e)
     {
