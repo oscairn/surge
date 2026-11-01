@@ -415,6 +415,8 @@ namespace LFO
 extern Surge::Skin::Connector amplitude, attack, decay, deform, delay, hold, phase, rate, release,
     shape, sustain, trigger_mode, unipolar;
 extern Surge::Skin::Connector lfo_presets, mseg_editor, lfo_title_label;
+// Envelope mode, without a control in the skin
+extern Surge::Skin::Connector envmode;
 } // namespace LFO
 namespace Mixer
 {

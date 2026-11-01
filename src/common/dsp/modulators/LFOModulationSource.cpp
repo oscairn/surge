@@ -199,6 +199,8 @@ void LFOModulationSource::attackFrom(float start)
     env_val = 0.f;
     env_phase = 0;
     ratemult = 1.f;
+    analogV = analogVDelayed = start;
+    analogDischarge = false;
     bool isFirstAttack = !everAttacked;
     everAttacked = true;
 
@@ -517,11 +519,56 @@ void LFOModulationSource::release()
     }
 }
 
+/*
+ * The scene envelopes' analog mode (ADSRModulationSource::process_block), on one value: a
+ * capacitor charges toward 1.5 while the gate is on, discharges toward the squared sustain
+ * once it has passed 1, and toward 0 after release.
+ */
+void LFOModulationSource::processAnalogEnvelope()
+{
+    const bool gate = env_state != lfoeg_release;
+
+    analogDischarge = gate && (analogVDelayed > 1.f || analogDischarge);
+    analogVDelayed = analogV;
+
+    const float vcc = 1.5f;
+    float S = limit_range(localcopy[isustain].f, 0.f, 1.f);
+    S = S * S;
+    const float vAttack = (gate && !analogDischarge) ? vcc : 0.f;
+    const float vDecay = analogDischarge ? S : vcc;
+    const float vRelease = gate ? vcc : 0.f;
+
+    const float diffA = std::max(0.f, vAttack - analogV);
+    const float diffD =
+        (analogDischarge && gate) ? vDecay - analogV : std::min(0.f, vDecay - analogV);
+    const float diffR = std::min(0.f, vRelease - analogV);
+
+    const float coeffOffset = 2.f - log(storage->samplerate / BLOCK_SIZE) / log(2.f);
+    auto coef = [&](int id, const Parameter &p) {
+        return powf(2.f, std::min(0.f, coeffOffset - localcopy[id].f *
+                                                         (p.temposync ? storage->temposyncratio
+                                                                      : 1.f)));
+    };
+
+    analogV += diffA * coef(iattack, lfo->attack);
+    analogV += diffD * coef(idecay, lfo->decay);
+    analogV += diffR * coef(irelease, lfo->release);
+    env_val = analogV;
+
+    if (!gate && !analogDischarge && analogV < 1e-6f)
+    {
+        env_state = lfoeg_stuck;
+        env_val = 0.f;
+    }
+}
+
 void LFOModulationSource::retriggerEnvelopeFrom(float start)
 {
     env_state = lfoeg_delay;
     env_phase = 0;
     envelopeStart = start;
+    analogV = analogVDelayed = start;
+    analogDischarge = false;
     if (localcopy[idelay].f == lfo->delay.val_min.f)
     {
         env_state = lfoeg_attack;
@@ -587,7 +634,12 @@ void LFOModulationSource::process_block()
         phase = 0.001; // step forward a smidge
     }
 
-    if (env_state != lfoeg_stuck && env_state != lfoeg_msegrelease)
+    if (lfo->envmode.val.b && env_state != lfoeg_delay && env_state != lfoeg_stuck &&
+        env_state != lfoeg_msegrelease)
+    {
+        processAnalogEnvelope();
+    }
+    else if (env_state != lfoeg_stuck && env_state != lfoeg_msegrelease)
     {
         float envrate = 0;
 

@@ -754,6 +754,18 @@ SurgePatch::SurgePatch(SurgeStorage *storage)
         {
             addLfoParams(l);
         }
+
+        for (int l = 0; l < n_lfos; l++)
+        {
+            char label[LABEL_SIZE];
+            snprintf(label, LABEL_SIZE, "lfo%i_envmode", lfoStreamedIndex(l));
+            a->push_back(scene[sc].lfo[l].envmode.assign(
+                p_id.next(), id_s++, label, "Envelope Mode",
+                fmt::format("{:c}/{}/{}/eg/mode", 'a' + sc, (l < n_lfos_voice) ? "vlfo" : "slfo",
+                            (l % n_lfos_voice) + 1),
+                ct_envmode, Surge::Skin::LFO::envmode, sc_id, cg_LFO, ms_lfo1 + l, false,
+                kNoPopup));
+        }
     }
 
     param_ptr.push_back(
@@ -1122,6 +1134,7 @@ void SurgePatch::init_default_values()
                 scene[sc].lfo[l].hold.per_voice_processing = false;
                 scene[sc].lfo[l].sustain.per_voice_processing = false;
                 scene[sc].lfo[l].release.per_voice_processing = false;
+                scene[sc].lfo[l].envmode.per_voice_processing = false;
             }
 
             for (int i = 0; i < n_stepseqsteps; i++)
@@ -2106,6 +2119,11 @@ void SurgePatch::load_xml(const void *data, int datasize, bool is_preset)
         {
             p->val = p->val_default;
             p->deactivated = p->can_deactivate();
+        }
+
+        for (auto &lfo : sc.lfo)
+        {
+            lfo.envmode.val = lfo.envmode.val_default;
         }
 
         // Voice LFOs 7-12, as a patch that streams them with no flags would leave them

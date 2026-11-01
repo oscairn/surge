@@ -574,6 +574,7 @@ Connector hold = Connector("lfo.hold", 40, 0).inParent("lfo.envelope.panel");
 Connector decay = Connector("lfo.decay", 60, 0).inParent("lfo.envelope.panel");
 Connector sustain = Connector("lfo.sustain", 80, 0).inParent("lfo.envelope.panel");
 Connector release = Connector("lfo.release", 100, 0).inParent("lfo.envelope.panel");
+Connector envmode = Connector("lfo.envmode", 0, 0, Components::None);
 } // namespace LFO
 
 /*

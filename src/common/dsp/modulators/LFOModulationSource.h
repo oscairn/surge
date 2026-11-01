@@ -102,6 +102,11 @@ class LFOModulationSource : public ModulationSource
     bool everAttacked{false};
 
   private:
+    // the analog envelope mode's capacitor, as in ADSRModulationSource
+    float analogV{0.f}, analogVDelayed{0.f};
+    bool analogDischarge{false};
+    void processAnalogEnvelope();
+
     LFOStorage *lfo;
     SurgeVoiceState *state;
     SurgeStorage *storage;

@@ -171,7 +171,7 @@ const int FIRoffsetI16 = FIRipolI16_N >> 1;
 
 const int ff_revision = 31;
 
-const int n_scene_params = 380;
+const int n_scene_params = 398;
 const int n_global_params = 11 + n_fx_slots * (n_fx_params + 1); // each param plus a type
 const int n_global_postparams = 1;
 const int n_total_params = n_global_params + 2 * n_scene_params + n_global_postparams;
@@ -834,6 +834,9 @@ struct LFOStorage
     Parameter rate, shape, start_phase, magnitude, deform;
     Parameter trigmode, unipolar;
     Parameter delay, hold, attack, decay, sustain, release;
+    // Digital (the stages above) or analog (attack, decay, sustain and release as the scene
+    // envelopes' analog mode; delay as before, hold unused)
+    Parameter envmode;
 
     enum LFOExtraOutputAmplitude
     {
