@@ -1110,7 +1110,7 @@ static void testVelocityAgainstReference()
                              {{"a_lowcut.off", 1}, {"a_osc1_type", 1}, {"a_vca_velsense", sens}},
                              {}});
         double t0 = F::onset(x, rate);
-        return F::levelDb(x, rate, t0 + 0.2, t0 + 0.7);
+        return t0 < 0 ? -1000.0 : F::levelDb(x, rate, t0 + 0.2, t0 + 0.7); // silent: no onset
     };
     const double silent = -1000;
     struct Case
