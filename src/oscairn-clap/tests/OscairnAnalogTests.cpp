@@ -738,6 +738,28 @@ static std::vector<float> renderMono(oscairn_analog::RenderSpec spec)
     return m;
 }
 
+// renderNote loads the patch and starts the note at the first sample of the first block: the
+// voice must start with the loaded patch's values, not the scene data of the patch before.
+// A sine LFO on pitch (1 Hz, +-100 cents) starting at phase 0.25 holds the pitch up for the
+// first 0.2 s, at 0.75 down: about 6 % more or fewer periods.
+static void testFirstBlockAfterLoad()
+{
+    namespace F = oscairn_features;
+    auto periods = [](float phase) {
+        auto x = renderMono({60, 100, 0.5, 0.1, 44100,
+                             {{"a_osc1_type", 1}, {"a_lfo0_rate", 0}, {"a_lfo0_phase", phase}},
+                             {{17, "a_osc1_pitch", 100.0 / 1400}}});
+        size_t a = (size_t)(F::onset(x, 44100) * 44100), n = 0;
+        for (size_t i = a; i + 1 < x.size() && i < a + 8820; ++i)
+            n += x[i] < 0 && x[i + 1] >= 0;
+        return (int)n;
+    };
+    int up = periods(0.25f), down = periods(0.75f);
+    check(up - down >= 4, "a note in the first block after a load starts at the loaded LFO "
+                          "phase: " + std::to_string(up) + " and " + std::to_string(down) +
+                          " periods");
+}
+
 template <size_t N, size_t K>
 static void checkTable(const char *name, const float (&table)[N],
                        const oscairn_tables::Check (&checks)[K], double tolerance,
@@ -960,6 +982,7 @@ int main(int argc, char **argv)
         run("notes", [] { testNotes(); });
         run("formula refused", [] { testFormulaRefused(); });
         run("concurrent state", [] { testConcurrentState(); });
+        run("first block after a load", [] { testFirstBlockAfterLoad(); });
         run("fitted tables", [] { testFittedTables(); });
     }
     catch (const std::exception &e)

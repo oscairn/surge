@@ -546,6 +546,17 @@ struct Plugin
         return true;
     }
 
+    // A voice takes its parameters from the scene data, which the engine refreshes from the
+    // patch at the start of each of its blocks; a note at the start of the first block after a
+    // load would otherwise start with the previous patch's values (LFO start phases, which are
+    // read only when a voice starts, stay wrong for the whole note). Audio excluded.
+    void refreshSceneData()
+    {
+        auto &patch = synth->storage.getPatch();
+        patch.copy_globaldata(patch.globaldata);
+        patch.copy_scenedata(patch.scenedata[0], patch.scenedataOrig[0], 0);
+    }
+
     std::vector<uint8_t> lastGood; // state to restore when a load is refused
 
     bool loadStateBytes(const void *data, size_t size)
@@ -561,6 +572,7 @@ struct Plugin
                 synth->loadRaw(lastGood.data(), (int)lastGood.size(), false);
                 normalizePatch();
             }
+            refreshSceneData();
             synth->storage.perform_queued_wtloads(); // here, not in process()
             for (int i = 0; i < synth->hostNoteEndedDuringBlockCount; ++i)
             {
@@ -770,6 +782,8 @@ bool pluginInit(const clap_plugin_t *p)
     config.scanWavetableAndPatches = false;
     s.synth = std::make_unique<SurgeSynthesizer>(&s.layer, config);
     s.synth->storage.saveFixedTempo = true;
+    // The instrument this plugin matches doesn't overshoot at the end of an envelope's attack.
+    s.synth->storage.analogEnvelopeAttackClamp = true;
     // Envelope segments up to 2^8 s: the instrument this plugin matches reaches 44 s of attack
     // (10-90 %), past Surge's 2^5 s. Only the range grows; the envelope code has no limit, and
     // modulation depths are in seconds-exponent units, so existing patches sound the same.
@@ -784,6 +798,7 @@ bool pluginInit(const clap_plugin_t *p)
             t->val_max.f = longestEnvelopeTime;
     s.synth->setSamplerate((float)s.sampleRate);
     s.normalizePatch();
+    s.refreshSceneData();
     s.synth->storage.perform_queued_wtloads();
     s.synth->seedRandom(renderSeed);
     s.buildParams();
