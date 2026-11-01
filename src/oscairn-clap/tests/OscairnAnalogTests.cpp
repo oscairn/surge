@@ -1127,6 +1127,67 @@ static void testVelocityAgainstReference()
     std::printf("  velocity: largest difference %.3f dB\n", worst);
 }
 
+// Amp and filter saturators against the reference (fifth session, batch m2: a sine at note 48,
+// drive raw 32-80, filter LPF24 at index 1004), with the converter's mapping: drive = offset +
+// 0.75 dB x raw, offset -40.4 dB (amp) and -42.1 dB (filter), asymmetry 0.115 and 0.254, the
+// plugin's algebraic curve. Harmonics 2-6 relative to the fundamental over 0.3-0.9 s after the
+// onset; those above -50 dB in the reference within 3 dB (proposed tolerance).
+static void testSaturatorsAgainstReference()
+{
+    namespace F = oscairn_features;
+    namespace T = oscairn_tables;
+    const double rate = 44100, f0 = 440 * std::pow(2.0, -21 / 12.0);
+    struct Case
+    {
+        bool amp;
+        int raw;
+        double ref[5];
+    };
+    const Case cases[] = {
+        {true, 32, {-41.5, -51.5, -87.1, -90.3, -116.8}},
+        {true, 48, {-31.0, -28.8, -53.6, -53.9, -76.2}},
+        {true, 64, {-28.7, -14.3, -35.9, -24.3, -43.1}},
+        {true, 80, {-36.6, -10.1, -37.7, -15.5, -39.4}},
+        {false, 32, {-37.6, -57.2, -88.6, -89.3, -112.5}},
+        {false, 48, {-26.4, -34.0, -54.3, -64.3, -82.1}},
+        {false, 64, {-21.3, -16.6, -31.2, -29.2, -41.0}},
+        {false, 80, {-27.1, -10.6, -29.3, -16.7, -32.1}},
+    };
+    double worst = 0;
+    for (auto &c : cases)
+    {
+        std::string p = c.amp ? "a_amp_drive" : "a_filter1_drive";
+        oscairn_analog::RenderSpec spec{48, 100, 1, 0.1, rate,
+                                        {{"a_lowcut.off", 1}, {"a_osc1_type", 1},
+                                         {"a_vca_level", T::ampLevel[431]},
+                                         {"a_level_o1", T::osc1Level[511]},
+                                         {p, (c.amp ? -40.4 : -42.1) + 0.75 * c.raw},
+                                         {p + "_asym", c.amp ? 0.115 : 0.254},
+                                         {p + ".off", 0}},
+                                        {}};
+        if (!c.amp)
+            spec.params.insert(spec.params.end(), {{"a_filter1_type", 1},
+                                                   {"a_filter1_cutoff", T::cutoffLp24[1004]},
+                                                   {"a_filter1_resonance", 0.06}});
+        auto x = renderMono(spec);
+        size_t a = (size_t)((F::onset(x, rate) + 0.3) * rate), n = (size_t)(0.6 * rate);
+        double h1 = F::magnitudeAt(x, a, n, f0, rate);
+        for (int h = 2; h <= 6; ++h)
+        {
+            if (c.ref[h - 2] <= -50)
+                continue;
+            double got = 20 * std::log10(F::magnitudeAt(x, a, n, h * f0, rate) / h1);
+            worst = std::max(worst, std::fabs(got - c.ref[h - 2]));
+            check(std::fabs(got - c.ref[h - 2]) <= 3,
+                  std::string(c.amp ? "amp" : "filter") + " saturator at raw " +
+                      std::to_string(c.raw) + ", harmonic " + std::to_string(h) +
+                      ": reference " + std::to_string(c.ref[h - 2]) + " dB, engine " +
+                      std::to_string(got));
+        }
+    }
+    std::printf("  saturators: largest difference %.2f dB\n", worst);
+}
+
 template <size_t N, size_t K>
 static void checkTable(const char *name, const float (&table)[N],
                        const oscairn_tables::Check (&checks)[K], double tolerance,
@@ -1383,6 +1444,7 @@ int main(int argc, char **argv)
         run("cutoff drift against the reference", [] { testCutoffDriftAgainstReference(); });
         run("pitch LFO phases against the reference", [] { testPitchLfoPhasesAgainstReference(); });
         run("velocity against the reference", [] { testVelocityAgainstReference(); });
+        run("saturators against the reference", [] { testSaturatorsAgainstReference(); });
         run("fitted tables", [] { testFittedTables(); });
     }
     catch (const std::exception &e)
