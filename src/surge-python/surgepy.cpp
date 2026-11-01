@@ -879,6 +879,12 @@ class SurgeSynthesizerWithPythonExtensions : public SurgeSynthesizer
             CMS(ms_lfo4);
             CMS(ms_lfo5);
             CMS(ms_lfo6);
+            CMS(ms_lfo7);
+            CMS(ms_lfo8);
+            CMS(ms_lfo9);
+            CMS(ms_lfo10);
+            CMS(ms_lfo11);
+            CMS(ms_lfo12);
             CMS(ms_slfo1);
             CMS(ms_slfo2);
             CMS(ms_slfo3);
@@ -2233,6 +2239,12 @@ PYBIND11_MODULE(surgepy, m)
     C(ms_lfo4);
     C(ms_lfo5);
     C(ms_lfo6);
+    C(ms_lfo7);
+    C(ms_lfo8);
+    C(ms_lfo9);
+    C(ms_lfo10);
+    C(ms_lfo11);
+    C(ms_lfo12);
     C(ms_slfo1);
     C(ms_slfo2);
     C(ms_slfo3);
