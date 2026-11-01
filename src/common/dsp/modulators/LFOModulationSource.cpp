@@ -500,7 +500,11 @@ void LFOModulationSource::attackFrom(float start)
 
 void LFOModulationSource::release()
 {
-    if (lfo->release.val.f < lfo->release.val_max.f)
+    // At or above its maximum (2^5 s) a release never happens; with lfoLongRelease the
+    // release reaches 2^8 s and only 8 means never. min() keeps a host's wider range from
+    // making a Surge patch's "never" release.
+    float never = storage->lfoLongRelease ? 8.f : std::min(lfo->release.val_max.f, 5.f);
+    if (lfo->release.val.f < never)
     {
         env_releasestart = env_val;
         env_phase = 0;

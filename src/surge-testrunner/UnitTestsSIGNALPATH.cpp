@@ -490,36 +490,37 @@ TEST_CASE("Engine Options Are Saved In The Patch", "[signalpath]")
     };
     auto options = [&] {
         return std::vector<bool>{st.analogEnvelopeAttackClamp, st.vcaVelocityAmplitudeLaw,
-                                 st.saturatorAlgebraicCurve};
+                                 st.saturatorAlgebraicCurve, st.lfoLongRelease};
     };
-    auto set = [&](bool a, bool b, bool c) {
+    auto set = [&](bool a, bool b, bool c, bool d) {
         st.analogEnvelopeAttackClamp = a;
         st.vcaVelocityAmplitudeLaw = b;
         st.saturatorAlgebraicCurve = c;
+        st.lfoLongRelease = d;
     };
 
     // off by default, and a patch saved with them off doesn't mention them
-    REQUIRE(options() == std::vector<bool>{false, false, false});
+    REQUIRE(options() == std::vector<bool>{false, false, false, false});
     auto off = save();
     REQUIRE(std::string(off.begin(), off.end()).find("saturatorAlgebraicCurve") ==
             std::string::npos);
 
     // each round trips on its own
-    for (int i = 0; i < 3; i++)
+    for (int i = 0; i < 4; i++)
     {
         INFO("option " << i);
-        set(i == 0, i == 1, i == 2);
+        set(i == 0, i == 1, i == 2, i == 3);
         auto on = save();
-        set(false, false, false);
+        set(false, false, false, false);
         patch.load_patch(on.data(), (int)on.size(), false);
-        REQUIRE(options() == std::vector<bool>{i == 0, i == 1, i == 2});
+        REQUIRE(options() == std::vector<bool>{i == 0, i == 1, i == 2, i == 3});
     }
 
     // a patch without them turns them off
-    set(true, true, true);
+    set(true, true, true, true);
     patch.load_patch(off.data(), (int)off.size(), false);
-    REQUIRE(options() == std::vector<bool>{false, false, false});
-    set(true, true, true);
+    REQUIRE(options() == std::vector<bool>{false, false, false, false});
+    set(true, true, true, true);
     REQUIRE(surge->loadPatchByPath("resources/test-data/patches/TestInitSaw.fxp", -1, "Test"));
-    REQUIRE(options() == std::vector<bool>{false, false, false});
+    REQUIRE(options() == std::vector<bool>{false, false, false, false});
 }

@@ -1711,6 +1711,9 @@ class alignas(16) SurgeStorage
     // The filter and amp saturators use u / sqrt(1 + u^2) instead of tanh(u) (a softer knee),
     // scaled back by the same curve at the drive. Saved in the patch; off when absent.
     bool saturatorAlgebraicCurve{false};
+    // An LFO envelope's release reaches 2^8 s, and only a release of 8 means it never
+    // releases (instead of Surge's 5, its maximum). Saved in the patch; off when absent.
+    bool lfoLongRelease{false};
     float unstreamedTempo{120.f};             // this one is in actual BPM
     double songpos;
     bool isPlaying{false}; // host transport state

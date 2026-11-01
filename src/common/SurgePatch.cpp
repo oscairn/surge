@@ -2556,6 +2556,7 @@ void SurgePatch::load_xml(const void *data, int datasize, bool is_preset)
     storage->analogEnvelopeAttackClamp = false;
     storage->vcaVelocityAmplitudeLaw = false;
     storage->saturatorAlgebraicCurve = false;
+    storage->lfoLongRelease = false;
 
     for (int sc = 0; sc < n_scenes; ++sc)
     {
@@ -2650,7 +2651,8 @@ void SurgePatch::load_xml(const void *data, int datasize, bool is_preset)
         for (auto [name, option] :
              {std::pair{"analogEnvelopeAttackClamp", &storage->analogEnvelopeAttackClamp},
               {"vcaVelocityAmplitudeLaw", &storage->vcaVelocityAmplitudeLaw},
-              {"saturatorAlgebraicCurve", &storage->saturatorAlgebraicCurve}})
+              {"saturatorAlgebraicCurve", &storage->saturatorAlgebraicCurve},
+              {"lfoLongRelease", &storage->lfoLongRelease}})
         {
             bool tv;
             auto *el = TINYXML_SAFE_TO_ELEMENT(nonparamconfig->FirstChild(name));
@@ -4486,7 +4488,8 @@ unsigned int SurgePatch::save_xml(void **data) // allocates mem, must be freed b
     for (auto [name, on] : {std::pair{"analogEnvelopeAttackClamp",
                                       (bool)storage->analogEnvelopeAttackClamp},
                             {"vcaVelocityAmplitudeLaw", (bool)storage->vcaVelocityAmplitudeLaw},
-                            {"saturatorAlgebraicCurve", (bool)storage->saturatorAlgebraicCurve}})
+                            {"saturatorAlgebraicCurve", (bool)storage->saturatorAlgebraicCurve},
+                            {"lfoLongRelease", (bool)storage->lfoLongRelease}})
     {
         if (!on)
             continue;

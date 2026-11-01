@@ -161,3 +161,43 @@ TEST_CASE("LFO Envelope Mode Streams And Resets", "[lfoenvmode]")
     patch.load_patch(copy.data(), (int)copy.size(), false);
     REQUIRE(sc.lfo[2].envmode.val.b);
 }
+
+TEST_CASE("LFO Long Release", "[lfoenvmode]")
+{
+    // voice LFO 7's envelope output 1 s after the note's release, from a sustain of 1
+    auto afterRelease = [](float release, bool longRelease, float valMax) {
+        auto surge = Surge::Headless::createSurge(48000);
+        surge->storage.lfoLongRelease = longRelease;
+        auto &sc = surge->storage.getPatch().scene[0];
+        auto &lfo = sc.lfo[6];
+        lfo.shape.val.i = lt_envelope;
+        lfo.delay.val.f = -8.f;
+        lfo.attack.val.f = -8.f;
+        lfo.decay.val.f = -8.f;
+        lfo.sustain.val.f = 1.f;
+        lfo.release.val_max.f = valMax;
+        lfo.release.val.f = release;
+        sc.adsr[0].r.val.f = 4.f; // the voice outlasts the second read below
+        REQUIRE(surge->setModDepth01(sc.osc[1].pitch.id, ms_lfo7, 0, 0, 0.1f));
+        for (int b = 0; b < 4; b++)
+            surge->process();
+        surge->playNote(0, 60, 100, 0);
+        for (int b = 0; b < 100; b++)
+            surge->process();
+        surge->releaseNote(0, 60, 0);
+        for (int b = 0; b < 1500; b++)
+            surge->process();
+        REQUIRE(!surge->voices[0].empty());
+        return surge->voices[0].front()->modsources[ms_lfo7]->get_output(2);
+    };
+    // off (Surge's behaviour): 5, the maximum, never releases, even where a host has widened
+    // the range (as the plugin does, to 8)
+    REQUIRE(afterRelease(5.f, false, 5.f) == 1.f);
+    REQUIRE(afterRelease(4.9f, false, 5.f) < 0.99f);
+    REQUIRE(afterRelease(5.f, false, 8.f) == 1.f);
+    REQUIRE(afterRelease(6.f, false, 8.f) == 1.f);
+    // on: up to 2^8 s, and only 8 never releases
+    REQUIRE(afterRelease(5.f, true, 8.f) < 0.99f);
+    REQUIRE(afterRelease(7.9f, true, 8.f) < 0.9999f);
+    REQUIRE(afterRelease(8.f, true, 8.f) == 1.f);
+}
