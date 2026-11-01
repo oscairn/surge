@@ -140,16 +140,27 @@ std::vector<float> renderNote(const RenderSpec &spec)
     if (!stateExt->load(plugin, &is))
         throw std::runtime_error("the plugin refused the patch");
 
-    const uint32_t total = (uint32_t)std::lround((hold + tail) * rate),
-                   off = (uint32_t)std::lround(hold * rate);
-    clap_event_note_t on{}, offEv{};
-    on.header = {sizeof(on), 0, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_NOTE_ON, 0};
-    on.note_id = 1;
-    on.channel = 0;
-    on.key = (int16_t)note;
-    on.velocity = vel / 127.0;
-    offEv = on;
-    offEv.header.type = CLAP_EVENT_NOTE_OFF;
+    const uint32_t total = (uint32_t)std::lround((hold + tail) * rate);
+    auto at = [&](double t) { return (uint32_t)std::lround(t * rate); };
+    auto noteEv = [&](uint32_t time, uint16_t type, int32_t id, int key) {
+        clap_event_note_t e{};
+        e.header = {sizeof(e), time, CLAP_CORE_EVENT_SPACE_ID, type, 0};
+        e.note_id = id;
+        e.channel = 0;
+        e.key = (int16_t)key;
+        e.velocity = vel / 127.0;
+        return e;
+    };
+    std::vector<clap_event_note_t> notes; // in time order
+    notes.push_back(noteEv(0, CLAP_EVENT_NOTE_ON, 1, note));
+    if (spec.legatoNote >= 0 && spec.legatoAt + 0.1 < hold)
+    {
+        notes.push_back(noteEv(at(spec.legatoAt), CLAP_EVENT_NOTE_ON, 2, spec.legatoNote));
+        notes.push_back(noteEv(at(spec.legatoAt + 0.1), CLAP_EVENT_NOTE_OFF, 1, note));
+        notes.push_back(noteEv(at(hold), CLAP_EVENT_NOTE_OFF, 2, spec.legatoNote));
+    }
+    else
+        notes.push_back(noteEv(at(hold), CLAP_EVENT_NOTE_OFF, 1, note));
     std::vector<float> lr;
     lr.reserve(total * 2);
     float left[512], right[512];
@@ -157,13 +168,12 @@ std::vector<float> renderNote(const RenderSpec &spec)
     {
         uint32_t n = std::min<uint32_t>(512, total - pos);
         std::vector<const clap_event_header_t *> evs;
-        if (pos == 0)
-            evs.push_back(&on.header);
-        if (off >= pos && off < pos + n)
-        {
-            offEv.header.time = off - pos;
-            evs.push_back(&offEv.header);
-        }
+        for (auto &e : notes)
+            if (e.header.time >= pos && e.header.time < pos + n)
+            {
+                e.header.time -= pos; // each event is in one block only
+                evs.push_back(&e.header);
+            }
         struct List
         {
             std::vector<const clap_event_header_t *> *e;

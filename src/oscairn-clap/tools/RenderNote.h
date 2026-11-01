@@ -27,6 +27,10 @@ struct RenderSpec
         double depth; // Surge's 0..1 units
     };
     std::vector<Mod> mods;
+    // A second note at legatoAt s (for portamento), the first released 0.1 s later; the
+    // second is released at hold. None when legatoNote < 0.
+    int legatoNote = -1;
+    double legatoAt = 0;
 };
 
 // Interleaved stereo samples. Throws std::runtime_error on an unknown name or a refused patch.
