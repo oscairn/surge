@@ -372,3 +372,39 @@ TEST_CASE("Pre-Filter Shaper Sits Before The Filters", "[signalpath]")
     REQUIRE(s->storage.getPatch().scene[0].prefilter_ws.type.deactivated);
     REQUIRE(s->storage.getPatch().scene[0].prefilter_ws.drive.val.f == 0);
 }
+
+TEST_CASE("VCA Velocity Amplitude Law", "[signalpath]")
+{
+    // held-sine level in dB at a velocity, relative to velocity 127
+    auto level = [](bool law, float sens, int vel) {
+        auto s = sineSurge();
+        s->storage.vcaVelocityAmplitudeLaw = law;
+        s->storage.getPatch().scene[0].vca_velsense.val.f = sens;
+        std::vector<float> out;
+        for (int b = 0; b < 1000; b++)
+        {
+            if (b == 2)
+                s->playNote(0, 69, vel, 0);
+            s->process();
+            out.insert(out.end(), s->output[0], s->output[0] + BLOCK_SIZE);
+        }
+        return 20 * std::log10(rms(out, 24000) + 1e-12);
+    };
+    for (float sens : {-6.f, -12.f, -24.f})
+    {
+        double top = level(true, sens, 127);
+        for (int vel : {1, 32, 64, 100})
+        {
+            INFO("sensitivity " << sens << " velocity " << vel);
+            double a = 1 + sens / 12 * (1 - vel / 127.0);
+            double got = level(true, sens, vel) - top;
+            if (a > 0)
+                REQUIRE(got == Catch::Approx(40 * std::log10(a)).margin(0.05));
+            else
+                REQUIRE(got < -120);
+            // off: linear in dB, as before
+            REQUIRE(level(false, sens, vel) - level(false, sens, 127) ==
+                    Catch::Approx(sens * (1 - vel / 127.0)).margin(0.05));
+        }
+    }
+}

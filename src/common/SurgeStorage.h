@@ -1698,6 +1698,10 @@ class alignas(16) SurgeStorage
     // the block their level passes 1, held at 1, instead of two blocks later, which overshoots
     // by up to 40 % with the shortest attack. Not streamed.
     bool analogEnvelopeAttackClamp{false};
+    // Velocity > VCA Gain as an amplitude law: the gain is a * a with a = 1 - k (1 - velocity),
+    // silent where a <= 0, and k = -sensitivity / 12 (0 to 4 over the parameter's -48..0 dB),
+    // instead of sensitivity x (1 - velocity) dB. Not streamed.
+    bool vcaVelocityAmplitudeLaw{false};
     float unstreamedTempo{120.f};             // this one is in actual BPM
     double songpos;
     bool isPlaying{false}; // host transport state

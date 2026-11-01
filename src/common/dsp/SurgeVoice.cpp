@@ -1439,9 +1439,17 @@ void SurgeVoice::SetQFB(QuadFilterChainState *Q, int e) // Q == 0 means init(ial
 
     // HERE
     float Drive = db_to_linear(scene->wsunit.drive.get_extended(localcopy[id_drive].f));
-    float Gain = db_to_linear(localcopy[id_vca].f +
-                              localcopy[id_vcavel].f * (1.f - velocitySource.get_output(0))) *
-                 modsources[ms_ampeg]->get_output(0);
+    float Gain;
+    if (storage->vcaVelocityAmplitudeLaw)
+    {
+        float a = std::max(
+            0.f, 1.f + localcopy[id_vcavel].f / 12.f * (1.f - velocitySource.get_output(0)));
+        Gain = db_to_linear(localcopy[id_vca].f) * a * a * modsources[ms_ampeg]->get_output(0);
+    }
+    else
+        Gain = db_to_linear(localcopy[id_vca].f +
+                            localcopy[id_vcavel].f * (1.f - velocitySource.get_output(0))) *
+               modsources[ms_ampeg]->get_output(0);
     float FB = scene->feedback.get_extended(localcopy[id_feedback].f);
 
     if (!Q)
