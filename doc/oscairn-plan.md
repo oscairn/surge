@@ -1241,6 +1241,12 @@ Decisions taken (for Jacob to confirm):
   the saturators divide by tanh(drive) instead of the drive; Saw2 maps to Modern (saw plus sine)
   rather than a new oscillator; OSC Reset Phase and Full map to retrigger and Tune to nothing;
   ageing is not modelled; the "Analog" oscillator waits for a shaper and self-sync model.
+- Added in the seventh session (details there): twelve voice LFOs stored in one block with
+  the scene LFOs, but streamed in the six-LFO numbering (no revision change, no conversion of
+  old patches); voice LFOs 7-12 only run in voices that start with a routing from them; the
+  LFO envelope gets an analog mode (Surge's analog ADSR on the LFO's A/D/S/R, hold unused)
+  for the pitch, oscillator and modifier EGs and the LFO fade-ins; the plugin lets voice LFO
+  attack and decay reach 2^8 s, but not release (its maximum means "never releases").
 
 *Saturator fit* (engine renders through the plugin at osc level table[511], amp level
 table[431], against the `m2` probes; drive in the engine = offset + 0.75 dB × raw):
@@ -1474,6 +1480,108 @@ moving pitch by 50 cents, depth scaling each generator, reset on load and round 
 saturator test now checks the level against the tanh(drive) scaling and was seen to fail with
 the old scaling. Measurement repository self-tests: 22 passed. CI: see the report for this
 session.
+
+**Seventh session (2026-10-31): voice modulators, LFO envelopes, pitch LFO.**
+
+*Engine: twelve voice LFOs* (`1b1e292`, generic). `n_lfos_voice` is 12; `ms_lfo7`-`ms_lfo12`
+follow `ms_lfo6` in `modsources`, so storage index = source - `ms_lfo1` still holds for every
+LFO (voice 0-11, scene 12-17) and the code that maps a source to an LFO is unchanged. Streams
+keep the old numbering: `modsourceToStreamed`/`modsourceFromStreamed` write sources as before
+with voice LFOs 7-12 at 41-46 (after Latest Key), and `lfoStreamedIndex` (its own inverse)
+keeps parameter names (`a_lfo6_*` is still scene LFO 1; voice LFO 7 is `a_lfo12_*`), step
+sequences, MSEGs, formulas, labels, extra-amplitude flags and editor state where they were.
+Old patches therefore need no conversion; `[reference]` passes unchanged. The new LFOs'
+parameters (78 per scene) are appended to the scene and reset before a patch loads, with their
+step sequences. Voice LFOs 7-12 assign and start only in voices whose scene has a voice routing
+from them (or whose step sequencer retriggers an envelope): assigning an LFO draws from
+storage's random generator, and without this every factory patch's randomness moved (484 of
+635 `[reference]` patches differed in the first try). A routing added while a note plays reaches
+them from the next note. Surge XT's modulation grid has no place for them: the editor skips
+them when laying out source buttons (the `surge-xt` GUI target was built, not run). Found on the
+way: `n_scene_params` must grow with the scene (it is only asserted in debug builds); the
+plugin's LFO modules were all "Scene LFO 12" and up (`90a556c`, Oscairn-specific, with a test).
+Not done: Python stubs (`surgepy`) still list six voice LFOs.
+
+*Engine: analog LFO envelope* (`0c7d7c7`, generic). A per-LFO Envelope Mode (all 18 LFOs, 18
+more scene parameters): Analog runs `ADSRModulationSource`'s analog mode on the LFO's attack,
+decay, sustain and release after the delay stage. A voice LFO in this mode matches the filter EG
+in analog mode within 1e-6 per block for three settings including release to silence
+(`[lfoenvmode]`), so the pitch EG decay and release tables fitted against the filter EG
+(fifth session) apply to an LFO-based pitch or oscillator EG unchanged. The plugin has 442
+parameters (334 before; +78 LFO parameters, +12 LFO off switches, +18 envelope modes).
+Range (`293c902`, Oscairn-specific): voice LFO attack and decay reach 2^8 s in the plugin; LFO
+release keeps 2^5 s (its maximum means "never releases"), so oscillator EG releases above about
+30 s cannot be reached.
+
+*Mapping, for the converter:* pitch EG, oscillator EGs 1-3 and modifier EG → five voice LFOs,
+shape Envelope, mode Analog, delay at minimum (and switched on: a deactivated delay makes the
+envelope constant), hold at minimum; pitch, filter, amplitude, oscillator 1-3 and modifier LFOs
+→ the other seven, with the measured delay and fade-in below; Part LFO → a scene LFO.
+
+*Pitch LFO fade-in* (`m3d` `pfi_*` at speed 240, `m3b` `plfo_fi*` at 176; vibrato amplitude per
+half LFO period from the cents track). The fade-in is an exponential charge toward 1.543 x full
+amplitude, cut off when it reaches full: the shape of Surge's analog attack (toward 1.5, switch
+at 1), fit RMS 0.00-0.02 cents. Time constants: 144: 0.494 s, 160: 0.991, 176: 1.981, 192: 3.961,
+200: 5.940, 208: 7.919, 214: 10.505 (from the 2.4 Hz probe, normalised to the known full depth);
+doubling every 16 steps, 200 exactly halfway in seconds, 214 between linear and log
+interpolation. 32, 64 and 128 at 2.4 Hz and 96 at 11.9 Hz are too fast for the method (reaching
+full within the first window; 128 looks like about 0.25 s). The sixth session's "96 and 144
+instant" was wrong for 144. Engine mapping: analog-mode LFO attack = log2(0.957 tau) + 2 (tau =
+2^(a-2) s in that mode; 0.957 makes the 1.5 target's curve closest to the 1.543 one, 0.4 % of full
+at worst in theory). Engine renders (voice LFO 1 on oscillator 1's pitch, 44.1 kHz) against the
+six `pfi_*` probes: largest vibrato-amplitude difference 0.47-0.91 % of full (proposed tolerance,
+for Jacob: 2 % of full).
+
+*Pitch LFO delay* (`m3d` `pdl_*` at 11.9 Hz; switch-on time by a grid search for a step on the
+steady sinusoid fitted after it). The LFO runs from note-on (its phase at the switch is the
+free-running phase, not a restart) and switches on fully: Surge's LFO delay. Switch-on times:
+4: 0.049 s, 8: 0.130, 12: 0.239, 24: 0.669, 40: 1.429, 48: 1.881, 56: 2.370, 72: 3.459, 80:
+4.049; t = 0.6656 (raw/24)^1.5 s fits all nine within 3.7 ms (replaces the sixth session's 0.64
+(raw/24)^1.53 from half-amplitude times). Engine (LFO delay = log2 t of that formula) measured
+the same way: within 2.5 % or 5 ms of the reference at 8 of 9 points; 4 is 5.3 ms early (-10.8 %);
+48's engine fit is poor (RMS 24 cents) and reads +9.5 ms. The method's own error, from engine
+renders at known delays, is about 2-6 ms. `m3b` `plfo_dl16/32/64`: 0.361, 1.019, 2.899 s at 2.4 Hz
+(the formula: 0.363, 1.025, 2.900); 96 and 127: the method found no switch-on in the 5 s note (not looked into).
+
+*Part LFO on an analog Part* (batch `m7a`, new: triangle Part LFO on oscillator 1's out level,
+LFO box destination 83; the Part LFO has no pitch destination on an analog Part). Rates at
+speeds 16, 24, 32, 40, 48: 0.2073, 0.4135, 0.8256, 1.6472, 3.2868 Hz, within +0.18 to +0.28 % of the
+FM-engine Part LFO table (`m4/m6i/lfofit.json`), so one table serves both. Above 48 not checked
+(the FM table's own fits are unreliable there).
+
+*Self sync* (time-boxed, not modelled). A restarted slave (sine or ramp) with raised-cosine fades
+at both ends of each master period, ratio and fade fitted to harmonics 1-40 of the `m3b` probes,
+fits badly (5-8 dB RMS) and the best ratios don't follow the nominal ones (raw 24 on a sine: 2.51
+for a nominal 1.41; raw 96: 7.59 for 4; saw raw 48: 3.22 for 2; saw raw 96: 2.98 for 4). Either
+the pitch scale isn't 25 cents a step or the slave isn't a plain restarted wave; not resolved.
+The wave shaper was not looked at again. The "Analog" oscillator stays unbuilt.
+
+*Not done this session:* oscillator EG tables of their own (three probes from the sixth session
+only), plugin checks of unison spread and drift statistics, the milestone 1/2 time-boxed items,
+milestone 4.
+
+*CI.* Pushes `90a556c` (with `1b1e292`), `0c7d7c7`, and `293c902` with this record started no workflow run (checked for the first two); a
+manual dispatch was refused ("Actions has been disabled for this repository", HTTP 422) although
+the org and repo settings show Actions enabled. No workaround was tried. For these commits the
+Linux ARM64 jobs (standard, ASan/UBSan, TSan) and the CI macOS jobs are unverified; the local
+gates below run on macOS arm64 only.
+
+**Tests run in the seventh session** (macOS arm64). `1b1e292`: `surge-testrunner` 200 passed, 1
+skipped (201 test cases); `[reference]` "Compared 635 patches, skipped 6"; `oscairn-analog-tests`
+passed in the standard (424 parameters), ASan/UBSan (0 reports) and TSan (0 reports) builds; the
+`surge-xt` GUI library built. `90a556c` (plugin only): `oscairn-analog-tests` standard, ASan and
+TSan passed, 0 reports; the new module check was seen to fail without the fix; testrunner not
+rerun. `0c7d7c7`: testrunner 203 test cases passed, `[reference]` 635 compared, 6 skipped;
+`oscairn-analog-tests` standard (76 s), ASan (79 s) and TSan (359 s) passed, 0 reports.
+`293c902` (plugin only): `oscairn-analog-tests` standard (76 s, 442 parameters), ASan (79 s) and TSan (354 s) passed, 0 reports; testrunner not rerun. New tests: `[voicelfos]` (stream numbering,
+voice LFOs 7-12 modulate exactly like LFO 1, only routed ones run, stream and reset),
+`[lfoenvmode]`, the plugin's LFO module and range checks.
+
+**Where this stopped** (seventh session). Twelve voice LFOs and the analog LFO envelope are in;
+the pitch LFO's delay and fade-in mappings are measured and checked against engine renders; the
+Part LFO's rate table is the FM one. Next: oscillator EG tables (dense PW-EG probes), the pitch
+LFO wave start phases against engine renders, self sync (probe the pitch scale first: a sync
+sweep on a sine at fine steps), the shaper, then the items in the sixth session's list.
 
 **Where this stopped** (sixth session). Milestone 3: voice unison and segment drift are in, OSC
 reset maps to retrigger, Saw2 and the pulse width map to Modern, the pitch LFO's depth, waves,
