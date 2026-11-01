@@ -99,9 +99,12 @@ std::string moduleFor(const Parameter &p)
     case cg_ENV:
         return p.ctrlgroup_entry == 0 ? "Amp Envelope" : "Filter Envelope";
     case cg_LFO:
-        return p.ctrlgroup_entry < n_lfos_voice
-                   ? "Voice LFO " + n
-                   : "Scene LFO " + std::to_string(p.ctrlgroup_entry - n_lfos_voice + 1);
+    {
+        // an LFO's control group entry is its modulation source
+        int l = p.ctrlgroup_entry - ms_lfo1;
+        return l < n_lfos_voice ? "Voice LFO " + std::to_string(l + 1)
+                                : "Scene LFO " + std::to_string(l - n_lfos_voice + 1);
+    }
     default:
         return p.scene == 0 ? "Global" : "Scene";
     }

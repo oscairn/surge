@@ -435,6 +435,15 @@ static void testPortsAndParams(const std::vector<std::string> &patches)
               std::string("value text for ") + info.name);
         infos[info.id] = info;
     }
+    auto moduleOf = [&](const char *name) {
+        auto it = infos.find(fnv1a(name));
+        return it == infos.end() ? std::string() : std::string(it->second.module);
+    };
+    check(moduleOf("a_lfo0_rate") == "Voice LFO 1" && moduleOf("a_lfo5_rate") == "Voice LFO 6" &&
+              moduleOf("a_lfo12_rate") == "Voice LFO 7" &&
+              moduleOf("a_lfo17_rate") == "Voice LFO 12" &&
+              moduleOf("a_lfo6_rate") == "Scene LFO 1" && moduleOf("a_lfo11_rate") == "Scene LFO 6",
+          "LFO parameters are grouped by their LFO");
 
     // Ranges hold for every factory patch: a parameter exposed in Surge's own units must have
     // the same range whatever patch is loaded (those whose range follows another parameter
