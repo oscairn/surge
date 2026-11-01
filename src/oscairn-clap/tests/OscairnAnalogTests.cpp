@@ -1229,6 +1229,64 @@ static void testSaturatorsAgainstReference()
         }
     }
     std::printf("  saturators: largest difference %.2f dB\n", worst);
+
+    // The filter saturator after every other filter type (batch m10a: a sine at note 60, LPFs at
+    // index 1023, HPFs at 0, BPF12 at 537 and BPF6 at 532, raw 48 and 80), each type mapped as
+    // in the cutoff tables. The reference uses one curve and asymmetry for every type; the
+    // offsets differ by the engine filters' pass-band level at the note against the
+    // reference's (one offset, -43.6 dB, for the LPFs, whose pass band is at unity in both).
+    struct TypeCase
+    {
+        const char *name;
+        const float *cutoff;
+        int type, subtype, index;
+        double resonance, offset, ref48[5], ref80[5];
+    };
+    const TypeCase types[] = {
+        {"LPF18", T::cutoffLp18, 3, 2, 1023, 0, -43.60, {-26.4, -34.0, -54.3, -64.3, -82.1}, {-27.1, -10.6, -29.3, -16.7, -32.2}},
+        {"LPF12", T::cutoffLp12, 3, 1, 1023, 0, -43.60, {-26.4, -34.0, -54.3, -64.3, -82.1}, {-27.1, -10.6, -29.3, -16.7, -32.2}},
+        {"LPF6", T::cutoffLp6, 3, 0, 1023, 0, -43.60, {-26.4, -34.0, -54.3, -64.3, -82.1}, {-27.1, -10.6, -29.3, -16.7, -32.2}},
+        {"HPF24", T::cutoffHp24, 5, 0, 0, 0.05, -42.52, {-26.9, -35.2, -56.0, -66.8, -85.2}, {-26.6, -10.7, -29.1, -17.0, -32.1}},
+        {"HPF18", T::cutoffHp18, 35, 6, 0, 0, -38.46, {-26.9, -35.0, -55.8, -66.4, -84.6}, {-26.7, -10.7, -29.2, -16.9, -32.1}},
+        {"HPF12", T::cutoffHp12, 20, 0, 0, 0, -40.49, {-26.7, -34.6, -55.2, -65.6, -83.6}, {-26.8, -10.7, -29.2, -16.8, -32.1}},
+        {"HPF6", T::cutoffHp6, 35, 4, 0, 0, -38.96, {-26.6, -34.4, -54.9, -65.2, -83.2}, {-27.0, -10.6, -29.3, -16.8, -32.1}},
+        {"BPF12", T::cutoffBp12, 23, 0, 537, 0, -41.71, {-35.6, -53.3, -82.9, -95.4, -119.4}, {-21.7, -14.9, -29.6, -25.7, -37.5}},
+        {"BPF6", T::cutoffBp6, 6, 0, 532, 0, -45.43, {-33.5, -49.0, -76.4, -99.4, -114.7}, {-22.3, -13.5, -28.6, -22.7, -34.9}},
+    };
+    const double f60 = 440 * std::pow(2.0, -9 / 12.0);
+    double worstType = 0;
+    for (auto &c : types)
+        for (int raw : {48, 80})
+        {
+            auto x = renderMono({60, 100, 1, 0.1, rate,
+                                 {{"a_lowcut.off", 1}, {"a_osc1_type", 1},
+                                  {"a_vca_level", T::ampLevel[431]},
+                                  {"a_level_o1", T::osc1Level[511]},
+                                  {"a_filter1_type", c.type}, {"a_filter1_subtype", c.subtype},
+                                  {"a_filter1_resonance", c.resonance},
+                                  {"a_filter1_cutoff", c.cutoff[c.index]},
+                                  {"a_filter1_drive", c.offset + 0.75 * raw},
+                                  {"a_filter1_drive_asym", 0.253},
+                                  {"a_filter1_drive.off", 0}},
+                                 {}});
+            const double *ref = raw == 48 ? c.ref48 : c.ref80;
+            size_t a = (size_t)((F::onset(x, rate) + 0.3) * rate), n = (size_t)(0.6 * rate);
+            double h1 = F::magnitudeAt(x, a, n, f60, rate);
+            for (int h = 2; h <= 6; ++h)
+            {
+                if (ref[h - 2] <= -50)
+                    continue;
+                double got = 20 * std::log10(F::magnitudeAt(x, a, n, h * f60, rate) / h1);
+                worstType = std::max(worstType, std::fabs(got - ref[h - 2]));
+                check(std::fabs(got - ref[h - 2]) <= 3,
+                      std::string("filter saturator after ") + c.name + " at raw " +
+                          std::to_string(raw) + ", harmonic " + std::to_string(h) +
+                          ": reference " + std::to_string(ref[h - 2]) + " dB, engine " +
+                          std::to_string(got));
+            }
+        }
+    std::printf("  filter saturator after the other types: largest difference %.2f dB\n",
+                worstType);
 }
 
 // Noise tone against the reference (batches m8b and m10a: noise alone at Noise Generator Out
