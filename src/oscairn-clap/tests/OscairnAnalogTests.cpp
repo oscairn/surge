@@ -760,6 +760,101 @@ static void testFirstBlockAfterLoad()
                           " periods");
 }
 
+// Voice unison against the reference (sixth session, batch m3a: a sine at note 84, unison 2
+// and 4 at detune 8, spread 0, 4, 8 and 15), with the converter's mapping: detune 7.98 cents
+// (index x 0.9975), spread the far-side position x (0.186, 0.385, 0.717 at 4, 8, 15). Each
+// partial's offset in cents and its left and right amplitude relative to a single voice,
+// from a Hann-windowed DFT over the held part searched around the reference's offset.
+// Proposed tolerances: 0.1 cent, 0.02.
+static void testUnisonAgainstReference()
+{
+    const double rate = 44100, f0 = 440 * std::pow(2.0, 15 / 12.0);
+    auto render = [&](int voices, double spread) {
+        oscairn_analog::RenderSpec s{84, 100, 3, 0.1, rate,
+                                     {{"a_drift", 0}, {"a_lowcut.off", 1}, {"a_osc1_type", 1}},
+                                     {}};
+        if (voices > 1)
+            s.params.insert(s.params.end(), {{"a_unison_voices", voices},
+                                             {"a_unison_detune", 0.0798},
+                                             {"a_unison_spread", spread}});
+        return oscairn_analog::renderNote(s);
+    };
+    // amplitude of each channel at f over the held part (0.1 s after the start to 0.15 s
+    // before the end of the hold)
+    auto dft = [&](const std::vector<float> &lr, double f, double &l, double &r) {
+        size_t a = (size_t)(0.1 * rate), b = (size_t)((3 - 0.15) * rate), n = b - a;
+        double lr0 = 0, li = 0, rr0 = 0, ri = 0, ws = 0;
+        for (size_t k = 0; k < n; ++k)
+        {
+            double w = 0.5 - 0.5 * std::cos(2 * M_PI * k / (n - 1)), p = 2 * M_PI * f * k / rate;
+            double c = std::cos(p) * w, si = std::sin(p) * w;
+            lr0 += lr[2 * (a + k)] * c;
+            li += lr[2 * (a + k)] * si;
+            rr0 += lr[2 * (a + k) + 1] * c;
+            ri += lr[2 * (a + k) + 1] * si;
+            ws += w;
+        }
+        l = 2 * std::hypot(lr0, li) / ws;
+        r = 2 * std::hypot(rr0, ri) / ws;
+    };
+    // the peak within 1 cent of `cents`: 0.05-cent steps, then a parabola
+    auto partial = [&](const std::vector<float> &lr, double cents, double &l, double &r) {
+        double prev[3];
+        std::vector<double> m;
+        for (int i = -20; i <= 20; ++i)
+        {
+            double a, b;
+            dft(lr, f0 * std::pow(2.0, (cents + 0.05 * i) / 1200), a, b);
+            m.push_back(a + b);
+        }
+        size_t k = std::max_element(m.begin() + 1, m.end() - 1) - m.begin();
+        for (int j = 0; j < 3; ++j)
+            prev[j] = std::log(m[k - 1 + j]);
+        double d = 0.5 * (prev[0] - prev[2]) / (prev[0] - 2 * prev[1] + prev[2]);
+        double bc = cents + 0.05 * ((double)k - 20 + d);
+        dft(lr, f0 * std::pow(2.0, bc / 1200), l, r);
+        return bc;
+    };
+    double one, unused;
+    dft(render(1, 0), f0, one, unused);
+    struct P
+    {
+        double cents, l, r;
+    };
+    struct Case
+    {
+        int voices;
+        double spread;
+        std::vector<P> ref;
+    };
+    const Case cases[] = {
+        {2, 0, {{-7.98, 0.707, 0.707}, {7.99, 0.707, 0.707}}},
+        {2, 0.186, {{-7.98, 0.707, 0.648}, {7.99, 0.648, 0.707}}},
+        {2, 0.385, {{-7.98, 0.707, 0.479}, {7.99, 0.479, 0.707}}},
+        {2, 0.717, {{-7.98, 0.707, 0.131}, {7.99, 0.131, 0.707}}},
+        {4, 0, {{-15.96, 0.5, 0.5}, {-5.27, 0.5, 0.5}, {5.28, 0.5, 0.5}, {15.97, 0.5, 0.5}}},
+        {4, 0.186, {{-15.96, 0.5, 0.339}, {-5.27, 0.5, 0.479}, {5.28, 0.479, 0.5}, {15.97, 0.339, 0.5}}},
+        {4, 0.385, {{-15.96, 0.5, 0.065}, {-5.27, 0.5, 0.42}, {5.28, 0.42, 0.5}, {15.97, 0.065, 0.5}}},
+    };
+    for (auto &c : cases)
+    {
+        auto lr = render(c.voices, c.spread);
+        for (auto &p : c.ref)
+        {
+            double l, r, cents = partial(lr, p.cents, l, r);
+            l /= one;
+            r /= one;
+            auto what = "unison " + std::to_string(c.voices) + " spread " + std::to_string(c.spread) +
+                        " partial at " + std::to_string(p.cents) + " cents: engine " +
+                        std::to_string(cents) + " cents, " + std::to_string(l) + " / " +
+                        std::to_string(r);
+            check(std::fabs(cents - p.cents) <= 0.1 && std::fabs(l - p.l) <= 0.02 &&
+                      std::fabs(r - p.r) <= 0.02,
+                  what);
+        }
+    }
+}
+
 template <size_t N, size_t K>
 static void checkTable(const char *name, const float (&table)[N],
                        const oscairn_tables::Check (&checks)[K], double tolerance,
@@ -983,6 +1078,7 @@ int main(int argc, char **argv)
         run("formula refused", [] { testFormulaRefused(); });
         run("concurrent state", [] { testConcurrentState(); });
         run("first block after a load", [] { testFirstBlockAfterLoad(); });
+        run("unison against the reference", [] { testUnisonAgainstReference(); });
         run("fitted tables", [] { testFittedTables(); });
     }
     catch (const std::exception &e)
