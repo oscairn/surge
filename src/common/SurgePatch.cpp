@@ -766,6 +766,12 @@ SurgePatch::SurgePatch(SurgeStorage *storage)
                 ct_envmode, Surge::Skin::LFO::envmode, sc_id, cg_LFO, ms_lfo1 + l, false,
                 kNoPopup));
         }
+
+        a->push_back(scene[sc].keyon_delay.assign(
+            p_id.next(), id_s++, "keyon_delay", "Key-On Delay",
+            fmt::format("{:c}/keyon_delay", 'a' + sc), ct_envtime_deactivatable,
+            Surge::Skin::Scene::keyon_delay, sc_id, cg_GLOBAL, 0, false));
+        scene[sc].keyon_delay.deactivated = true;
     }
 
     param_ptr.push_back(
@@ -2115,11 +2121,12 @@ void SurgePatch::load_xml(const void *data, int datasize, bool is_preset)
                          &sc.amp_drive, &sc.amp_drive_asymmetry, &sc.prefilter_ws.type,
                          &sc.prefilter_ws.drive, &sc.unison_voices, &sc.unison_detune,
                          &sc.unison_spread, &sc.segdrift_pitch, &sc.segdrift_offset,
-                         &sc.segdrift_cutoff, &sc.segdrift_time})
+                         &sc.segdrift_cutoff, &sc.segdrift_time, &sc.keyon_delay})
         {
             p->val = p->val_default;
             p->deactivated = p->can_deactivate();
         }
+        sc.keyon_delay.temposync = false;
 
         for (auto &lfo : sc.lfo)
         {

@@ -491,6 +491,28 @@ void SurgeSynthesizer::playNote(char channel, char key, char velocity, char detu
     if (forceScene == 1)
         channelmask = 2;
 
+    if (!startingDelayedNote)
+    {
+        for (int sc = 0; sc < n_scenes; ++sc)
+        {
+            auto &kd = storage.getPatch().scene[sc].keyon_delay;
+            // shortcut: with every slot taken a note starts at once; 128 is far past polyphony
+            if (!(channelmask & (1 << sc)) || kd.deactivated ||
+                delayedNoteCount == maxDelayedNotes)
+                continue;
+            float seconds =
+                powf(2.f, kd.val.f) / (kd.temposync ? storage.temposyncratio : 1.f);
+            int blocks = (int)std::lround(seconds * storage.samplerate * BLOCK_SIZE_INV);
+            if (blocks <= 0)
+                continue;
+            delayedNotes[delayedNoteCount++] = {channel, key, velocity, detune, host_noteid, sc,
+                                                blocks};
+            channelmask &= ~(1 << sc);
+        }
+        if (!channelmask)
+            return;
+    }
+
     // TODO: FIX SCENE ASSUMPTION
     if (channelmask & 1)
     {
@@ -736,6 +758,44 @@ void SurgeSynthesizer::freeVoice(SurgeVoice *v)
      */
     v->~SurgeVoice();
     v = new (&voices_array[foundScene][foundIndex]) SurgeVoice();
+}
+
+template <typename F> int SurgeSynthesizer::cancelDelayedNotes(F &&matches)
+{
+    int kept = 0, cancelled = 0;
+    for (int i = 0; i < delayedNoteCount; ++i)
+    {
+        auto &d = delayedNotes[i];
+        if (matches(d))
+        {
+            notifyEndedNote(d.host_noteid, d.key, d.channel, false);
+            ++cancelled;
+        }
+        else
+            delayedNotes[kept++] = d;
+    }
+    delayedNoteCount = kept;
+    return cancelled;
+}
+
+void SurgeSynthesizer::startDueDelayedNotes()
+{
+    std::array<DelayedNote, maxDelayedNotes> due;
+    int n = 0, kept = 0;
+    for (int i = 0; i < delayedNoteCount; ++i)
+    {
+        auto &d = delayedNotes[i];
+        if (--d.blocksLeft <= 0)
+            due[n++] = d;
+        else
+            delayedNotes[kept++] = d;
+    }
+    delayedNoteCount = kept;
+    startingDelayedNote = true;
+    for (int i = 0; i < n; ++i)
+        playNote(due[i].channel, due[i].key, due[i].velocity, due[i].detune, due[i].host_noteid,
+                 due[i].scene);
+    startingDelayedNote = false;
 }
 
 void SurgeSynthesizer::notifyEndedNote(int32_t nid, int16_t key, int16_t chan, bool thisBlock)
@@ -1330,6 +1390,22 @@ void SurgeSynthesizer::releaseNote(char channel, char key, char velocity, int32_
 
     // The key is physically up from here on, whatever the pedals go on to do with the note
     channelState[channel].keyState[key].keyIsDown = false;
+
+    // A note still waiting for its key-on delay never starts. If it was the key's only note,
+    // there is nothing else to release (and the mono modes mustn't go back to another key).
+    auto matches = [&](const DelayedNote &d) {
+        return d.channel == channel && d.key == key &&
+               (host_noteid < 0 || d.host_noteid == host_noteid);
+    };
+    if (delayedNoteCount && cancelDelayedNotes(matches))
+    {
+        bool sounding = false;
+        for (int sc = 0; sc < n_scenes; ++sc)
+            for (auto *v : voices[sc])
+                sounding |= v->state.gate && v->matchesChannelKeyId(channel, key, host_noteid);
+        if (!sounding)
+            return;
+    }
 
     bool foundVoice[n_scenes];
     for (int sc = 0; sc < n_scenes; ++sc)
@@ -1942,6 +2018,18 @@ void SurgeSynthesizer::releaseNotePostHoldCheck(int scene, char channel, char ke
 
 void SurgeSynthesizer::releaseNoteByHostNoteID(int32_t host_noteid, char velocity)
 {
+    // as in releaseNote: a note still waiting for its key-on delay never starts
+    if (delayedNoteCount && host_noteid >= 0 &&
+        cancelDelayedNotes([&](const DelayedNote &d) { return d.host_noteid == host_noteid; }))
+    {
+        bool sounding = false;
+        for (int sc = 0; sc < n_scenes; ++sc)
+            for (auto *v : voices[sc])
+                sounding |= v->state.gate && v->host_note_id == host_noteid;
+        if (!sounding)
+            return;
+    }
+
     std::array<uint16_t, 128> done;
     std::fill(done.begin(), done.end(), 0);
 
@@ -2579,6 +2667,8 @@ void SurgeSynthesizer::allSoundOff()
 
 void SurgeSynthesizer::allNotesOff()
 {
+    cancelDelayedNotes([](const DelayedNote &) { return true; });
+
     /*
      * For now, until we move to a sightly less delicate voice manager,
      * do two things here. First run over all the keys we have pressed. Then
@@ -2795,6 +2885,8 @@ void SurgeSynthesizer::purgeDuplicateHeldVoicesInPolyMode(int scene, int channel
 
 void SurgeSynthesizer::stopSound()
 {
+    cancelDelayedNotes([](const DelayedNote &) { return true; });
+
     /*
      * A patch change wants the keyboard state to outlive the load so that the notes
      * which were sounding can be replayed into the new patch, so it asks us to leave
@@ -5055,6 +5147,9 @@ void SurgeSynthesizer::process()
         mech::clear_block<BLOCK_SIZE>(output[1]);
         return;
     }
+
+    if (delayedNoteCount)
+        startDueDelayedNotes();
 
     if (retriggerHeldNotesPending.exchange(false))
     {

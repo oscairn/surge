@@ -210,6 +210,25 @@ class alignas(16) SurgeSynthesizer
                          int host_note_id, int host_originating_channel, int host_originating_key,
                          bool envFromZero = false);
     void notifyEndedNote(int32_t nid, int16_t key, int16_t chan, bool thisBlock = true);
+
+    // Key-on delay: note-ons waiting for their scene's delay, started at the start of the
+    // block their time comes in. A note released (or choked) before it starts never sounds
+    // and its end is reported at the next block.
+    struct DelayedNote
+    {
+        char channel, key, velocity, detune;
+        int32_t host_noteid;
+        int scene;
+        int blocksLeft;
+    };
+    static constexpr int maxDelayedNotes = 128;
+    std::array<DelayedNote, maxDelayedNotes> delayedNotes;
+    int delayedNoteCount{0};
+    bool startingDelayedNote{false};
+    // Removes the waiting notes that match, reporting their ends; returns how many
+    template <typename F> int cancelDelayedNotes(F &&matches);
+    void startDueDelayedNotes();
+
     std::array<std::array<SurgeVoice, MAX_VOICES>, 2> voices_array;
     // TODO: FIX SCENE ASSUMPTION!
     unsigned int voices_usedby[2][MAX_VOICES]; // 0 indicates no user, 1 is scene A, 2 is scene B

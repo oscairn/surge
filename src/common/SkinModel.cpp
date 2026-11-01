@@ -221,6 +221,7 @@ Connector segdrift_pitch = Connector("scene.segdrift_pitch", 0, 0, Components::N
 Connector segdrift_offset = Connector("scene.segdrift_offset", 0, 0, Components::None);
 Connector segdrift_cutoff = Connector("scene.segdrift_cutoff", 0, 0, Components::None);
 Connector segdrift_time = Connector("scene.segdrift_time", 0, 0, Components::None);
+Connector keyon_delay = Connector("scene.keyon_delay", 0, 0, Components::None);
 Connector amp_drive_asymmetry = Connector("scene.amp_drive_asymmetry", 0, 0, Components::None);
 Connector polylimit =
     Connector("scene.polylimit", 100, 41, 43, 14, Components::NumberField)

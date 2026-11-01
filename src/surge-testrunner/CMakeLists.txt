@@ -21,6 +21,7 @@ add_executable(${PROJECT_NAME}
   UnitTestsFX.cpp
   UnitTestsINFRA.cpp
   UnitTestsIO.cpp
+  UnitTestsKEYONDELAY.cpp
   UnitTestsLFOENVMODE.cpp
   UnitTestsLUA.cpp
   UnitTestsMIDI.cpp
