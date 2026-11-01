@@ -7,7 +7,8 @@
  * Surge XT and is GPL-3.0-or-later as a whole.
  *
  *   oscairn-analog-render out.wav [--note 60] [--vel 100] [--hold 1] [--tail 1] [--rate 48000]
- *                         [--legato 72 --legato-at 1] [name=value ...] [mod:source:name=depth ...]
+ *                         [--legato 72 --legato-at 1] [--reference] [name=value ...]
+ *                         [mod:source:name=depth ...]
  *   oscairn-analog-render --list
  *
  * name is a Surge storage name (as --list prints: a_osc1_pitch, a_env1_release ...); value
@@ -18,7 +19,9 @@
  * depth in Surge's 0..1 units. The patch is built with Surge's API, saved, and loaded into
  * the plugin as its state, so the render goes through the plugin's own path. Writes a
  * stereo 32-bit float WAV. --legato starts a second note at --legato-at seconds and releases
- * the first 0.1 s later (portamento); the second note is released at --hold.
+ * the first 0.1 s later (portamento); the second note is released at --hold. --reference
+ * turns on, in the patch, the engine options that match the reference instrument (off by
+ * default, as in any new patch).
  */
 
 #include "RenderNote.h"
@@ -73,7 +76,7 @@ int main(int argc, char **argv)
         if (argc < 2)
         {
             std::fprintf(stderr, "usage: oscairn-analog-render out.wav [--note n] [--vel v] [--hold s] "
-                                 "[--tail s] [--rate r] [--legato n --legato-at s] [name=value] "
+                                 "[--tail s] [--rate r] [--legato n --legato-at s] [--reference] [name=value] "
                                  "[mod:source:name=depth] | --list\n");
             return 2;
         }
@@ -102,6 +105,8 @@ int main(int argc, char **argv)
                 spec.legatoNote = (int)next();
             else if (a == "--legato-at")
                 spec.legatoAt = next();
+            else if (a == "--reference")
+                spec.referenceMatching = true;
             else if (auto eq = a.find('='); eq != std::string::npos)
             {
                 auto lhs = a.substr(0, eq);

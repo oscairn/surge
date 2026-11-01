@@ -112,6 +112,9 @@ std::vector<float> renderNote(const RenderSpec &spec)
     for (auto &m : spec.mods)
         synth->setModDepth01(findParam(*synth, m.target)->id, (modsources)m.source, 0, 0,
                              (float)m.depth);
+    synth->storage.analogEnvelopeAttackClamp = spec.referenceMatching;
+    synth->storage.vcaVelocityAmplitudeLaw = spec.referenceMatching;
+    synth->storage.saturatorAlgebraicCurve = spec.referenceMatching;
     void *data = nullptr;
     auto size = synth->saveRaw(&data);
     std::vector<uint8_t> state((uint8_t *)data, (uint8_t *)data + size);

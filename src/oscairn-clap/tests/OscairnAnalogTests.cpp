@@ -636,6 +636,129 @@ static void testBlockSizes(const std::vector<std::string> &patches)
     }
 }
 
+// A patch that doesn't turn on the reference-matching engine options plays in the plugin
+// exactly as in a stock Surge synthesizer (default options and parameter ranges): every 8th
+// factory patch, loaded into each (in stock Surge with the plugin's one-scene, no-effects
+// rules applied by hand) and rendered note for note, bit-identical. The plugin's longer envelope, LFO, portamento and velocity ranges
+// change only how far a parameter can be set, not what a stored value plays.
+static void testPlainPatchesMatchStock(const std::vector<std::string> &patches)
+{
+    const double rate = 48000;
+    const uint32_t frames = 48000;
+    int compared = 0, differing = 0;
+    // plus a patch where each option would show: analog amp envelope with the shortest attack,
+    // velocity sensitivity, amp saturator on
+    std::vector<uint8_t> built;
+    {
+        HeadlessLayer layer;
+        SurgeStorage::SurgeStorageConfig config;
+        config.suppliedDataPath = SurgeStorage::skipPatchLoadDataPathSentinel;
+        config.createUserDirectory = false;
+        config.scanWavetableAndPatches = false;
+        auto s = std::make_unique<SurgeSynthesizer>(&layer, config);
+        auto &sc = s->storage.getPatch().scene[0];
+        sc.adsr[0].mode.val.i = emt_analog;
+        sc.adsr[0].a.val.f = sc.adsr[0].a.val_min.f;
+        sc.vca_velsense.val.f = -12;
+        sc.amp_drive.deactivated = false;
+        sc.amp_drive.val.f = 12;
+        void *data = nullptr;
+        auto size = s->saveRaw(&data);
+        built.assign((uint8_t *)data, (uint8_t *)data + size);
+    }
+    std::vector<std::pair<std::string, std::vector<uint8_t>>> states;
+    for (size_t i = 0; i < patches.size(); i += 8)
+        states.emplace_back(patches[i], patchFromFxp(patches[i]));
+    states.emplace_back("built", built);
+    for (auto &[name, patch] : states)
+    {
+        if (patch.empty())
+            continue;
+        Instance a(rate);
+        if (!a.load(patch))
+            continue; // refused (a formula LFO)
+        auto plugin = a.render(frames, 512,
+                               {noteEvent(0, CLAP_EVENT_NOTE_ON, 1, 60, 70 / 127.0),
+                                noteEvent(24000, CLAP_EVENT_NOTE_OFF, 1, 60, 0)},
+                               false);
+
+        HeadlessLayer layer;
+        SurgeStorage::SurgeStorageConfig config;
+        config.suppliedDataPath = SurgeStorage::skipPatchLoadDataPathSentinel;
+        config.createUserDirectory = false;
+        config.scanWavetableAndPatches = false;
+        auto stock = std::make_unique<SurgeSynthesizer>(&layer, config);
+        stock->setSamplerate((float)rate);
+        stock->seedRandom(0x05CA1A4E); // the plugin's render seed
+        // the patch itself, with the plugin's one-scene, no-effects rules applied by hand
+        stock->loadRaw(patch.data(), (int)patch.size(), false);
+        auto &sp = stock->storage.getPatch();
+        sp.scenemode.val.i = sm_single;
+        sp.scene_active.val.i = 0;
+        sp.fx_disable.val.i = (1 << n_fx_slots) - 1;
+        sp.copy_globaldata(sp.globaldata);
+        sp.copy_scenedata(sp.scenedata[0], sp.scenedataOrig[0], 0);
+        stock->storage.perform_queued_wtloads();
+        stock->audio_processing_active = true;
+        std::vector<float> ref;
+        ref.reserve(frames * 2);
+        for (uint32_t b = 0; b * BLOCK_SIZE < frames; ++b)
+        {
+            if (b == 0)
+                stock->playNote(0, 60, 70, 0, 1);
+            if (b * BLOCK_SIZE == 24000)
+                stock->releaseNote(0, 60, 0, 1);
+            stock->process();
+            stock->time_data.ppqPos += (double)BLOCK_SIZE * stock->time_data.tempo / (60. * rate);
+            for (int k = 0; k < BLOCK_SIZE; ++k)
+            {
+                ref.push_back(stock->output[0][k]);
+                ref.push_back(stock->output[1][k]);
+            }
+        }
+        ref.resize(plugin.size());
+        ++compared;
+        if (plugin != ref)
+        {
+            ++differing;
+            check(false, "a plain patch plays as in stock Surge: " + name);
+        }
+    }
+    check(compared > 50, "plain patches compared: " + std::to_string(compared));
+
+    // turned on in a patch, the options survive the plugin's state, byte for byte
+    {
+        HeadlessLayer layer;
+        SurgeStorage::SurgeStorageConfig config;
+        config.suppliedDataPath = SurgeStorage::skipPatchLoadDataPathSentinel;
+        config.createUserDirectory = false;
+        config.scanWavetableAndPatches = false;
+        auto s = std::make_unique<SurgeSynthesizer>(&layer, config);
+        s->loadRaw(built.data(), (int)built.size(), false);
+        s->storage.analogEnvelopeAttackClamp = true;
+        s->storage.vcaVelocityAmplitudeLaw = true;
+        s->storage.saturatorAlgebraicCurve = true;
+        void *data = nullptr;
+        auto size = s->saveRaw(&data);
+        std::vector<uint8_t> on((uint8_t *)data, (uint8_t *)data + size);
+        Instance a, b;
+        check(a.load(on), "a patch with the options on loads");
+        auto saved = a.save();
+        std::string text(saved.begin(), saved.end());
+        check(text.find("analogEnvelopeAttackClamp") != std::string::npos &&
+                  text.find("vcaVelocityAmplitudeLaw") != std::string::npos &&
+                  text.find("saturatorAlgebraicCurve") != std::string::npos,
+              "the plugin's state keeps the options");
+        check(b.load(saved) && b.save() == saved, "the options round trip through the state");
+        auto x = a.render(24000, 512, {noteEvent(0, CLAP_EVENT_NOTE_ON, 1, 60, 70 / 127.0)}, false);
+        Instance c;
+        c.load(built);
+        auto y = c.render(24000, 512, {noteEvent(0, CLAP_EVENT_NOTE_ON, 1, 60, 70 / 127.0)}, false);
+        check(x != y, "the options change the sound of a patch that uses them");
+    }
+    std::printf("  plain patches: %d compared, %d differ from stock\n", compared, differing);
+}
+
 static bool hasNoteEnd(const Instance &a, int32_t id)
 {
     return std::any_of(a.out.noteEnds.begin(), a.out.noteEnds.end(),
@@ -785,6 +908,7 @@ static constexpr bool sanitizerBuild = false;
 static std::vector<float> renderMono(oscairn_analog::RenderSpec spec)
 {
     spec.rate = 44100;
+    spec.referenceMatching = true; // every use compares against the reference
     spec.params.insert(spec.params.begin(), {{"a_drift", 0}, {"a_env1_mode", 1}});
     auto lr = oscairn_analog::renderNote(spec);
     std::vector<float> m(lr.size() / 2);
@@ -832,6 +956,7 @@ static void testUnisonAgainstReference()
             s.params.insert(s.params.end(), {{"a_unison_voices", voices},
                                              {"a_unison_detune", 0.0798},
                                              {"a_unison_spread", spread}});
+        s.referenceMatching = true;
         return oscairn_analog::renderNote(s);
     };
     // amplitude of each channel at f over the held part (0.1 s after the start to 0.15 s
@@ -1700,6 +1825,7 @@ int main(int argc, char **argv)
         run("notes", [] { testNotes(); });
         run("formula refused", [] { testFormulaRefused(); });
         run("concurrent state", [] { testConcurrentState(); });
+        run("plain patches match stock Surge", [&] { testPlainPatchesMatchStock(patches); });
         run("first block after a load", [] { testFirstBlockAfterLoad(); });
         run("unison against the reference", [] { testUnisonAgainstReference(); });
         run("drift against the reference", [] { testDriftAgainstReference(); });

@@ -31,6 +31,9 @@ struct RenderSpec
     // second is released at hold. None when legatoNote < 0.
     int legatoNote = -1;
     double legatoAt = 0;
+    // Turn on, in the patch, the engine options that match the reference (the analog attack
+    // clamp, the amplitude velocity law and the algebraic saturators), as a converted Part does
+    bool referenceMatching = false;
 };
 
 // Interleaved stereo samples. Throws std::runtime_error on an unknown name or a refused patch.

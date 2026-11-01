@@ -543,13 +543,9 @@ struct Plugin
         patch.scenemode.val.i = sm_single;
         patch.scene_active.val.i = 0;
         patch.fx_disable.val.i = (1 << n_fx_slots) - 1;
-        // here rather than once at init, so a patch that sets these options can't turn them
-        // off: the instrument this plugin matches doesn't overshoot at the end of an
-        // envelope's attack, its amp velocity sensitivity is an amplitude law, and its
-        // saturators follow u / sqrt(1 + u^2) with a square term
-        synth->storage.analogEnvelopeAttackClamp = true;
-        synth->storage.vcaVelocityAmplitudeLaw = true;
-        synth->storage.saturatorAlgebraicCurve = true;
+        // The engine options that match the reference instrument (no attack overshoot,
+        // amplitude velocity law, algebraic saturators) come with the patch: off unless it
+        // turns them on, as a converted Part does.
         return true;
     }
 
