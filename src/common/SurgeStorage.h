@@ -1694,6 +1694,10 @@ class alignas(16) SurgeStorage
     // Save 120 BPM as the patch's tempo instead of the host's, so a patch's saved bytes don't
     // depend on the tempo at the time (and saving doesn't read the audio thread's tempo).
     bool saveFixedTempo{false};
+    // Analog-mode envelopes (scene envelopes and LFO envelopes) switch from attack to decay in
+    // the block their level passes 1, held at 1, instead of two blocks later, which overshoots
+    // by up to 40 % with the shortest attack. Not streamed.
+    bool analogEnvelopeAttackClamp{false};
     float unstreamedTempo{120.f};             // this one is in actual BPM
     double songpos;
     bool isPlaying{false}; // host transport state

@@ -29,6 +29,8 @@
 #include "ModulationSource.h"
 #include "DebugHelpers.h"
 
+#include <cstring>
+
 enum ADSRState
 {
     s_attack = 0,
@@ -243,6 +245,12 @@ class ADSRModulationSource : public ModulationSource
             SIMD_MM(store_ss)(&_discharge, discharge);
 
             SIMD_MM(store_ss)(&output, v_c1);
+            if (storage->analogEnvelopeAttackClamp && gate && _discharge == 0.f && _v_c1 > 1.f)
+            {
+                _v_c1 = _v_c1_delayed = output = 1.f;
+                const uint32_t on = 0xFFFFFFFF; // the discharge flag is a comparison mask
+                std::memcpy(&_discharge, &on, sizeof(on));
+            }
             if (gate)
             {
                 _ungateHold = output;

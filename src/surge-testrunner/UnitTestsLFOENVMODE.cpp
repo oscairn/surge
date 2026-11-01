@@ -34,9 +34,10 @@ namespace
 {
 // filter EG and voice LFO 7's envelope, per block, through a note held for `hold` blocks
 std::vector<std::pair<float, float>> envelopes(bool analogLfo, float a, float d, float s, float r,
-                                               int hold, float delay = -8.f)
+                                               int hold, float delay = -8.f, bool clamp = false)
 {
     auto surge = Surge::Headless::createSurge(48000);
+    surge->storage.analogEnvelopeAttackClamp = clamp;
     auto &sc = surge->storage.getPatch().scene[0];
     auto &eg = sc.adsr[1];
     eg.mode.val.b = true;
@@ -105,6 +106,36 @@ TEST_CASE("LFO Envelope Analog Mode Follows The Scene Envelopes", "[lfoenvmode]"
         for (int i = 0; i < 100; i++)
             REQUIRE(e[i].second == 0.f);
     }
+}
+
+TEST_CASE("Analog Envelope Attack Clamp", "[lfoenvmode]")
+{
+    auto peak = [](const std::vector<std::pair<float, float>> &e) {
+        float f = 0, l = 0;
+        for (auto &[a, b] : e)
+            f = std::max(f, a), l = std::max(l, b);
+        return std::pair{f, l};
+    };
+    // the shortest attack overshoots by about 40 % without the clamp
+    auto [f0, l0] = peak(envelopes(true, -8.f, 2.f, 1.f, -3.f, 400));
+    REQUIRE(f0 > 1.3f);
+    REQUIRE(l0 > 1.3f);
+    for (float a : {-8.f, -6.f, -2.f})
+    {
+        INFO("attack " << a);
+        auto e = envelopes(true, a, 2.f, 1.f, -3.f, 400, -8.f, true);
+        auto [f, l] = peak(e);
+        REQUIRE(f == 1.f); // held at 1 when it gets there, then at the full sustain
+        REQUIRE(l == 1.f);
+        for (auto &[a1, b] : e)
+            REQUIRE(b == Catch::Approx(a1).margin(1e-6));
+    }
+    // a lower sustain and a fast decay: from 1 (in the block before the first one read here)
+    // down to the sustain
+    auto e = envelopes(true, -8.f, -3.f, 0.5f, -3.f, 400, -8.f, true);
+    REQUIRE(peak(e).first <= 1.f);
+    REQUIRE(peak(e).first > 0.95f);
+    REQUIRE(e[399].first == Catch::Approx(0.25f).margin(1e-3));
 }
 
 TEST_CASE("LFO Envelope Mode Streams And Resets", "[lfoenvmode]")

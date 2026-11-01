@@ -553,6 +553,11 @@ void LFOModulationSource::processAnalogEnvelope()
     analogV += diffA * coef(iattack, lfo->attack);
     analogV += diffD * coef(idecay, lfo->decay);
     analogV += diffR * coef(irelease, lfo->release);
+    if (storage->analogEnvelopeAttackClamp && gate && !analogDischarge && analogV > 1.f)
+    {
+        analogV = analogVDelayed = 1.f;
+        analogDischarge = true;
+    }
     env_val = analogV;
 
     if (!gate && !analogDischarge && analogV < 1e-6f)
