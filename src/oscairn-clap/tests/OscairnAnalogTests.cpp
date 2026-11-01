@@ -1188,6 +1188,92 @@ static void testSaturatorsAgainstReference()
     std::printf("  saturators: largest difference %.2f dB\n", worst);
 }
 
+// Noise tone against the reference (batches m8b and m10a: noise alone at Noise Generator Out
+// Level 511, tone 0-127 every 8 and 127, note 60), with the converter's mapping: Noise Tilt and
+// Noise Tilt Frequency interpolated linearly between the knots below (fitted at those tones,
+// tilt off at 64), and a level correction for the noise level. Half-octave bands 62.5 Hz-16 kHz
+// over 0.3-2.4 s: the shape (bands minus their mean) within 1 dB RMS of the reference's, and the
+// level relative to tone 64, after the correction, within 1 dB (proposed tolerances). Tones 24,
+// 40, 56, 72, 88 and 104 are checks between the knots; the others are the fitting tones.
+static void testNoiseToneAgainstReference()
+{
+    namespace F = oscairn_features;
+    struct Knot
+    {
+        int tone;
+        double freq, tilt, correction; // Surge units (semitones from 440 Hz), dB, dB
+    };
+    const Knot knots[] = {
+        {0, -14.34, -42.19, 7.46},  {8, -7.24, -19.51, 5.84},   {16, -2.11, -14.50, 5.29},
+        {32, 3.22, -8.14, 3.51},    {48, 5.37, -3.79, 2.02},    {64, 8.55, 0.00, 0.00},
+        {80, 11.73, 2.54, -1.93},   {96, 26.13, 4.48, -2.78},   {112, 38.44, 7.74, -5.29},
+        {120, 44.39, 10.49, -7.91}, {127, 50.10, 16.28, -14.46},
+    };
+    struct Ref
+    {
+        int tone;
+        double level, shape[17];
+    };
+    const Ref refs[] = {
+        {0, -8.56, {15.57, 15.36, 14.81, 13.56, 11.07, 10.55, 7.45, 4.01, 1.51, -1.15, -4.35, -7.02, -10.32, -13.54, -16.38, -19.27, -21.86}},
+        {8, -4.31, {10.33, 10.24, 9.39, 8.99, 7.68, 6.03, 4.40, 2.32, -0.39, -2.52, -4.88, -6.44, -7.53, -8.37, -9.20, -9.71, -10.34}},
+        {16, -2.23, {7.19, 7.20, 7.68, 7.16, 6.60, 5.32, 3.40, 1.68, -0.43, -2.17, -3.87, -5.14, -5.91, -6.48, -6.73, -7.45, -8.04}},
+        {24, -1.38, {6.04, 5.62, 5.17, 5.61, 4.72, 3.94, 2.82, 0.97, -0.44, -2.06, -2.89, -3.93, -4.22, -4.70, -5.06, -5.48, -6.09}},
+        {32, -0.80, {3.94, 4.69, 4.44, 4.03, 3.98, 3.04, 2.31, 1.10, -0.38, -1.67, -2.65, -2.78, -3.29, -3.59, -3.92, -4.37, -4.89}},
+        {40, -0.32, {2.34, 3.29, 3.18, 3.14, 2.66, 2.05, 1.46, 0.51, -0.42, -0.96, -1.44, -1.84, -2.04, -2.39, -2.68, -3.19, -3.67}},
+        {48, -0.06, {2.41, 1.81, 2.95, 1.90, 1.81, 1.19, 0.83, 0.57, -0.40, -0.60, -0.84, -1.41, -1.46, -1.57, -1.92, -2.33, -2.94}},
+        {56, 0.02, {0.66, 1.03, 0.93, 1.27, 0.82, 1.20, 0.60, 0.44, -0.02, -0.17, -0.32, -0.41, -0.62, -0.80, -1.13, -1.50, -1.97}},
+        {64, 0.00, {0.13, 1.66, 0.14, 0.33, 0.08, -0.36, -0.05, 0.30, -0.11, 0.24, 0.17, 0.08, 0.03, -0.05, -0.38, -0.88, -1.31}},
+        {72, -0.20, {-1.67, -0.22, -0.61, -0.57, -0.11, 0.42, 0.36, -0.08, 0.25, 0.51, 0.67, 0.72, 0.67, 0.43, 0.16, -0.24, -0.70}},
+        {80, -0.53, {-1.14, -1.23, -1.14, -1.20, -0.74, -0.69, -0.46, -0.30, 0.21, 0.73, 1.09, 1.14, 1.11, 1.14, 0.88, 0.57, 0.03}},
+        {88, -0.63, {-2.56, -0.84, -1.81, -0.89, -1.37, -1.35, -0.61, -0.76, -0.03, 0.51, 1.18, 1.44, 1.77, 1.78, 1.61, 1.27, 0.66}},
+        {96, -0.86, {-1.84, -1.41, -2.50, -1.24, -1.65, -1.43, -1.25, -0.74, -0.57, 0.17, 0.89, 1.50, 2.14, 2.34, 2.23, 1.91, 1.46}},
+        {104, -1.28, {-1.92, -2.37, -1.86, -1.47, -1.30, -1.71, -1.91, -1.66, -1.01, -0.32, 0.56, 1.61, 2.37, 2.79, 2.98, 2.82, 2.39}},
+        {112, -2.65, {-2.41, -3.26, -2.38, -2.34, -2.33, -2.12, -1.78, -1.70, -1.42, -0.88, 0.41, 1.77, 2.65, 3.62, 4.14, 4.10, 3.92}},
+        {120, -4.65, {-3.46, -2.38, -2.95, -3.09, -3.30, -3.10, -2.68, -2.44, -1.94, -1.18, 0.15, 1.72, 3.09, 4.56, 5.42, 5.82, 5.77}},
+        {127, -9.39, {-4.43, -5.43, -4.45, -5.17, -4.77, -4.20, -4.58, -3.73, -2.61, -1.28, 0.39, 2.52, 4.71, 6.64, 8.15, 8.97, 9.28}},
+    };
+    auto mapping = [&](int tone) {
+        size_t i = 1;
+        while (i + 1 < std::size(knots) && knots[i].tone < tone)
+            ++i;
+        auto &a = knots[i - 1], &b = knots[i];
+        double u = std::clamp((tone - a.tone) / double(b.tone - a.tone), 0.0, 1.0);
+        return Knot{tone, a.freq + u * (b.freq - a.freq), a.tilt + u * (b.tilt - a.tilt),
+                    a.correction + u * (b.correction - a.correction)};
+    };
+    auto bands = [&](int tone) {
+        auto m = mapping(tone);
+        auto x = renderMono({60, 100, 2.5, 0.1, 44100,
+                             {{"a_lowcut.off", 1}, {"a_mute_o1", 1}, {"a_mute_noise", 0},
+                              {"a_noise_tilt", m.tilt}, {"a_noise_tilt_freq", m.freq}},
+                             {}});
+        return F::halfOctaveBandsDb(x, 44100, 0.3, 2.4);
+    };
+    auto mean = [](const std::vector<double> &v) {
+        double m = 0;
+        for (auto d : v)
+            m += d / v.size();
+        return m;
+    };
+    double white = mean(bands(64)), worstShape = 0, worstLevel = 0;
+    for (auto &r : refs)
+    {
+        auto b = bands(r.tone);
+        double m = mean(b), e = 0;
+        for (int k = 0; k < 17; ++k)
+            e += std::pow(b[k] - m - r.shape[k], 2) / 17;
+        double shape = std::sqrt(e), level = m - white + mapping(r.tone).correction - r.level;
+        worstShape = std::max(worstShape, shape);
+        worstLevel = std::max(worstLevel, std::fabs(level));
+        check(shape <= 1 && std::fabs(level) <= 1,
+              "noise tone " + std::to_string(r.tone) + ": shape " + std::to_string(shape) +
+                  " dB RMS from the reference, level " + std::to_string(level) + " dB");
+    }
+    std::printf("  noise tone: largest shape difference %.2f dB RMS, level %.2f dB\n",
+                worstShape, worstLevel);
+}
+
 template <size_t N, size_t K>
 static void checkTable(const char *name, const float (&table)[N],
                        const oscairn_tables::Check (&checks)[K], double tolerance,
@@ -1445,6 +1531,7 @@ int main(int argc, char **argv)
         run("pitch LFO phases against the reference", [] { testPitchLfoPhasesAgainstReference(); });
         run("velocity against the reference", [] { testVelocityAgainstReference(); });
         run("saturators against the reference", [] { testSaturatorsAgainstReference(); });
+        run("noise tone against the reference", [] { testNoiseToneAgainstReference(); });
         run("fitted tables", [] { testFittedTables(); });
     }
     catch (const std::exception &e)

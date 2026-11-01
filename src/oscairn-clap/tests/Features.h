@@ -382,6 +382,77 @@ inline double shapeErrorDb(const std::vector<float> &filtered, const std::vector
         e += (v - mean) * (v - mean) / count;
     return std::sqrt(e);
 }
+
+// Noise spectrum in half-octave bands centred on 62.5 Hz x 2^(k/2), k = 0..16 (to 16 kHz): the
+// mean power spectral density over each band's bins [c / 2^0.25, c 2^0.25), in dB, Welch's
+// method with 8192-sample Hann segments overlapping by half, each segment's mean removed (as
+// scipy.signal.welch's defaults). Only differences between bands or renders are meaningful.
+inline std::vector<double> halfOctaveBandsDb(const std::vector<float> &x, double rate,
+                                             double start, double stop)
+{
+    const size_t N = 8192;
+    std::vector<double> psd(N / 2 + 1, 0.0), re(N), im(N);
+    size_t a = (size_t)(start * rate), b = std::min((size_t)(stop * rate), x.size());
+    for (size_t s = a; s + N <= b; s += N / 2)
+    {
+        double mean = 0;
+        for (size_t i = 0; i < N; ++i)
+            mean += x[s + i] / (double)N;
+        for (size_t i = 0; i < N; ++i)
+        {
+            re[i] = (x[s + i] - mean) * (0.5 - 0.5 * std::cos(2 * M_PI * i / N));
+            im[i] = 0;
+        }
+        // iterative radix-2 FFT
+        for (size_t i = 1, j = 0; i < N; ++i)
+        {
+            size_t bit = N >> 1;
+            for (; j & bit; bit >>= 1)
+                j ^= bit;
+            j ^= bit;
+            if (i < j)
+            {
+                std::swap(re[i], re[j]);
+                std::swap(im[i], im[j]);
+            }
+        }
+        for (size_t len = 2; len <= N; len <<= 1)
+        {
+            double ang = -2 * M_PI / len;
+            for (size_t i = 0; i < N; i += len)
+                for (size_t k = 0; k < len / 2; ++k)
+                {
+                    double wr = std::cos(ang * k), wi = std::sin(ang * k);
+                    double ur = re[i + k], ui = im[i + k];
+                    double vr = re[i + k + len / 2] * wr - im[i + k + len / 2] * wi;
+                    double vi = re[i + k + len / 2] * wi + im[i + k + len / 2] * wr;
+                    re[i + k] = ur + vr;
+                    im[i + k] = ui + vi;
+                    re[i + k + len / 2] = ur - vr;
+                    im[i + k + len / 2] = ui - vi;
+                }
+        }
+        for (size_t k = 0; k <= N / 2; ++k)
+            psd[k] += re[k] * re[k] + im[k] * im[k];
+    }
+    std::vector<double> out;
+    for (int k = 0; k < 17; ++k)
+    {
+        double c = 62.5 * std::pow(2.0, k / 2.0), sum = 0;
+        int n = 0;
+        for (size_t i = 0; i <= N / 2; ++i)
+        {
+            double f = i * rate / N;
+            if (f >= c / std::pow(2.0, 0.25) && f < c * std::pow(2.0, 0.25))
+            {
+                sum += psd[i];
+                ++n;
+            }
+        }
+        out.push_back(10 * std::log10(std::max(sum / std::max(n, 1), 1e-30)));
+    }
+    return out;
+}
 } // namespace oscairn_features
 
 #endif
