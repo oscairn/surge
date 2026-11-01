@@ -1281,6 +1281,7 @@ bool SurgeVoice::process_block(QuadFilterChainState &Q, int Qe)
         {
             generate_legacy_noise(is_wide, stereo, tblock, tblockR);
         }
+        applyNoiseTilt(is_wide, tblock, tblockR);
 
         accumulateChannel(le_noise, route[5], tblock, tblockR);
     }
@@ -1892,6 +1893,34 @@ void SurgeVoice::generate_legacy_noise(bool wide, bool stereo, float *blockL, fl
     else
     {
         osclevels[le_noise].multiply_block(blockL, BLOCK_SIZE_OS_QUAD);
+    }
+}
+
+// First-order shelf (1 + g s/w) / (1 + s/w), bilinear with the corner prewarped: gain 1 at
+// low frequencies and g (the tilt) at high ones. Coefficients are set once per block.
+void SurgeVoice::applyNoiseTilt(bool wide, float *blockL, float *blockR)
+{
+    float tilt = localcopy[scene->noise_tilt.param_id_in_scene].f;
+    if (tilt == 0.f)
+        return;
+    float freq =
+        440.f * storage->note_to_pitch_ignoring_tuning(
+                    localcopy[scene->noise_tilt_freq.param_id_in_scene].f);
+    double k = std::tan(M_PI * std::min((double)freq * storage->dsamplerate_os_inv, 0.49));
+    double g = std::pow(10.0, tilt / 20.0);
+    float b0 = (k + g) / (k + 1), b1 = (k - g) / (k + 1), a1 = (k - 1) / (k + 1);
+    for (int c = 0; c < (wide ? 2 : 1); c++)
+    {
+        float *b = c ? blockR : blockL, x1 = noiseTiltX[c], y1 = noiseTiltY[c];
+        for (int i = 0; i < BLOCK_SIZE_OS; i++)
+        {
+            float x = b[i];
+            y1 = b0 * x + b1 * x1 - a1 * y1;
+            x1 = x;
+            b[i] = y1;
+        }
+        noiseTiltX[c] = x1;
+        noiseTiltY[c] = y1;
     }
 }
 

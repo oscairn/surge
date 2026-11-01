@@ -171,7 +171,7 @@ const int FIRoffsetI16 = FIRipolI16_N >> 1;
 
 const int ff_revision = 31;
 
-const int n_scene_params = 399;
+const int n_scene_params = 401;
 const int n_global_params = 11 + n_fx_slots * (n_fx_params + 1); // each param plus a type
 const int n_global_postparams = 1;
 const int n_total_params = n_global_params + 2 * n_scene_params + n_global_postparams;
@@ -923,6 +923,8 @@ struct SurgeSceneStorage
     Parameter segdrift_pitch, segdrift_offset, segdrift_cutoff, segdrift_time;
     // Key-on delay: a note starts this long (2^value s) after its note-on; off when deactivated
     Parameter keyon_delay;
+    // Noise tilt: a first-order shelf on the noise, gain at high frequencies (0 dB: off)
+    Parameter noise_tilt, noise_tilt_freq;
 
     std::vector<ModulationRouting> modulation_scene, modulation_voice;
     std::vector<ModulationSource *> modsources;

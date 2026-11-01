@@ -356,6 +356,8 @@ class alignas(16) SurgeVoice
     bool osc1, osc2, osc3, ring12, ring23, noise;
     int FMmode;
     float noisegenL[2], noisegenR[2];
+    float noiseTiltX[2]{}, noiseTiltY[2]{}; // last input and output of the noise tilt, L and R
+    void applyNoiseTilt(bool wide, float *blockL, float *blockR);
 
     Oscillator *osc[n_oscs];
     unsigned char oscbuffer alignas(16)[n_oscs][oscillator_buffer_size];

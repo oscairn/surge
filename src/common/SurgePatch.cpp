@@ -772,6 +772,15 @@ SurgePatch::SurgePatch(SurgeStorage *storage)
             fmt::format("{:c}/keyon_delay", 'a' + sc), ct_envtime_deactivatable,
             Surge::Skin::Scene::keyon_delay, sc_id, cg_GLOBAL, 0, false));
         scene[sc].keyon_delay.deactivated = true;
+
+        a->push_back(scene[sc].noise_tilt.assign(
+            p_id.next(), id_s++, "noise_tilt", "Noise Tilt",
+            fmt::format("{:c}/mixer/noise/tilt", 'a' + sc), ct_decibel,
+            Surge::Skin::Scene::noise_tilt, sc_id, cg_GLOBAL, 0, true));
+        a->push_back(scene[sc].noise_tilt_freq.assign(
+            p_id.next(), id_s++, "noise_tilt_freq", "Noise Tilt Frequency",
+            fmt::format("{:c}/mixer/noise/tilt_frequency", 'a' + sc), ct_freq_audible,
+            Surge::Skin::Scene::noise_tilt_freq, sc_id, cg_GLOBAL, 0, true));
     }
 
     param_ptr.push_back(
@@ -2121,7 +2130,8 @@ void SurgePatch::load_xml(const void *data, int datasize, bool is_preset)
                          &sc.amp_drive, &sc.amp_drive_asymmetry, &sc.prefilter_ws.type,
                          &sc.prefilter_ws.drive, &sc.unison_voices, &sc.unison_detune,
                          &sc.unison_spread, &sc.segdrift_pitch, &sc.segdrift_offset,
-                         &sc.segdrift_cutoff, &sc.segdrift_time, &sc.keyon_delay})
+                         &sc.segdrift_cutoff, &sc.segdrift_time, &sc.keyon_delay,
+                         &sc.noise_tilt, &sc.noise_tilt_freq})
         {
             p->val = p->val_default;
             p->deactivated = p->can_deactivate();

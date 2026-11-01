@@ -408,3 +408,67 @@ TEST_CASE("VCA Velocity Amplitude Law", "[signalpath]")
         }
     }
 }
+
+TEST_CASE("Noise Tilt Is A First-Order Shelf", "[signalpath]")
+{
+    // noise alone, the same seed with and without the tilt: the ratio of their spectra is the
+    // shelf's response (1 + g s/w) / (1 + s/w)
+    auto noise = [](float tilt, float freq) {
+        auto s = sawSurge();
+        auto &sc = s->storage.getPatch().scene[0];
+        sc.mute_o1.val.b = true;
+        sc.mute_noise.val.b = false;
+        sc.noise_tilt.val.f = tilt;
+        sc.noise_tilt_freq.val.f = freq;
+        return render(*s, 60, 1700);
+    };
+    auto bandPower = [](const std::vector<float> &v, size_t from, double f) {
+        size_t N = 48000;
+        double p = 0;
+        for (double fb = std::round(f / 1.1); fb <= f * 1.1; fb += 1)
+        {
+            std::complex<double> acc = 0;
+            for (size_t i = 0; i < N; i++)
+            {
+                double w = 0.5 - 0.5 * std::cos(2 * M_PI * i / N);
+                acc += w * v[from + i] * std::polar(1.0, -2 * M_PI * fb * i / 48000.0);
+            }
+            p += std::norm(acc);
+        }
+        return p;
+    };
+    auto flat = noise(0, 0);
+    REQUIRE(rms(flat, 2000) > 0.01);
+    for (auto [tilt, note] : {std::pair{-30.f, -12.f}, {12.f, 36.f}})
+    {
+        auto tilted = noise(tilt, note);
+        double fc = 440 * std::pow(2.0, note / 12.0), g = std::pow(10.0, tilt / 20.0);
+        for (double f : {80.0, 1000.0, 8000.0})
+        {
+            INFO("tilt " << tilt << " dB at " << fc << " Hz, " << f << " Hz");
+            double x = f / fc;
+            double expect = 10 * std::log10((1 + g * g * x * x) / (1 + x * x));
+            double got = 10 * std::log10(bandPower(tilted, 4000, f) / bandPower(flat, 4000, f));
+            REQUIRE(got == Catch::Approx(expect).margin(0.3));
+        }
+    }
+    // 0 dB is off: the output is untouched
+    REQUIRE(noise(0, 36) == flat);
+
+    // reset to off when a patch lacks it, and round trips
+    auto surge = Surge::Headless::createSurge(48000);
+    auto &patch = surge->storage.getPatch();
+    patch.scene[1].noise_tilt.val.f = 6;
+    REQUIRE(surge->loadPatchByPath("resources/test-data/patches/TestInitSaw.fxp", -1, "Test"));
+    REQUIRE(patch.scene[1].noise_tilt.val.f == 0);
+    patch.scene[0].noise_tilt.val.f = -20;
+    patch.scene[0].noise_tilt_freq.val.f = 30;
+    void *data = nullptr;
+    auto size = patch.save_patch(&data);
+    std::vector<char> copy((char *)data, (char *)data + size);
+    patch.scene[0].noise_tilt.val.f = 0;
+    patch.scene[0].noise_tilt_freq.val.f = 0;
+    patch.load_patch(copy.data(), (int)copy.size(), false);
+    REQUIRE(patch.scene[0].noise_tilt.val.f == -20);
+    REQUIRE(patch.scene[0].noise_tilt_freq.val.f == 30);
+}
