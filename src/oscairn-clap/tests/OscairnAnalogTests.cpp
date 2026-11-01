@@ -453,6 +453,11 @@ static void testPortsAndParams(const std::vector<std::string> &patches)
               maxOf("a_lfo6_attack") == 5,
           "envelopes and voice LFO attack and decay reach 2^8 s; LFO release and scene LFOs 2^5");
     check(maxOf("a_portamento") == 3.99f, "portamento reaches 2^3.99 s");
+    auto minOf = [&](const char *name) {
+        auto it = infos.find(fnv1a(name));
+        return it == infos.end() ? 0.0 : it->second.min_value;
+    };
+    check(minOf("a_vca_velsense") == -1536, "amp velocity sensitivity reaches -1536 dB (k = 128)");
 
     // Ranges hold for every factory patch: a parameter exposed in Surge's own units must have
     // the same range whatever patch is loaded (those whose range follows another parameter
@@ -474,6 +479,8 @@ static void testPortsAndParams(const std::vector<std::string> &patches)
             t->val_max.f = 8;
     // and portamento 2^3.99 s instead of 2^2 s
     reference.storage.getPatch().scene[0].portamento.val_max.f = 3.99f;
+    // and amp velocity sensitivity down to -1536 dB
+    reference.storage.getPatch().scene[0].vca_velsense.val_min.f = -1536.f;
     int loaded = 0;
     for (auto &path : patches)
     {
@@ -1085,10 +1092,15 @@ static void testPitchLfoPhasesAgainstReference()
     }
 }
 
-// Amp velocity sensitivity against the reference (eighth session, batches m8c and m8d: a sine at
-// note 60, sensitivity S = +64, +128, +192, level 0.2-0.7 s after the onset relative to velocity
-// 127), with the converter's mapping Velocity > VCA Gain = -12 k dB, k = 2^((S - 128) / 64).
-// Proposed tolerance: 0.3 dB.
+// Amp velocity sensitivity against the reference (batches m8c, m8d and m10a: a sine at note 60,
+// sensitivity S = +64 to +255, level 0.2-0.7 s after the onset relative to velocity 127), with
+// the converter's mapping Velocity > VCA Gain = -12 k dB, k = 2^((S - 128) / 64) up to +192 and
+// 128 / (256 - S) above. Proposed tolerance: 0.3 dB up to +192. Above, the level moves by up to
+// 1.7 dB per unit of k near silence, so the check is on k itself: k = (1 - 10^(dB / 40)) / (1 -
+// v / 127) from the engine's level within 2 % of the same from the reference's (proposed; in
+// dB the largest difference is 0.38, at +252, velocity 124). Where the reference is silent the
+// engine is at least 60 dB down. Levels below -40 dB in the reference are not checked (S = +240
+// at velocity 112 reads -51.9 dB, the law -50.4).
 static void testVelocityAgainstReference()
 {
     namespace F = oscairn_features;
@@ -1100,6 +1112,7 @@ static void testVelocityAgainstReference()
         double t0 = F::onset(x, rate);
         return F::levelDb(x, rate, t0 + 0.2, t0 + 0.7);
     };
+    const double silent = -1000;
     struct Case
     {
         int s;
@@ -1109,14 +1122,43 @@ static void testVelocityAgainstReference()
         {64, {{1, -11.90}, {32, -8.16}, {64, -4.99}, {96, -2.27}, {112, -1.06}}},
         {128, {{16, -36.12}, {32, -24.08}, {64, -12.04}, {96, -4.90}, {112, -2.19}}},
         {192, {{96, -11.75}, {112, -4.71}, {120, -2.04}}},
+        {224, {{112, -11.18}, {120, -4.33}, {124, -1.71}}},
+        {240, {{120, -10.12}, {124, -3.61}}},
+        {248, {{112, silent}, {120, -37.31}, {124, -8.18}}},
+        {252, {{112, silent}, {120, silent}, {124, -24.12}}},
+        {254, {{112, silent}, {120, silent}, {124, silent}}},
+        {255, {{118, silent}, {122, silent}, {124, silent}, {126, silent}}},
     };
-    double worst = 0;
+    double worst = 0, worstK = 0, worstDb = 0;
     for (auto &c : cases)
     {
-        double sens = -12 * std::pow(2.0, (c.s - 128) / 64.0), top = level(sens, 127);
+        double k = c.s <= 192 ? std::pow(2.0, (c.s - 128) / 64.0) : 128.0 / (256 - c.s);
+        double sens = -12 * k, top = level(sens, 127);
         for (auto [vel, ref] : c.ref)
         {
             double got = level(sens, vel) - top;
+            auto kOf = [vel = vel](double db) {
+                return (1 - std::pow(10.0, db / 40)) / (1 - vel / 127.0);
+            };
+            if (ref != silent && c.s > 192)
+            {
+                double dk = kOf(got) / kOf(ref) - 1;
+                worstK = std::max(worstK, std::fabs(dk));
+                check(std::fabs(dk) <= 0.02, "amp velocity sensitivity " + std::to_string(c.s) +
+                                                 " at velocity " + std::to_string(vel) +
+                                                 ": k from the reference's level " +
+                                                 std::to_string(kOf(ref)) + ", engine " +
+                                                 std::to_string(kOf(got)));
+                worstDb = std::max(worstDb, std::fabs(got - ref));
+                continue;
+            }
+            if (ref == silent)
+            {
+                check(got < -60, "amp velocity sensitivity " + std::to_string(c.s) +
+                                     " at velocity " + std::to_string(vel) +
+                                     ": silent in the reference, engine " + std::to_string(got));
+                continue;
+            }
             worst = std::max(worst, std::fabs(got - ref));
             check(std::fabs(got - ref) <= 0.3,
                   "amp velocity sensitivity " + std::to_string(c.s) + " at velocity " +
@@ -1124,7 +1166,8 @@ static void testVelocityAgainstReference()
                       " dB, engine " + std::to_string(got));
         }
     }
-    std::printf("  velocity: largest difference %.3f dB\n", worst);
+    std::printf("  velocity: largest difference %.3f dB up to +192; above, k %.2f %% (%.3f dB)\n",
+                worst, 100 * worstK, worstDb);
 }
 
 // Amp and filter saturators against the reference (fifth session, batch m2: a sine at note 48,

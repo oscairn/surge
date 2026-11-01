@@ -803,6 +803,10 @@ bool pluginInit(const clap_plugin_t *p)
     // Portamento up to just under the engine's limit of 2^4 s (Surge's range stops at 2^2):
     // the instrument this plugin matches glides an octave in 8.9 s (10-90 %) at time 120.
     s.synth->storage.getPatch().scene[0].portamento.val_max.f = 3.99f;
+    // Amp velocity sensitivity under the amplitude law down to k = 128 (-12 k dB): the
+    // instrument this plugin matches reaches k = 32 at +252, and at +255 only velocity 127
+    // sounds.
+    s.synth->storage.getPatch().scene[0].vca_velsense.val_min.f = -1536.f;
     s.synth->setSamplerate((float)s.sampleRate);
     s.normalizePatch();
     s.refreshSceneData();
