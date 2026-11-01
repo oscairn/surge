@@ -1247,6 +1247,12 @@ Decisions taken (for Jacob to confirm):
   LFO envelope gets an analog mode (Surge's analog ADSR on the LFO's A/D/S/R, hold unused)
   for the pitch, oscillator and modifier EGs and the LFO fade-ins; the plugin lets voice LFO
   attack and decay reach 2^8 s, but not release (its maximum means "never releases").
+- Added in the eighth session (details there): analog envelopes in the plugin end their attack
+  at 1 instead of overshooting (a storage option, off in Surge XT, on in the plugin, not
+  streamed: a Surge XT patch from the converter would overshoot); the plugin refreshes the
+  scene data after every load; the pitch LFO saw maps to Surge's ramp inverted with its phase
+  moved by half a period; the proposed tolerance for the oscillator EG (duty fall) times is the
+  envelope one (2.5 % or 5 ms).
 
 *Saturator fit* (engine renders through the plugin at osc level table[511], amp level
 table[431], against the `m2` probes; drive in the engine = offset + 0.75 dB × raw):
@@ -1576,6 +1582,174 @@ rerun. `0c7d7c7`: testrunner 203 test cases passed, `[reference]` 635 compared, 
 `293c902` (plugin only): `oscairn-analog-tests` standard (76 s, 442 parameters), ASan (79 s) and TSan (354 s) passed, 0 reports; testrunner not rerun. New tests: `[voicelfos]` (stream numbering,
 voice LFOs 7-12 modulate exactly like LFO 1, only routed ones run, stream and reset),
 `[lfoenvmode]`, the plugin's LFO module and range checks.
+
+**Eighth session (2026-10-31): Linux checks without CI, oscillator EG, a first-block bug.**
+
+*Local substitute for the Linux CI jobs.* GitHub Actions stays disabled for `oscairn/surge`
+(no runs since `cac0d8e`). The workflow's three Linux ARM64 jobs were reproduced in Docker on
+this Mac (aarch64): image `surge-ci-linux:24.04` (`ubuntu:24.04` plus build-essential, cmake,
+ninja-build, git, python3: GCC 13.3, CMake 3.28.3, Ninja 1.11.1; the runner image's tool
+versions were not compared), the
+workflow's configure flags, targets and test command and its `UBSAN_OPTIONS`/`TSAN_OPTIONS`,
+on an exact export of each commit's tree with its submodules at their gitlinks (`git archive`,
+recursively; script and logs in `forks/surge-ci-linux/`, outside the repository). Memory: 7 GB
+per container, 6 compile jobs (ASan with 6 was killed during the build, so 4). This is a local
+substitute, not CI: one machine, Docker's Linux VM, not GitHub's runner image. Results so far
+(each "passed" = exit 0, "all passed", 0 sanitizer reports): `59aacd6` standard (85 s of
+tests), ASan/UBSan (2560 s), TSan (298 s); this covers the seventh session's `1b1e292`,
+`90a556c`, `0c7d7c7` and `293c902` only as part of that tree, not one by one. Further commits: see "Tests run in the eighth
+session". Every commit pushed this session had the standard job run on it, and the engine
+changes the sanitizer jobs, before or soon after its push.
+
+*Python bindings* (`9ef05b1`, generic): `ms_lfo7`-`ms_lfo12` in the constants and the mod
+source map, and the constants stub renumbered (every source after `ms_lfo6` moved up by six).
+Not part of any gate: built separately on macOS (`SURGE_BUILD_PYTHON_BINDINGS=ON`, Lua off);
+every `ms_*` value in the stub matches the built module, and the Python tests pass except
+`test_check_formula`, which needs Lua (36 passed, 1 skipped, 1 failed for that reason).
+
+*Oscillator EG tables* (batch `m8a`: square at note 48, pulse width raw 64, PW EG depth +16,
+attack 0; decay with sustain 0, release from sustain 511, indices 128-208 every 4, 128-156
+twice; amp release 240). The duty is read from the first two harmonics (acos(h2/h1)/pi, a new
+`duty_track`/`duty_fall_time` and fit kind `dutyfall` in the measurement repository, `e83746f`),
+and timed like the pitch EG: a straight line through log(duty offset) between its 90 % and 10 %
+crossings. Base and full duty: 0.2538 and 0.377 in the reference, 0.254 and 0.377 in the
+engine (Modern pulse, width 0.254, voice LFO 1 in analog envelope mode on the width, depth
+0.123). Repeat renders agree within 0.5 % (the pitch track scattered by up to 14 % below 148).
+The oscillator EG's decay and release times are the same curve (within 1.7 % at every index)
+and match the pitch EG's reference times within 2.8 % at the pitch EG decay's check indices
+(148-204); the oscillator EG tables also reach down to 128. Committed (`a07069b`, refitted in `7264e87`, see below) as `oscEgDecay` and
+`oscEgRelease`, valid 128-208, 10 of 10 checks each within 1.55 % (fitted from every 8th
+index, checked at the ones between), with the same measurement in C++ (`dutyFallTime`, the
+straight-line fit now shared with `pitchFallTime`); moving a reference value by 5 % fails the
+check (seen). Tolerance: the envelope one, proposed (2.5 % or 5 ms).
+
+*Bug: a note in the first block after a load started with stale parameters* (`7264e87`,
+Oscairn-specific). A voice copies its parameters from the scene data, which Surge refreshes
+from the patch at the start of each engine block. The render tool and the plugin tests load a
+patch and start the note at the first sample, so the voice started with the scene data of
+before the load (all zero after init): LFO start phases, read only when a voice starts, were
+lost for the whole note (found because `a_lfo0_phase` had no effect on renders), and level and
+envelope settings were wrong for the first 32 samples. The plugin now refreshes the scene data
+after every load and at init; a test checks that a note in the first block after a load starts
+at the loaded LFO phase (it fails without the fix, seen). This changed renders, and so:
+
+- *Analog attack overshoot is real in the plugin.* The fifth session saw no overshoot in
+  plugin renders "and didn't understand why": it was this bug. With it fixed, Surge's analog
+  ADSR at the shortest attack overshoots by 2.9 dB, decaying with the decay time (still +2.3 dB
+  after 0.3 s at decay 2), which the reference doesn't do. New generic storage option
+  `analogEnvelopeAttackClamp` (`fd6c495`): scene and LFO envelopes in analog mode switch to
+  decay in the block their level passes 1, held at 1 (test: `[lfoenvmode]` "Analog Envelope
+  Attack Clamp"; off it overshoots above 1.3, on it peaks at exactly 1 and the LFO envelope
+  still follows the filter EG within 1e-6). Off by default and not streamed, so Surge XT and
+  `[reference]` are unchanged; the plugin turns it on.
+- *Tables refitted.* With the fix, the amp EG decay checks failed by +18 to +27 % (0 of 17;
+  the old engine renders were timed from a 10 dB level transient at the note start) and the
+  oscillator EG decay by up to -14 %. Both, and the oscillator EG release, were refitted from
+  new engine sweeps (`surge/eglong2`, `surge/oegsweep2`) with the same method and gates: amp EG
+  decay 17 of 17 (largest +4.5 % at 100, inside the 5 ms floor; otherwise within 1.8 %; before:
+  17 of 17 within 1.8 %), oscillator EG decay and release 10 of 10 each within 1.55 %. Every
+  other table's checks pass unchanged with the fix.
+- *Pitch LFO delay and fade-in rechecked* with the fixed render: fade-in largest difference
+  0.37-0.74 % of full (seventh session: 0.47-0.91 %); delay switch-on times as before (8 of 9
+  within 2.5 % or 5 ms; 4 is 5.4 ms early, -11 %; 48 reads +9.4 ms with a poor engine fit).
+- *Short envelopes (time-boxed, nothing committed).* The third session's short-envelope gates
+  (single renders at note 96, indices 0-120, scene highpass on) rerun on a new engine sweep
+  (`surge/egshort2`): decay 10 of 15 checks (before the fix: 6 of 15; the engine's shortest
+  decay is now 14 ms to -40 dB, against 3-6 ms in the reference at 4-36; 92 and 108 are -12 and
+  -6 %), attack 14 of 15 (116: -17 %, as before), release 13 of 15 (36 and 44: the engine's
+  12 ms floor, as before). Averaged reference probes are still the way to commit these.
+
+*Noise tone (time-boxed, not fitted)* (batch `m8b`: noise only at out level 511, tone 0-127
+every 16, against Surge's noise colour -1..1 in steps of 0.05; spectra in octave bands from
+62.5 Hz to 16 kHz relative to 1-2 kHz). Tone 64 is white, like colour 0 (bands within 0.7
+dB). The reference's tone is a gentle tilt over the whole range: tone 0 has the lows 5 dB up
+and the highs falling to -9 dB at 8-16 kHz, tone 127 the lows 16 dB down and the highs 19 dB
+up. Surge's colour acts mostly at the top octaves, so the best colour per tone fits only from
+48 to 112 (colour -0.05, 0, 0, +0.1, +0.3 at 48, 64, 80, 96, 112; 0.4-1.9 dB RMS over the
+bands, worst 2.9 dB); 0-32 and 127 are 3.4-6.2 dB RMS off (worst 13 dB at tone 0). The tone
+also moves the reference's level (-37.3 dB at 0, -26.8 at 64, -25.3 at 96-112, -27.5 at 127,
+in this setup). A real match needs a tilt filter on the noise (a generic engine change);
+for now the converter can use the colours above with a level correction, and tones below 48
+stay approximate.
+
+*Amplitude level velocity sensitivity (milestone 4, measured, not mapped)* (batches `m8c`,
+`m8d`: sine at note 60, Part velocity depth and offset at their defaults, sensitivity S from
+-128 to +255, velocities 1-127; level 0.2-0.7 s after the onset). The level follows
+40 log10(a) dB relative to velocity 127 (S > 0) or to velocity 0 (S < 0), with the amplitude
+factor a = 1 - k (1 - v/127) for S > 0 and a = 1 - k v/127 for S < 0, silent where a <= 0, and
+k = 2^((|S| - 128)/64): k = 0.5, 1, 2 at |S| = 64, 128, 192 (every audible probe within 0.13
+dB; the silent ones are where the formula gives below -60 dB). At +255 only velocity 127 sounds (118-126 silent), where the formula
+gives k = 3.95 and sound down to velocity 96: the top value is a special case or the scale
+steepens; not resolved. At S = 0 the level doesn't depend on velocity. Surge's amp velocity
+(`vca_velsense`) is linear in dB (gain = level + sensitivity x (1 - v/127) dB), so it can match
+the reference at one velocity only; matching the curve needs an engine option for this law
+(a generic change, not made).
+
+*Portamento time modes (milestone 4, measured, not mapped)* (batch `m8e`, the sequence
+recorder: mono, Part and performance portamento switches on, fingered, a sine; note 48, then
+48 + 5, 12 or 24 legato; the performance's master portamento switch is off by default and
+has to be on). Every glide is a straight line in cents (90-50 % over 50-10 % time 0.9-1.25, glides without the octave jump below).
+At an octave all four modes take the same time: 10-90 % 0.036, 0.074, 0.259 and 1.275 s at
+time 16, 32, 64 and 96. Rate 1: constant rate (two octaves take twice as long). Time 1:
+constant time (5, 12 and 24 semitones within 3 %). Rate 2 and Time 2: as Rate 1 and Time 1 up
+to an octave, but a larger interval first jumps to an octave below the target, then glides
+the last octave (at 24 semitones the pitch steps by 12 at once). Surge has constant time and
+constant rate (`porta_constrate`) and a linear curve; the "2" modes' octave limit has no
+Surge equivalent (an engine option would be needed). Surge's portamento (through `surgepy`,
+linear curve) glides in 2^v s (10-90 % = 0.8 x 2^v within 1 % at v = -3, -2, -1.5, -1, -0.5; below -3 the
+measurement is noisy), and with constant rate takes 2^v s per octave, so Time 1 maps to
+constant time and Rate 1 to constant rate with v = log2(the reference's octave glide time):
+-4.47, -3.43, -1.63 and +0.67 at time 16, 32, 64 and 96 (four points; a table needs denser
+probes, and engine renders through the plugin weren't compared).
+
+*Pitch LFO start phases against engine renders* (voice LFO 1, 2.397 Hz = the LFO speed table
+at 176, on oscillator 1's pitch, against the `m3b` probes, cents tracks compared over the
+first 1.25 s). Sine and triangle start like Surge's sine and triangle at phase 0, square like
+Surge's square (high first), all with a constant -0.005-period shift (the reference's onset
+latency, about 2 ms) and 0.26-0.32 cents RMS after it (square 4.0, its edges). The saw rises
+from 0; Surge's ramp falls from its top, so the converter uses the ramp with a negative depth
+and phase 0.5 (2.9 cents RMS after the shift). Phase 90/180/270 degrees = Surge phase
+0.25/0.5/0.75 on the sine (0.26-0.34 cents RMS). Before the fix above none of this could be
+checked: the phase was ignored.
+
+*Unison in the plugin against the reference* (`23be4b0`, test only). Unison 2 and 4 at detune
+8 and spread 0, 4, 8, 15 (2 voices) and 0, 4, 8 (4 voices) through the plugin at the
+converter's values (detune 7.98 cents; spread = the far-side position x: 0.186, 0.385,
+0.717), each partial's offset and channel level against the reference's: largest difference
+0.05 cent (inner four-voice offset, 2/3 against 0.659) and 0.009 in level; proposed tolerances
+0.1 cent and 0.02 (a moved reference fails, seen).
+
+*Drift in the plugin against the reference* (`1627e4d`, test only). 150 notes in one instance
+(sine at note 60, segment drift pitch = 1.22 x the reference's start deviation), the
+deviation of each note's mean pitch 30-200 ms after its start: 18.5 cents against the
+reference's 19.9 at drift 127 (43 loads), 9.8 against 10.5 at 112 (18 loads); proposed
+tolerance 20 %; without the 1.22 factor it fails (15.2, 8.0; seen). The reference's positive
+mean (+11.9 cents at 127) is not modelled, and the cutoff drift has no plugin check.
+
+**Tests run in the eighth session.** macOS arm64 gates (`analog_gates2.sh`) on the trees of:
+`a07069b` (includes `9ef05b1`): `surge-testrunner` 203 test cases passed, `[reference]` 635
+compared, 6 skipped; `oscairn-analog-tests` standard (82 s), ASan/UBSan (90 s), TSan (436 s)
+passed, 0 sanitizer reports. `fd6c495`: testrunner 204 test cases passed, `[reference]` 635/6;
+plugin tests standard (78 s), ASan (84 s), TSan (396 s) passed, 0 reports. `7264e87`:
+testrunner 204 passed, `[reference]` 635/6; plugin tests standard (79 s), ASan (85 s), TSan
+(389 s) passed, 0 reports. `23be4b0` and `1627e4d` (plugin tests only; testrunner not rerun):
+standard (84 s, 91 s), ASan (97 s, 92 s), TSan (496 s, 432 s) passed, 0 reports. Docker Linux (local substitute for CI, as above):
+each job exited 0 with "all passed" and no sanitizer reports. Standard: `9ef05b1` (83 s of tests),
+`a07069b` (86 s), `fd6c495` (100 s), `7264e87` (86 s), `23be4b0` (88 s), `1627e4d` (88 s).
+ASan/UBSan and TSan, for the engine changes: `fd6c495` (2687 s, 337 s) and the head `1627e4d`
+(which holds `7264e87`'s): 2756 s, 364 s. This record (`doc/` only) was not run separately.
+Measurement repository (`e83746f`: duty track and `dutyfall`; `13332d5`: `glide_times`): self-tests
+24 passed.
+
+**Where this stopped** (eighth session). The Linux CI jobs run locally in Docker while Actions
+is off; oscillator EG tables are in; a first-block bug in the plugin was found and fixed, which
+exposed Surge's analog attack overshoot (now clamped in the plugin) and needed the amp EG decay
+table refitted; unison and drift have plugin checks against the reference; pitch LFO start
+phases are mapped. Next: a tilt filter for the noise tone; averaged short-envelope probes;
+self sync and the wave shaper (still no model); the remaining milestone 1/2 items (folder above
+96 and Hard, saturator curve at high drive, filter saturator offsets for other types,
+resonance above 96); milestone 4's key-on delay (not started), the portamento time table against Surge and the
+octave limit, and the amp velocity law (both measured, see above).
 
 **Where this stopped** (seventh session). Twelve voice LFOs and the analog LFO envelope are in;
 the pitch LFO's delay and fade-in mappings are measured and checked against engine renders; the
