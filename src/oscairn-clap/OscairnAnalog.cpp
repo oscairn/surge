@@ -791,11 +791,13 @@ bool pluginInit(const clap_plugin_t *p)
     for (auto &eg : s.synth->storage.getPatch().scene[0].adsr)
         for (auto *t : {&eg.a, &eg.d, &eg.r})
             t->val_max.f = longestEnvelopeTime;
-    // The same for the voice LFOs' attack and decay, which serve as the pitch, oscillator and
-    // modifier envelopes. Not release: an LFO release at its maximum means it never releases.
+    // The same for the voice LFOs, which serve as the pitch, oscillator and modifier
+    // envelopes. A release past 5 only plays in a patch with lfoLongRelease (a converted Part):
+    // otherwise 5 and above still never release, as in Surge.
     for (int l = 0; l < n_lfos_voice; l++)
         for (auto *t : {&s.synth->storage.getPatch().scene[0].lfo[l].attack,
-                        &s.synth->storage.getPatch().scene[0].lfo[l].decay})
+                        &s.synth->storage.getPatch().scene[0].lfo[l].decay,
+                        &s.synth->storage.getPatch().scene[0].lfo[l].release})
             t->val_max.f = longestEnvelopeTime;
     // Portamento up to just under the engine's limit of 2^4 s (Surge's range stops at 2^2):
     // the instrument this plugin matches glides an octave in 8.9 s (10-90 %) at time 120.

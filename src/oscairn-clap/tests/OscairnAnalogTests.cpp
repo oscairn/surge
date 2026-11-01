@@ -449,9 +449,9 @@ static void testPortsAndParams(const std::vector<std::string> &patches)
         return it == infos.end() ? -1.0 : it->second.max_value;
     };
     check(maxOf("a_env1_attack") == 8 && maxOf("a_lfo0_attack") == 8 &&
-              maxOf("a_lfo17_decay") == 8 && maxOf("a_lfo0_release") == 5 &&
+              maxOf("a_lfo17_decay") == 8 && maxOf("a_lfo0_release") == 8 &&
               maxOf("a_lfo6_attack") == 5,
-          "envelopes and voice LFO attack and decay reach 2^8 s; LFO release and scene LFOs 2^5");
+          "envelopes and voice LFO attack, decay and release reach 2^8 s; scene LFOs 2^5");
     check(maxOf("a_portamento") == 3.99f, "portamento reaches 2^3.99 s");
     auto minOf = [&](const char *name) {
         auto it = infos.find(fnv1a(name));
@@ -475,7 +475,8 @@ static void testPortsAndParams(const std::vector<std::string> &patches)
             t->val_max.f = 8;
     for (int l = 0; l < n_lfos_voice; l++)
         for (auto *t : {&reference.storage.getPatch().scene[0].lfo[l].attack,
-                        &reference.storage.getPatch().scene[0].lfo[l].decay})
+                        &reference.storage.getPatch().scene[0].lfo[l].decay,
+                        &reference.storage.getPatch().scene[0].lfo[l].release})
             t->val_max.f = 8;
     // and portamento 2^3.99 s instead of 2^2 s
     reference.storage.getPatch().scene[0].portamento.val_max.f = 3.99f;
@@ -647,7 +648,7 @@ static void testPlainPatchesMatchStock(const std::vector<std::string> &patches)
     const uint32_t frames = 48000;
     int compared = 0, differing = 0;
     // plus a patch where each option would show: analog amp envelope with the shortest attack,
-    // velocity sensitivity, amp saturator on
+    // velocity sensitivity, amp saturator on, an LFO envelope release at 5
     std::vector<uint8_t> built;
     {
         HeadlessLayer layer;
@@ -662,6 +663,11 @@ static void testPlainPatchesMatchStock(const std::vector<std::string> &patches)
         sc.vca_velsense.val.f = -12;
         sc.amp_drive.deactivated = false;
         sc.amp_drive.val.f = 12;
+        // voice LFO 1 as an envelope on pitch that never releases (release at Surge's maximum)
+        sc.lfo[0].shape.val.i = lt_envelope;
+        sc.lfo[0].release.val.f = 5;
+        sc.adsr[0].r.val.f = 2;
+        s->setModDepth01(sc.osc[0].pitch.id, ms_lfo1, 0, 0, 0.2f);
         void *data = nullptr;
         auto size = s->saveRaw(&data);
         built.assign((uint8_t *)data, (uint8_t *)data + size);
@@ -738,6 +744,7 @@ static void testPlainPatchesMatchStock(const std::vector<std::string> &patches)
         s->storage.analogEnvelopeAttackClamp = true;
         s->storage.vcaVelocityAmplitudeLaw = true;
         s->storage.saturatorAlgebraicCurve = true;
+        s->storage.lfoLongRelease = true;
         void *data = nullptr;
         auto size = s->saveRaw(&data);
         std::vector<uint8_t> on((uint8_t *)data, (uint8_t *)data + size);
@@ -747,7 +754,8 @@ static void testPlainPatchesMatchStock(const std::vector<std::string> &patches)
         std::string text(saved.begin(), saved.end());
         check(text.find("analogEnvelopeAttackClamp") != std::string::npos &&
                   text.find("vcaVelocityAmplitudeLaw") != std::string::npos &&
-                  text.find("saturatorAlgebraicCurve") != std::string::npos,
+                  text.find("saturatorAlgebraicCurve") != std::string::npos &&
+                  text.find("lfoLongRelease") != std::string::npos,
               "the plugin's state keeps the options");
         check(b.load(saved) && b.save() == saved, "the options round trip through the state");
         auto x = a.render(24000, 512, {noteEvent(0, CLAP_EVENT_NOTE_ON, 1, 60, 70 / 127.0)}, false);
