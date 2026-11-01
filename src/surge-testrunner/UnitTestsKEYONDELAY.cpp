@@ -50,7 +50,7 @@ int firstSoundingBlock(SurgeSynthesizer &s, int blocks)
         s.process();
         auto peak = std::max(*std::max_element(s.output[0], s.output[0] + BLOCK_SIZE),
                              -*std::min_element(s.output[0], s.output[0] + BLOCK_SIZE));
-        if (peak > 1e-4)
+        if (peak > 1e-9)
             return b;
     }
     return -1;
