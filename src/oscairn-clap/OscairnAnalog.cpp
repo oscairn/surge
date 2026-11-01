@@ -784,6 +784,8 @@ bool pluginInit(const clap_plugin_t *p)
     s.synth->storage.saveFixedTempo = true;
     // The instrument this plugin matches doesn't overshoot at the end of an envelope's attack.
     s.synth->storage.analogEnvelopeAttackClamp = true;
+    // Its amp velocity sensitivity is an amplitude law, not linear in dB.
+    s.synth->storage.vcaVelocityAmplitudeLaw = true;
     // Envelope segments up to 2^8 s: the instrument this plugin matches reaches 44 s of attack
     // (10-90 %), past Surge's 2^5 s. Only the range grows; the envelope code has no limit, and
     // modulation depths are in seconds-exponent units, so existing patches sound the same.

@@ -909,6 +909,48 @@ static void testDriftAgainstReference()
     }
 }
 
+// Amp velocity sensitivity against the reference (eighth session, batches m8c and m8d: a sine at
+// note 60, sensitivity S = +64, +128, +192, level 0.2-0.7 s after the onset relative to velocity
+// 127), with the converter's mapping Velocity > VCA Gain = -12 k dB, k = 2^((S - 128) / 64).
+// Proposed tolerance: 0.3 dB.
+static void testVelocityAgainstReference()
+{
+    namespace F = oscairn_features;
+    const double rate = 44100;
+    auto level = [&](double sens, int vel) {
+        auto x = renderMono({60, vel, 0.8, 0.1, rate,
+                             {{"a_lowcut.off", 1}, {"a_osc1_type", 1}, {"a_vca_velsense", sens}},
+                             {}});
+        double t0 = F::onset(x, rate);
+        return F::levelDb(x, rate, t0 + 0.2, t0 + 0.7);
+    };
+    struct Case
+    {
+        int s;
+        std::vector<std::pair<int, double>> ref; // velocity, dB relative to velocity 127
+    };
+    const Case cases[] = {
+        {64, {{1, -11.90}, {32, -8.16}, {64, -4.99}, {96, -2.27}, {112, -1.06}}},
+        {128, {{16, -36.12}, {32, -24.08}, {64, -12.04}, {96, -4.90}, {112, -2.19}}},
+        {192, {{96, -11.75}, {112, -4.71}, {120, -2.04}}},
+    };
+    double worst = 0;
+    for (auto &c : cases)
+    {
+        double sens = -12 * std::pow(2.0, (c.s - 128) / 64.0), top = level(sens, 127);
+        for (auto [vel, ref] : c.ref)
+        {
+            double got = level(sens, vel) - top;
+            worst = std::max(worst, std::fabs(got - ref));
+            check(std::fabs(got - ref) <= 0.3,
+                  "amp velocity sensitivity " + std::to_string(c.s) + " at velocity " +
+                      std::to_string(vel) + ": reference " + std::to_string(ref) +
+                      " dB, engine " + std::to_string(got));
+        }
+    }
+    std::printf("  velocity: largest difference %.3f dB\n", worst);
+}
+
 template <size_t N, size_t K>
 static void checkTable(const char *name, const float (&table)[N],
                        const oscairn_tables::Check (&checks)[K], double tolerance,
@@ -1134,6 +1176,7 @@ int main(int argc, char **argv)
         run("first block after a load", [] { testFirstBlockAfterLoad(); });
         run("unison against the reference", [] { testUnisonAgainstReference(); });
         run("drift against the reference", [] { testDriftAgainstReference(); });
+        run("velocity against the reference", [] { testVelocityAgainstReference(); });
         run("fitted tables", [] { testFittedTables(); });
     }
     catch (const std::exception &e)
