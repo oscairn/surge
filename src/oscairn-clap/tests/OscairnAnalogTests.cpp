@@ -855,6 +855,60 @@ static void testUnisonAgainstReference()
     }
 }
 
+// Segment drift against the reference's spread of the pitch at a note's start (sixth session:
+// deviation 19.9 cents at drift 127 over 43 loads, 10.5 at 112 over 18), with the converter's
+// mapping (Segment Drift Pitch = 1.22 x the deviation: a voice starts at a random point of a
+// segment, whose spread is sqrt(2/3) of the nodes'). 150 notes of a sine at note 60 in one
+// instance, each note's mean pitch 30-200 ms after its start. Proposed tolerance: 20 % (the
+// reference's own estimate is good to about 11 % at 127). The reference's mean (+11.9 cents
+// at 127) isn't modelled.
+static void testDriftAgainstReference()
+{
+    const double rate = 44100, c4 = 440 * std::pow(2.0, -9 / 12.0);
+    for (auto [deviation, loads] : {std::pair{19.9, 43}, {10.5, 18}})
+    {
+        Instance a(rate);
+        std::vector<Event> ev{paramEvent(0, fnv1a("a_osc1_type"), 1),
+                              paramEvent(0, fnv1a("a_segdrift_pitch"), 1.22 * deviation / 100)};
+        const int n = 150;
+        const uint32_t step = (uint32_t)(0.3 * rate);
+        for (int i = 0; i < n; ++i)
+        {
+            ev.push_back(noteEvent(1000 + i * step, CLAP_EVENT_NOTE_ON, i, 60, 0.8));
+            ev.push_back(noteEvent(1000 + i * step + (uint32_t)(0.25 * rate), CLAP_EVENT_NOTE_OFF,
+                                   i, 60, 0));
+        }
+        auto lr = a.render(1000 + n * step, 512, ev);
+        double sum = 0, sum2 = 0;
+        for (int i = 0; i < n; ++i)
+        {
+            size_t from = 1000 + i * step + (size_t)(0.03 * rate),
+                   to = 1000 + i * step + (size_t)(0.2 * rate);
+            double first = -1, last = -1;
+            int periods = -1;
+            for (size_t k = from; k < to; ++k)
+                if (lr[2 * k] < 0 && lr[2 * (k + 1)] >= 0)
+                {
+                    double z = k + lr[2 * k] / (lr[2 * k] - lr[2 * (k + 1)]);
+                    if (first < 0)
+                        first = z;
+                    last = z;
+                    ++periods;
+                }
+            double cents = 1200 * std::log2(periods * rate / (last - first) / c4);
+            sum += cents;
+            sum2 += cents * cents;
+        }
+        double sd = std::sqrt(sum2 / n - (sum / n) * (sum / n));
+        check(std::fabs(sd / deviation - 1) <= 0.2,
+              "segment drift spread at a note's start: reference " + std::to_string(deviation) +
+                  " cents (" + std::to_string(loads) + " loads), engine " + std::to_string(sd) +
+                  " over " + std::to_string(n) + " notes");
+        std::printf("  drift: reference %.1f cents, engine %.2f (mean %.2f)\n", deviation, sd,
+                    sum / n);
+    }
+}
+
 template <size_t N, size_t K>
 static void checkTable(const char *name, const float (&table)[N],
                        const oscairn_tables::Check (&checks)[K], double tolerance,
@@ -1079,6 +1133,7 @@ int main(int argc, char **argv)
         run("concurrent state", [] { testConcurrentState(); });
         run("first block after a load", [] { testFirstBlockAfterLoad(); });
         run("unison against the reference", [] { testUnisonAgainstReference(); });
+        run("drift against the reference", [] { testDriftAgainstReference(); });
         run("fitted tables", [] { testFittedTables(); });
     }
     catch (const std::exception &e)
