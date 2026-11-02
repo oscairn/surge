@@ -51,7 +51,7 @@ const Filter filters[] = {
     {"HPF12", 20, 0, 0, 67.7263},    {"HPF6", 35, 4, 0, 67.7263},  {"BPF12", 23, 0, 0, 65.5525},
     {"BPF6", 6, 0, 0, 65.5525},
 };
-const int rates[] = {48000, 96000};
+const int rates[] = {48000, 96000, 192000};
 const int note = 36;
 const double f0 = 440 * std::pow(2.0, (note - 69) / 12.0);
 

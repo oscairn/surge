@@ -1934,13 +1934,14 @@ int main(int argc, char **argv)
         run("portamento octave limit against the reference",
             [] { testPortamentoOctaveLimitAgainstReference(); });
         run("fitted tables", [] { testFittedTables(); });
-        // The same checks at the plugin's other rates (the reference was measured at 44.1 kHz),
+        // The same checks at other rates (the reference was measured at 44.1 kHz; the cutoff
+        // rate match is fitted at 48, 96 and 192 kHz and interpolated at 88.2 and 176.4),
         // in the standard build only: they check numbers, not memory or threads, and would
         // add most of an hour to the TSan run. The cutoff tables hold there through the
         // filter cutoff rate match, but for HPF24 above index 937 (see the plan).
         if (!sanitizerBuild)
         {
-            for (double r : {48000.0, 96000.0})
+            for (double r : {48000.0, 88200.0, 96000.0, 176400.0, 192000.0})
             {
                 checkRate = r;
                 std::printf("at %g Hz:\n", r);
