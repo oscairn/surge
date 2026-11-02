@@ -7,7 +7,7 @@ records what was built, how it was tested and where it departs from this plan. T
 
 The goal: extend Surge XT so that one instance can do everything a Yamaha MONTAGE M / MODX M AN-X
 Part can do, and ship it as an Oscairn CLAP instrument that supports all of the host's
-recommended features (`docs/plugin-porting.md` in [Oscairn](https://github.com/jbschooley/oscairn)). Yamaha
+recommended features (`docs/plugin-porting.md` in [Oscairn](https://github.com/oscairn/oscairn)). Yamaha
 names appear in this document only as references to what we are matching (see
 [Naming](#8-licence-and-naming)).
 
