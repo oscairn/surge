@@ -934,7 +934,8 @@ Measurement changes from the first session:
   full-scale saw).
 
 **Tolerances.** The first session's 10 % / 2 % / 0.5 dB / 50 cents were never approved. Now,
-for Jacob to confirm (`tolerances.json`):
+for Jacob to confirm (`tolerances.json`; accepted by Jacob in the twelfth session, with the later
+ones listed there):
 
 | Feature | Tolerance | Why |
 | --- | --- | --- |
@@ -942,7 +943,7 @@ for Jacob to confirm (`tolerances.json`):
 | LFO speed | 2 % | Measurement resolves 0.2 %; checks are within 0.7 % below index 290, but up to 1.95 % next to the breakpoints above it (8-index knots straddle them). Identifying the breakpoints would allow 1 % (the FM engine's gate) |
 | Envelope times | 2.5 % or 5 ms | Release and decay within 1.8 %, attack within 2.4 %, from 8-index knots; 5 ms is about twice the reference's render-to-render spread at short times. The FM gate (2 %) would need step-4 knots |
 | Cutoff | 50 cents | Unchanged |
-| Aliasing | floor -70 dB (power off the harmonics relative to on them) | Proposed; see below |
+| Aliasing | floor -70 dB (power off the harmonics relative to on them) | Accepted (twelfth session); see below |
 
 **Results** (Surge's analog envelope mode, drift off; "checks" are indices the table was not
 fitted from):
@@ -2321,6 +2322,94 @@ exit 0 with 0 sanitizer reports. Docker Linux standard on `f633f96` (374 s of te
 second push, which holds the engine change of `e3fe060`. These records (`doc/` only) were not run separately; the
 gate area was deleted at the end.
 
+**Twelfth session (2026-11-02): HPF24 with HP 24 dB Driven tried and not applied; decisions.**
+
+GitHub Actions stayed disabled. No commits to the engine, the plugin or the tests this session
+(this record only); no new reference batches (the recorder was not used).
+
+*Decisions by Jacob, recorded.* (1) Switch HPF24 to HP 24 dB Driven (type 5, subtype 1,
+resonance 0.05), refit its cutoff table and rate match, and gate HPF24 above index 937 at every
+rate: tried, below; **not applied**, because the Driven filter can't pass at 176.4 and 192 kHz
+(a decision for Jacob again). (2) 64 kHz needn't be covered: decided by Jacob; it stays out of
+the tests (register entries 2 and 18). (3) The tolerance table is accepted (no longer proposed):
+amp level 0.1 dB, LFO speed 2 %, envelope times 2.5 % or 5 ms, cutoff 50 cents, aliasing floor
+-70 dB, saturator harmonics 3 dB, unison offsets 0.1 cent and channel gains 0.02, drift start
+values KS at 5 % plus 2 %, pitch LFO fade 2 % of full, key-on delay 2.5 % or 15 ms, portamento
+5 % or 5 ms, velocity 0.3 dB, cutoff drift 20 %, pitch LFO phases 6 cents RMS. (4) Averaged
+short-envelope checks use a 2 ms floor (not 5 ms; question C answered): short-envelope tables
+are to be committed only where they pass with it, the rest listed in the register (entry 13;
+not done this session). (5) The plugin's version is bumped whenever its sound or memory figures
+change (Oscairn keys measurements by version and build); not applied yet, as nothing changed.
+
+*HPF24 with HP 24 dB Driven.* Cutoff table (measurement side, local `gate.py type5d2`): the
+engine sweep extended from -30 down to -45 (index 384 needs -32.8, 352 -40.9, so the trial
+refit started at 416 and held -28.75 below it); the trial's failure at index 464 (-111 cents) is
+a step in the shape measure, not noise: the fundamental falls out of the 40 dB range the shape
+error uses between 464 (-36.7 dB under the largest harmonic) and 480 (-41.4 dB), and with it in
+the Driven filter's best match sits about 1.2 semitones higher (its fundamental is 2.6 dB off
+the reference's). A break at 475 (interpolated from the fitted renders 448 and 480) with the
+base-plus-difference interpolation applied on each side, then the closest non-decreasing curve
+(it otherwise fell 2.3 semitones at 475; it now holds -19.25 from 466 to 483 and misses the
+fitted 480 by 48 cents), passes 25 of 25 checks (368-976; worst 560 at -42 cents) in the
+measurement repository's check. Both `fit.py` changes have self-tests that fail without them;
+not committed, since the switch wasn't applied (kept as a patch). In the plugin's own check at
+44.1 kHz (same build, best match from the table in cents / shape error at the table, dB), state-variable filter
+then Driven: 400 0/0.04, 7/0.18; 464 +20/0.09, -13/0.32; 560 +7/0.11, +44/0.42; 720 0/0.19,
+-3/0.49; 848 +10/0.58, -4/0.27; 912 +2/0.32, +7/0.19; 942 +18/0.55, +3/0.11; 956 -18/1.62, 0/0.07;
+976 -25/2.52, +2/0.07 (below index 848 worse: 0.18-0.51 dB against 0.04-0.46; the top better).
+
+Filter saturator offset for the Driven filter (the rule of the tenth session: the offset moved
+by the engine filter's pass-band level at the note): at its index 0 (-43.75) the Driven filter is
+1.42 dB louder than the state-variable one at its index 0, so -42.52 -> -43.94 dB; harmonics at
+raw 48 / 80 within 0.8 dB of the reference (third harmonic at raw 48: -34.4 against -35.2; the
+Driven filter alone makes a -53.6 dB third with the drive off).
+
+Rate match refitted for the Driven filter (`oscairn-analog-rate-match`, clamp 75, its frequency
+bound). Engine against engine, shape error after matching (unmatched), dB: 48 kHz at most 0.03
+up to cutoff 70 (0.27 at 75); 96 kHz 0.44-0.49 at 40-50 (0.45-0.66), 0.06-0.24 at 55-60; 192 kHz
+1.1-2.0 from cutoff 40 to 65 (2.6-3.5). The plugin's check with the rate match, failures (over
+50 cents) per rate: 44.1 none; 48 none; 88.2 560 (+57), 880 (+56), 912 (+54), 942 (+52); 96 560
+(+56); 176.4 496 (+63), 560 (+80), 592 (+59), 752 (+63), 784 (+58), 816 (+360), 848 (+148), 880
+(no minimum), 912-976 (+140 to +680); 192 similar (496 +339, 938 +1794, 956 +8463). Before
+(state-variable filter, unchanged tables), only 938-976 failed above 48 kHz (register entry 1).
+Cause: the Driven filter saturates inside its loop, so its response depends on the level and,
+through the oversampled rate, on the sample rate: a saw at note 36 through it at cutoff 30
+differs in shape between 44.1 and 192 kHz by 1.44 dB at the probes' level and 0.02 dB at 6 dB
+lower; at 44.1 kHz the 6 dB lower level itself changes its shape by 0.20 dB. No cutoff moves
+that back. Its best match to the reference at 192 kHz, at any cutoff, is 0.87-1.47 dB from index
+880 (0.08-0.28 at 44.1). For comparison, HP 24 dB Clean (subtype 2, resonance 0.05, linear)
+against the reference: 0.13-0.32 dB from index 880 at 44.1 kHz and the same at 192 kHz
+(0.13-0.31), 0.19-0.68 dB below. Driven at resonance 0.15: 0.11-0.25 dB below index 784 but
+0.14-0.51 from 880; 0.3: 0.06-0.18 below 592, 0.63-1.23 from 880.
+
+*Silent converted AN-X Parts* (SQR Harmony "Harm", Pure Analog KIT "TOMS", Syn Bass + Sparkle
+"Sparkle"; also KIT "KICK"). Not a plugin cause, and not the filter 2 cutoffs: the converter
+writes Modern's third mix control (`a_oscN_param2`, triangle/square/sine) without a
+`deactivated` attribute (`perfconv/anx.py`, the `param2` line, while `param0` and `param1` get
+`deactivated=0`). Surge's patch loader, as in stock Surge, sets a deactivatable control with no
+attribute to deactivated, so the triangle, square and sine waves (waves 3 and 4) and Saw2's sine
+part (wave 1) are off. Through the plugin, TOMS and KICK render silent at notes 24-84 and Harm
+and Sparkle at note 60 (the notes tried);
+with `deactivated="0"` added to the three `param2` tags it plays (-26 to -36 dB RMS); minimal
+cause found by reducing the differences from the plugin's default patch to one control.
+**Converter**: write `deactivated=0` on `param2` too; every converted Part with Saw2 loses its
+sine component the same way (from the code; not rendered). The converter must also map HPF24 to whatever filter is chosen
+here (still type 5, subtype 0 with the existing table until Jacob decides).
+
+*Not started this session:* the short-envelope tables at the 2 ms floor, the plugin version bump
+rule (nothing changed), and CLAP preset discovery and `prepare_preset` for the plugin.
+
+**Tests run in the twelfth session.** No code commit, so no gates. The measurement repository's
+self-tests passed with the uncommitted `fit.py` changes (29 tests) and each new test failed
+without its change (seen). The plugin checks quoted above ran on scratch builds of the working
+tree (not committed).
+
+**Where this stopped** (twelfth session). HPF24 stays on the state-variable HP 24 dB; HP 24 dB
+Driven was refitted and fails at 88.2-192 kHz because it saturates; Clean is linear and doesn't
+depend on the rate but matches less well at low cutoffs. Decision for Jacob: Driven with
+88.2-192 kHz failures, Clean (refit and check), or the state-variable filter as before. Decided:
+64 kHz out, tolerances accepted, 2 ms short-envelope floor (tables not done), version bumps.
+
 **Where this stopped** (eleventh session). The cutoff tables hold above 44.1 kHz through the
 filter cutoff rate match (off by default, per patch; fitted at 48, 96 and 192 kHz, interpolated
 between, checked at 48, 88.2, 96, 176.4 and 192 kHz), except HPF24 at the top (a decision for
@@ -2426,11 +2515,13 @@ only moves where a glide starts, below).
    (eleventh session: matching Q1 through the resonance made 96 kHz worse; a search over
    resonance 0-0.6 and cutoff found its best at resonance 0, 1.4 / 2.5 / 4.0 dB shape error at
    cutoffs 55 / 58 / 61 against 1.9 / 3.1 / 4.1 at 0.05). HP 24 dB Driven matches the
-   reference's HPF24 better at the top (0.08-0.28 dB from index 880 against the state-variable
-   filter's 0.32-2.52 dB) and its top barely depends on the rate, but is worse below index 848
-   (0.17-0.51 dB against 0.04-0.46) and its refit table fails index 464 by 111 cents (22 of 23
-   checks). Unresolved (decision for Jacob: accept, switch HPF24 to HP 24 dB Driven and accept its
-   low-cutoff shape and the 464 check, or find another highpass). Reproduce: plugin tests
+   reference's HPF24 better at the top at 44.1 kHz (0.08-0.28 dB from index 880 against the
+   state-variable filter's 0.32-2.52 dB); twelfth session: switched on Jacob's decision, refitted
+   (25 of 25 checks with a break at 475) and rate matched, it fails at 88.2-192 kHz (4, 1, 16
+   and 17 checks at 88.2, 96, 176.4 and 192 kHz, from index 496) because it saturates inside its loop, so its shape depends on
+   the level and the rate; not applied. HP 24 dB Clean: 0.13-0.32 dB from 880 at 44.1 and 192 kHz
+   alike, 0.19-0.68 below. Unresolved (decision for Jacob: the state-variable filter as now, Driven
+   with failures at 88.2-192 kHz, or Clean). Reproduce: plugin tests
    (`oscairn-analog-tests`, "fitted tables" at the other rates print these lines);
    `oscairn-analog-rate-match fit HPF24 96000`; the driven refit: `scripts/gate.py type5d`
    (local) with the sweep `surge/cut5d`. Code: `src/common/dsp/FilterCutoffRateMatch.h`,
@@ -2441,7 +2532,8 @@ only moves where a glide starts, below).
    at the interpolated 88.2 and 176.4 kHz (pass but HPF24, entry 1). At 64 kHz (not a checked
    rate) LPF24 fails at index 948 (+58 cents) and 956 (+130): the interpolation between 48 and 96
    kHz is too coarse near the state-variable filter's clamp. Below 44.1 kHz the filters clamp
-   lower than at 44.1 kHz, so the top can't match. Unresolved (fit more rates with the tool).
+   lower than at 44.1 kHz, so the top can't match. 64 kHz: **deliberate** (Jacob, twelfth session:
+   it needn't be covered; not in the tests). Below 44.1 kHz: unresolved.
    Code: as 1.
 3. **Cutoff tables beyond the OB-Xd clamp at 96 and 192 kHz** (HPF18/12/6 above cutoff 60,
    16 kHz): engine-against-engine shape error up to 0.93 dB (96 kHz) and 1.10 dB (192) after
@@ -2497,8 +2589,9 @@ only moves where a glide starts, below).
     knots (checks between knots at 24-104 only, none between 112 and 127), the pitch LFO delay at
     2-6, the amp velocity k above +192 (+192 to +224 not probed). Unresolved until independent
     probes exist.
-13. **Short envelopes.** Envelope times at the shortest settings aren't checked (the floor for
-    averaged short-envelope checks, question C, is open). Unresolved.
+13. **Short envelopes.** Envelope times at the shortest settings aren't checked. Jacob decided a
+    2 ms floor for averaged short-envelope checks (twelfth session); the tables are to be
+    committed where they pass and the rest listed here (not done yet). Unresolved.
 14. **Surge 1.x patches in the plugin.** A patch of revision below 2 sets an LFO's sustain from
     whether its decay equals the parameter maximum; the plugin's voice LFO decay maximum is 8,
     not 5, so such a patch could load differently in the plugin than in Surge. Deliberate (no such
@@ -2519,5 +2612,6 @@ only moves where a glide starts, below).
     0xffffff00`).
 18. **Amp EG decay at 64 kHz.** At 64 kHz (not a checked rate) the amp EG decay at index 116 is
     4.6 % long (0.1283 s against 0.1226; tolerance 2.5 % or 5 ms); at 48, 88.2, 96, 176.4 and
-    192 kHz every envelope table passes. Unresolved (not investigated). Reproduce: the plugin
+    192 kHz every envelope table passes. Deliberate (Jacob, twelfth session: 64 kHz needn't be
+    covered). Reproduce: the plugin
     tests' fitted tables at 64000 Hz.
