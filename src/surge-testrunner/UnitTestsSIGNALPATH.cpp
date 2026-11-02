@@ -534,14 +534,29 @@ TEST_CASE("Filter Cutoff Rate Match", "[signalpath]")
     // the legacy ladder clamps at 0.187 x the oversampled rate
     const int ladder = sst::filters::fut_lpmoog, ladder6 = 0;
 
-    // unchanged at 44.1 kHz and for filter types without a table
+    // unchanged at and below 44.1 kHz and for filter types without a table
     for (float c : {-30.f, 0.f, 40.f, 70.f})
     {
         REQUIRE(rateMatchedCutoff(c, ladder, ladder6, 44100) == c);
+        REQUIRE(rateMatchedCutoff(c, ladder, ladder6, 32000) == c);
         REQUIRE(rateMatchedCutoff(c, sst::filters::fut_comb_pos, 0, 48000) == c);
     }
-    // at 48 and 96 kHz: non-decreasing, and one cutoff above the 44.1 kHz clamp (62.74)
-    for (float rate : {48000.f, 96000.f})
+    // between fitted rates, interpolated in log rate (88.2 kHz between 48 and 96, 46 kHz between
+    // 44.1 and 48); above the highest fitted rate, its table
+    auto at = [&](float c, float r) { return rateMatchedCutoff(c, ladder, ladder6, r); };
+    for (float c : {0.f, 50.f, 62.f, 70.f})
+    {
+        INFO("cutoff " << c);
+        float w = std::log2(88200.f / 48000.f);
+        REQUIRE(at(c, 88200) ==
+                Catch::Approx(at(c, 48000) + w * (at(c, 96000) - at(c, 48000))).margin(1e-4));
+        float w2 = std::log2(46000.f / 44100.f) / std::log2(48000.f / 44100.f);
+        REQUIRE(at(c, 46000) == Catch::Approx(c + w2 * (at(c, 48000) - c)).margin(1e-4));
+        REQUIRE(at(c, 384000) == at(c, 192000));
+    }
+    // at the fitted rates and between: non-decreasing, and one cutoff above the 44.1 kHz clamp
+    // (62.74)
+    for (float rate : {48000.f, 64000.f, 88200.f, 96000.f, 176400.f, 192000.f})
     {
         INFO("rate " << rate);
         for (const auto &t : Surge::Filter::rate_match::tables)
