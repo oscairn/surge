@@ -1714,6 +1714,10 @@ class alignas(16) SurgeStorage
     // An LFO envelope's release reaches 2^8 s, and only a release of 8 means it never
     // releases (instead of Surge's 5, its maximum). Saved in the patch; off when absent.
     bool lfoLongRelease{false};
+    // At 48 and 96 kHz, the filter types in dsp/FilterCutoffRateMatchTables.h take a moved
+    // cutoff so they respond as they do at 44.1 kHz with the patch's cutoff (their top-of-range
+    // clamps included). Saved in the patch; off when absent.
+    bool filterCutoffRateMatch{false};
     float unstreamedTempo{120.f};             // this one is in actual BPM
     double songpos;
     bool isPlaying{false}; // host transport state

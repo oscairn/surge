@@ -24,6 +24,7 @@
 #include "UserDefaults.h"
 #include "DSPUtils.h"
 #include "QuadFilterChain.h"
+#include "FilterCutoffRateMatch.h"
 #include "globals.h"
 #include <cmath>
 #ifndef SURGE_SKIP_ODDSOUND_MTS
@@ -1582,6 +1583,15 @@ void SurgeVoice::SetQFB(QuadFilterChainState *Q, int e) // Q == 0 means init(ial
             cutoffB += cutoffA;
         cutoffA += segDriftValue[n_oscs];
         cutoffB += segDriftValue[n_oscs + 1];
+        if (storage->filterCutoffRateMatch)
+        {
+            cutoffA = Surge::Filter::rateMatchedCutoff(cutoffA, scene->filterunit[0].type.val.i,
+                                                       scene->filterunit[0].subtype.val.i,
+                                                       storage->samplerate);
+            cutoffB = Surge::Filter::rateMatchedCutoff(cutoffB, scene->filterunit[1].type.val.i,
+                                                       scene->filterunit[1].subtype.val.i,
+                                                       storage->samplerate);
+        }
 
         CM[0].MakeCoeffs(cutoffA, localcopy[id_resoa].f,
                          static_cast<FilterType>(scene->filterunit[0].type.val.i),

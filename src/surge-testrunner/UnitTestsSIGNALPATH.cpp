@@ -29,6 +29,7 @@
 #include <vector>
 
 #include "HeadlessUtils.h"
+#include "dsp/FilterCutoffRateMatch.h"
 #include "catch2/catch_amalgamated.hpp"
 
 namespace
@@ -490,37 +491,95 @@ TEST_CASE("Engine Options Are Saved In The Patch", "[signalpath]")
     };
     auto options = [&] {
         return std::vector<bool>{st.analogEnvelopeAttackClamp, st.vcaVelocityAmplitudeLaw,
-                                 st.saturatorAlgebraicCurve, st.lfoLongRelease};
+                                 st.saturatorAlgebraicCurve, st.lfoLongRelease,
+                                 st.filterCutoffRateMatch};
     };
-    auto set = [&](bool a, bool b, bool c, bool d) {
+    auto set = [&](bool a, bool b, bool c, bool d, bool e) {
         st.analogEnvelopeAttackClamp = a;
         st.vcaVelocityAmplitudeLaw = b;
         st.saturatorAlgebraicCurve = c;
         st.lfoLongRelease = d;
+        st.filterCutoffRateMatch = e;
     };
 
     // off by default, and a patch saved with them off doesn't mention them
-    REQUIRE(options() == std::vector<bool>{false, false, false, false});
+    REQUIRE(options() == std::vector<bool>{false, false, false, false, false});
     auto off = save();
     REQUIRE(std::string(off.begin(), off.end()).find("saturatorAlgebraicCurve") ==
             std::string::npos);
 
     // each round trips on its own
-    for (int i = 0; i < 4; i++)
+    for (int i = 0; i < 5; i++)
     {
         INFO("option " << i);
-        set(i == 0, i == 1, i == 2, i == 3);
+        set(i == 0, i == 1, i == 2, i == 3, i == 4);
         auto on = save();
-        set(false, false, false, false);
+        set(false, false, false, false, false);
         patch.load_patch(on.data(), (int)on.size(), false);
-        REQUIRE(options() == std::vector<bool>{i == 0, i == 1, i == 2, i == 3});
+        REQUIRE(options() == std::vector<bool>{i == 0, i == 1, i == 2, i == 3, i == 4});
     }
 
     // a patch without them turns them off
-    set(true, true, true, true);
+    set(true, true, true, true, true);
     patch.load_patch(off.data(), (int)off.size(), false);
-    REQUIRE(options() == std::vector<bool>{false, false, false, false});
-    set(true, true, true, true);
+    REQUIRE(options() == std::vector<bool>{false, false, false, false, false});
+    set(true, true, true, true, true);
     REQUIRE(surge->loadPatchByPath("resources/test-data/patches/TestInitSaw.fxp", -1, "Test"));
-    REQUIRE(options() == std::vector<bool>{false, false, false, false});
+    REQUIRE(options() == std::vector<bool>{false, false, false, false, false});
+}
+
+TEST_CASE("Filter Cutoff Rate Match", "[signalpath]")
+{
+    using Surge::Filter::rateMatchedCutoff;
+    // the legacy ladder clamps at 0.187 x the oversampled rate
+    const int ladder = sst::filters::fut_lpmoog, ladder6 = 0;
+
+    // unchanged at 44.1 kHz and for filter types without a table
+    for (float c : {-30.f, 0.f, 40.f, 70.f})
+    {
+        REQUIRE(rateMatchedCutoff(c, ladder, ladder6, 44100) == c);
+        REQUIRE(rateMatchedCutoff(c, sst::filters::fut_comb_pos, 0, 48000) == c);
+    }
+    // at 48 and 96 kHz: non-decreasing, and one cutoff above the 44.1 kHz clamp (62.74)
+    for (float rate : {48000.f, 96000.f})
+    {
+        INFO("rate " << rate);
+        for (const auto &t : Surge::Filter::rate_match::tables)
+        {
+            INFO("type " << t.type << " subtype " << t.subtype);
+            float last = -1000;
+            for (float c = -50; c <= 75; c += 0.125f)
+            {
+                float m = rateMatchedCutoff(c, t.type, t.subtype, rate);
+                REQUIRE(m >= last);
+                last = m;
+            }
+        }
+        auto top = rateMatchedCutoff(64, ladder, ladder6, rate);
+        REQUIRE(top != 64);
+        REQUIRE(rateMatchedCutoff(70, ladder, ladder6, rate) == top);
+        REQUIRE(rateMatchedCutoff(75, ladder, ladder6, rate) == top);
+    }
+
+    // in the voice: off, the ladder at 48 kHz opens past cutoff 64; on, cutoffs 64 and 70
+    // sound the same, as they do at 44.1 kHz; at 44.1 kHz on and off are identical
+    auto play = [](int rate, bool on, float cutoff) {
+        auto s = Surge::Headless::createSurge(rate);
+        s->storage.filterCutoffRateMatch = on;
+        auto &sc = s->storage.getPatch().scene[0];
+        sc.osc[0].retrigger.val.b = true;
+        sc.drift.val.f = 0.f;
+        sc.lowcut.deactivated = true;
+        sc.filterunit[0].type.val.i = sst::filters::fut_lpmoog;
+        sc.filterunit[0].subtype.val.i = 0;
+        sc.filterunit[0].cutoff.val.f = cutoff;
+        sc.filterunit[0].resonance.val.f = 0;
+        s->seedRandom(1234);
+        return render(*s, 36, 100);
+    };
+    REQUIRE(play(48000, false, 64) != play(48000, false, 70));
+    REQUIRE(play(48000, true, 64) == play(48000, true, 70));
+    REQUIRE(play(44100, false, 64) == play(44100, false, 70));
+    REQUIRE(play(44100, true, 50) == play(44100, false, 50));
+    REQUIRE(play(48000, true, 50) != play(48000, false, 50));
 }

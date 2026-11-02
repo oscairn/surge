@@ -2557,6 +2557,7 @@ void SurgePatch::load_xml(const void *data, int datasize, bool is_preset)
     storage->vcaVelocityAmplitudeLaw = false;
     storage->saturatorAlgebraicCurve = false;
     storage->lfoLongRelease = false;
+    storage->filterCutoffRateMatch = false;
 
     for (int sc = 0; sc < n_scenes; ++sc)
     {
@@ -2652,7 +2653,8 @@ void SurgePatch::load_xml(const void *data, int datasize, bool is_preset)
              {std::pair{"analogEnvelopeAttackClamp", &storage->analogEnvelopeAttackClamp},
               {"vcaVelocityAmplitudeLaw", &storage->vcaVelocityAmplitudeLaw},
               {"saturatorAlgebraicCurve", &storage->saturatorAlgebraicCurve},
-              {"lfoLongRelease", &storage->lfoLongRelease}})
+              {"lfoLongRelease", &storage->lfoLongRelease},
+              {"filterCutoffRateMatch", &storage->filterCutoffRateMatch}})
         {
             bool tv;
             auto *el = TINYXML_SAFE_TO_ELEMENT(nonparamconfig->FirstChild(name));
@@ -4489,7 +4491,8 @@ unsigned int SurgePatch::save_xml(void **data) // allocates mem, must be freed b
                                       (bool)storage->analogEnvelopeAttackClamp},
                             {"vcaVelocityAmplitudeLaw", (bool)storage->vcaVelocityAmplitudeLaw},
                             {"saturatorAlgebraicCurve", (bool)storage->saturatorAlgebraicCurve},
-                            {"lfoLongRelease", (bool)storage->lfoLongRelease}})
+                            {"lfoLongRelease", (bool)storage->lfoLongRelease},
+                            {"filterCutoffRateMatch", (bool)storage->filterCutoffRateMatch}})
     {
         if (!on)
             continue;
