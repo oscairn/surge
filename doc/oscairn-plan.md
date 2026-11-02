@@ -1262,6 +1262,23 @@ Decisions taken (for Jacob to confirm):
   started. The plugin's portamento range reaches 2^3.99 s; Portamento Time 122-127 clamp
   there. Proposed tolerances: key-on delay 2.5 % or 15 ms, portamento 5 % or 5 ms, amp
   velocity 0.3 dB, cutoff drift spread 20 %, pitch LFO start phases 6 cents RMS.
+- Added in the tenth session (details there): the noise tilt is two scene parameters (a
+  first-order shelf: gain 1 below the frequency, the tilt above), skipped at 0 dB, the default;
+  the algebraic saturator curve is an engine option like the attack clamp, not a parameter;
+  the three reference-matching engine options (attack clamp, amplitude velocity law,
+  algebraic saturators) are now saved in the patch, each its own setting (generic names, so
+  each means something in Surge XT), off when absent, and the plugin no longer forces them:
+  a new or existing Surge patch plays as in any Surge instance, and the converter turns all
+  three on for a converted Part (replaces the eighth and ninth sessions' "on in the plugin,
+  not streamed"); no plugin parameter for them, only the state (a patch-level choice, not
+  something to automate); a fourth such option, `lfoLongRelease`, lets voice LFO releases
+  reach 2^8 s with 8 as "never" (off: 5 and above never release, as in Surge); the portamento octave limit is a scene switch (off by default)
+  that applies to both time modes; the plugin's Velocity > VCA Gain reaches -1536 dB (k = 128)
+  and above +192 the check is on k (2 %), not the level; the pitch LFO delay maps through
+  measured values at indices 2-6 instead of the formula. Proposed tolerances: noise tone shape
+  1 dB RMS and level 1 dB over half-octave bands; saturator harmonics above -50 dB within 3 dB
+  (as before, now also for the other filter types); portamento octave limit jump 0.5 semitone
+  and slope 5 %.
 
 *Saturator fit* (engine renders through the plugin at osc level table[511], amp level
 table[431], against the `m2` probes; drive in the engine = offset + 0.75 dB × raw):
@@ -1869,6 +1886,283 @@ each push, which holds the engine changes before it: `350d952` (2788 s, 363 s; c
 and `566c7a4` (2946 s, 394 s; covers `3c7e451`). This record (`doc/` only) was not run
 separately. Measurement repository (`07ffb9c`: `held_length`; `8f89922`: fit kinds `glide` and
 `keyondelay`, per-render options, proposed tolerances): self-tests 25 passed.
+
+**Tenth session (2026-11-01): saturator curve, noise tilt, portamento octave limit, velocity to +255.**
+
+GitHub Actions stayed disabled (no runs since `cac0d8e`); the Linux jobs ran in the local Docker
+substitute (see "Tests run in the tenth session"), which is not CI. New batches: `m10a` (noise
+tone between the `m8b` tones, filter saturator after every type, amp velocity sensitivity +224 to
++254, pitch LFO delay 2-6 repeated), `m10b` (portamento "2" modes at 17, 36, -17 and -24
+semitones, `esp_seq`), `m10c` (Part velocity sensitivity depth and offset); no dropouts (gaps
+over 64 samples) found; builder `scripts/probes10.py`.
+
+*Saturator curve at high drive* (`6074120` generic, `86258b1` Oscairn). The reference's amp and
+filter saturators are u / sqrt(1 + u^2) plus a square term, not tanh: fitted to the `m2` sine
+probes (raw 8-80 and the level series) as a static curve, the worst harmonic 2-6 above -50 dB is
+0.43 dB (amp) and 0.20 dB (filter), against 1.97 and 1.87 dB for the best tanh (curve alone);
+knees u / (1 + |u|^n)^(1/n) with n = 1.5, 2.5-6 are worse (2.6-12.6 dB). New storage option
+`saturatorAlgebraicCurve` (both saturators, scaled back by the same curve at the drive; off by
+default; at first on in the plugin for every patch, now saved per patch: see below). Engine through the plugin: offsets -40.4 dB (amp,
+asymmetry 0.115) and -42.1 dB (filter after LPF24 at 1004, asymmetry 0.254), worst harmonic
+above -50 dB 0.50 dB (amp) and 0.30 dB (filter) over raw 8-80 and the level series (fifth
+session with tanh: 3.5 and 3.1 dB at raw 80). Checked only against the renders it was fitted
+to. The proposed 3 dB tolerance is now met at every drive. Still not modelled: the reference's
+low-level odd harmonics (-56 dB third harmonic at osc level 64), which no static curve gives.
+Level correction after each saturator (`satgain.py` with the new curve and offsets, reference
+against engine fundamental): amp raw 8-80: +0.63, +0.89, +1.80, +1.24, +2.40, +3.25, +1.54,
+-0.33 dB; filter: +1.19, +1.30, +0.91, +1.54, +2.23, +2.16, -0.56, -2.00 dB (sixth session's
+tanh values: see there). Plugin check: raw 32-80 for both saturators, worst 0.43 dB (fails with
+tanh, seen: filter raw 48 third harmonic 3.16 dB).
+
+*Filter saturator offsets for the other types* (`f2741c3`, test only; `m10a`: a sine at note
+60, LPFs at index 1023, HPFs at 0, BPF12 at 537, BPF6 at 532, raw 0, 48, 80). Every type fits the
+same curve and asymmetry (0.252-0.253); the model offsets differ only by the reference filter's
+gain at the note (LPFs identical to LPF24; HPFs 0.2-0.7 dB lower; BPFs 10 and 8 dB). Engine
+offsets (the model offset moved by the engine filter's pass-band level at the note against
+LPF24's, measured with the drive off): LPF18/12/6 -43.60 (the engine's LPF24 pass band is 1.5 dB
+lower, hence its -42.1), HPF24 -42.52, HPF18 -38.46, HPF12 -40.49, HPF6 -38.96, BPF12 -41.71,
+BPF6 -45.43 dB; harmonics above -50 dB within 0.22-0.32 dB of the reference at raw 48 and 80
+(fitted to the same probes). The HPF and BPF offsets carry the engine filters' level at those
+cutoffs (HPF18 at index 0, below its table's valid range, is 4.2 dB down at 262 Hz), so they
+hold at those settings only; the general rule is one offset of -43.6 dB on the engine filter's
+output at unity gain, with the filter level matched first. Plugin check: all nine types at raw
+48 and 80, worst 0.31 dB; with -43.6 for every type 10 checks fail (seen).
+
+*Noise tone* (`8ae52ad` generic, `eb2a41c` Oscairn test). The reference's tone is a first-order
+shelf whose corner moves with the tone: (1 + g s/w) / (1 + s/w) fits every probed tone within
+0.16-0.41 dB RMS over half-octave bands 62.5 Hz-16 kHz (worst band 1.11 dB, tone 0), measured
+against the engine's own white noise (eighth session, with Surge's noise colour: 0.4-1.9 dB RMS
+at 48-112 only, 3.4-6.2 dB RMS elsewhere). Tone 0 is nearly a lowpass at 192 Hz (tilt -42 dB),
+64 white, 127 a +16.3 dB shelf at 7.9 kHz. New scene parameters Noise Tilt (dB, `ct_decibel`)
+and Noise Tilt Frequency (`ct_freq_audible`): a bilinear one-pole at the oversampled rate with
+the corner prewarped, after either noise type, skipped at 0 dB (the default); appended and reset
+on load. Mapping (fitted at 0, 8, 16, 32, 48, 64, 80, 96, 112, 120, 127, linear between; 64
+has tilt 0 and the corner of its neighbours; tone, frequency in Surge units, tilt dB, level
+correction dB): 0 -14.34 -42.19 +7.46; 8 -7.24 -19.51 +5.84; 16 -2.11 -14.50 +5.29; 32 3.22
+-8.14 +3.51; 48 5.37 -3.79 +2.02; 64 8.55 0 0; 80 11.73 2.54 -1.93; 96 26.13 4.48 -2.78; 112
+38.44 7.74 -5.29; 120 44.39 10.49 -7.91; 127 50.10 16.28 -14.46. The level correction is the
+reference's band-mean level change relative to tone 64 minus the engine's (it is positive at the
+low tones, where the tilt cuts; Noise Volume cannot go above 0 dB, so the converter has to put
+it elsewhere, for instance by lowering the other channels). With 120 left out of the knots, the
+level at 120 was 1.5 dB off (linear interpolation from 112 to 127), hence the knot. Plugin
+check: every 8th tone and 127, worst shape 0.71 dB RMS, level 0.40 dB; checks between knots at
+24, 40, 56, 72, 88, 104 (0.33-0.60 dB RMS); no check between 112 and 127 other than the knots.
+Without the tilt 14 of 17 fail (seen). Measurement repository: `half_octave_bands` (`b26fff1`).
+
+*Portamento "Rate 2"/"Time 2"* (`5e0a27b` generic, `422f34c` Oscairn test; `m10b` with
+`m8e`). Over an octave both "2" modes jump to an octave from the target and glide the last
+octave, up and down (17, 24, 36 up, 17 and 24 down; a straight line through the glide's
+20-80 % lands 11.77-11.96 semitones from the target at the moment the pitch leaves the first
+note, slope 36.45-36.60 semitones/s, so an octave in 328 ms at time 64). New scene switch
+Portamento Octave Limit: in `update_portamento` the glide's start is clamped to an octave (the
+scale length) from the target, so constant time and constant rate both take an octave's time;
+appended, off by default, reset on load. Test `[portamento]` (start and octave time in both
+modes up and down, unchanged at 7 and 12 semitones, reset and round trip; fails without the
+clamp, seen). Converter: Rate 2 = constant rate + octave limit, Time 2 = constant time + octave
+limit, same time table. Plugin check (Time 2 only: constant rate is a flag on the portamento
+parameter, not a plugin parameter): jumps within 0.18 semitone, slopes within 1.1 % (proposed
+0.5 semitone and 5 %; 5 of 5 fail with the limit off, seen).
+
+*Amp velocity sensitivity +255* (`134e4cf`, Oscairn). Implied k from the levels (a = 1 - k (1 -
+v/127)): +192: 2.01; +224: 4.02, 4.00, 3.96; +240: 8.04, 8.01, 7.93; +248: 16.02, 15.89; +252:
+31.77 (velocities 112-124). So k = 128 / (256 - S) above +192 (+254: k = 64, velocity 124
+silent as predicted; +255: k = 128, only 127 sounds), joining 2^((S - 128)/64) at +192; between
++192 and +224 not probed. The plugin's Velocity > VCA Gain reaches -1536 dB (k = 128). The
+plugin check keeps 0.3 dB up to +192; above, it checks k within 2 % (worst 0.79 %, i.e. 0.38 dB
+at +252, velocity 124, which a 0.3 dB level check would fail: there the level moves 1.7 dB per
+unit of k) and silence (at least 60 dB down) where the reference is silent. With the
+exponential k above +192 it fails (seen). S < 0 stays as before (a velocity routing).
+
+*Part velocity sensitivity depth and offset* (`m10c`, measured, not mapped in a check; amp
+sensitivity +128 so the level gives the effective velocity v'). v' = v x depth / 64 + 2 x (offset
+- 64), clamped to 0-127 (depth 127 acts as about 2.0: v' = 64.5 at v = 96, offset 0); every
+probe within 1 of it. Below the clamps this is affine in v, so the converter can fold it into
+each velocity sensitivity and the matching level; where it clamps (for example depth 96 or
+offset 96: every velocity from 64 up plays as 127) Surge has no equivalent (not built).
+
+*Pitch LFO delay at 2-6* (`m10a`, mapping only). Switch-on times (7 renders at 4, 2 at the
+others; 1-sigma scatter 1.0-1.3 ms): 2: 19.1, 3: 29.3, 4: 48.4, 5: 58.0, 6: 78.5 ms (formula:
+16.0, 29.4, 45.3, 63.3, 83.2). The reference steps unevenly here, so 4's -5.4 ms was the formula,
+not the measurement. With these values as a lookup, the engine (voice LFO delay = log2 t) reads
+-2.2, -0.9, -0.9, -2.9, -0.5 ms from the reference (all 5 within 2.5 % or 5 ms, 2 and 5 by
+the 5 ms floor; the engine's delay itself steps: 16.9 ms whether set to 16 or 19 ms). Converter: these values at 2-6, the formula from 8 (7 not probed).
+
+*Reference-matching options per patch* (`ec14676` and `00f6869` Oscairn, `95e6f97` generic). Until now the
+plugin turned the analog attack clamp, the amplitude velocity law and (this session) the
+algebraic saturators on for every patch, so a plain Surge patch did not play in the plugin as in
+Surge. The three options are now saved in the patch (`nonparamconfig`, each written only when on,
+reset to off before every load) and the plugin takes them from the patch (`ec14676` first
+moves the plugin's forcing to every load, so the commit in between still passes). Tests: `[signalpath]`
+"Engine Options Are Saved In The Patch" (off by default and not written; each round trips;
+a patch without them turns them off; fails without the read, seen); plugin "plain patches match
+stock Surge": every 8th factory patch (79) and one built to use all three options, loaded into
+the plugin and into a stock `SurgeSynthesizer` (default options and ranges; the plugin's
+one-scene, no-effects rules applied by hand), a note at velocity 70 rendered in both: identical
+samples for all 80; forcing any one option on in the plugin fails it (clamp: 1 patch, velocity
+law: 13, saturator: 1; seen); with the options on in a patch, the plugin's state keeps them and
+round trips byte for byte (fails if the plugin drops one, seen). The reference checks now render
+with the options on (`RenderSpec::referenceMatching`; the render tool's `--reference`; every
+reference check passes as before). This is the plugin path, not `[reference]` itself: the
+plugin plays one scene and no effects, so the 635 reference patches can't be bit-identical to
+their stock renders through it; the comparison above is the plugin-path equivalent.
+The plugin's longer ranges (envelopes and voice LFO attack/decay 2^8 s, portamento 2^3.99 s,
+Velocity > VCA Gain down to -1536 dB) don't change what a stored value plays: the engine uses
+`val_max`/`val_min` only for a parameter's limits, the normalisation of host modulation (which
+the plugin undoes with the same range) and, for portamento, an assertion; the test above passes
+with them. One exception, in Surge's patch loader and not hit by any factory patch: a patch of
+revision below 2 (Surge 1.x) sets an LFO's sustain from whether its decay equals `val_max`, and
+the plugin's voice LFO decay maximum is 8, not 5. Left as is (no such patch to test).
+
+*Staying mergeable with upstream.* Upstream `main` fetched into `refs/remotes/upstream/main`
+only (`0852de8`, 2026-10-31; nothing pushed, no remote added). The fork's base is `5a4828a`;
+upstream has one commit since (an accessibility fix in the MSEG editor). A test merge
+(`git merge-tree` of `upstream/main` into `oscairn` at `00f6869`) is clean: no conflicts. The
+risk is in the future: outside `src/oscairn-clap/`, `doc/` and new test files, the fork changes
+95 hunks in the four engine files upstream edits most (`SurgeSynthesizer.cpp` +329 lines,
+`SurgePatch.cpp` +306, `SurgeVoice.cpp` +288, `SurgeStorage.h` +93; upstream touched them 26,
+33, 5 and 38 times in the last year), plus `QuadFilterChain.cpp` (+185, untouched upstream in a
+year) and smaller hooks in the LFO, ADSR, modulation-source and oscillator files. Likely
+conflict points: the end of the scene's parameter block and the reset list in `load_xml`
+(`SurgePatch.cpp`), the storage options next to other storage flags (`SurgeStorage.h`), and the
+voice-start and block code in `SurgeVoice.cpp`/`SurgeSynthesizer.cpp`. `n_scene_params` and
+`ff_revision` are lower risk than they look: upstream hasn't changed `n_scene_params` in two
+years, and the fork doesn't change `ff_revision`. Ways to cut conflicts, none done this session:
+move the larger self-contained blocks (key-on delay in `SurgeSynthesizer.cpp`, segment drift
+and unison in `SurgeVoice.cpp`) into new files with one-line call sites; keep every new scene
+parameter in one appended block (already so) and every new storage flag in one block (already
+so). From here on new work keeps Oscairn code in `src/oscairn-clap/` and new files, with small,
+off-by-default engine hooks.
+
+*Long LFO releases* (`68f0e94` generic, `4fdcec4` Oscairn). The voice LFOs that serve as the
+pitch, oscillator and modifier envelopes couldn't release longer than 2^5 s, because an LFO
+release at its maximum means "never releases". New engine option `lfoLongRelease` (saved in the
+patch like the other three, off when absent): the release reaches 2^8 s and only 8 means never.
+Off, a release at or above 5 never releases, even where a host's range goes past 5, so Surge
+patches play as before; the plugin's voice LFO release range is now 2^8 s. Tests:
+`[lfoenvmode]` "LFO Long Release" (off: 5 never releases with a range of 5 or 8, 4.9 releases,
+6 never; on: 5 and 7.9 release, 8 never; comparing against the parameter's maximum instead
+fails it, seen); the plugin's stock comparison now includes an LFO envelope released at 5, and
+forcing the option on fails it on that patch and on factory patches (Deep End, E-Bass, Aliens:
+Surge patches do use 5 as "never"). Converter: set `lfoLongRelease` with the other three for a
+converted Part. Not done: a plugin check of releases above 30 s against reference renders (the
+oscillator EG release table stops at index 208).
+
+*Part Volume and Performance Volume* (`m10d`: a sine at note 60, everything else as the other
+probes; `pv_default` had a dropout and is not used: `pv_part_100` is the same setting). Level
+relative to Part Volume 100: 0 silent, 16 -31.90, 32 -19.88, 64 -7.87, 112 +1.88, 127 +4.13 dB,
+that is 40 log10(v / 127) within 0.1 dB (an amplitude of (v / 127)^2). Performance Volume,
+relative to 127: 0 silent, 32 -24.01, 64 -12.00, 100 -4.50, 112 -2.62 dB, 40 log10(v / 127)
+within 0.45 dB (largest at 100 and 112). The probes ran at Part Volume 100 and Performance
+Volume 127 (Dry Level 127), so every absolute level fitted from them (the amp level table and
+its checks; the oscillator level table is checked at the amp table's value, so it moves with
+it) includes the Part Volume's -4.15 dB (-4.13 measured), and the Performance Volume's 0 dB.
+For engine-only tables, `ampLevel` and the references of its and `osc1Level`'s checks need
++4.13 dB, and the converter maps Part Volume and Performance Volume to Surge's scene and
+global volume with the curves above. **Not done**: the tables were not re-exported (the export
+runs from the measurement repository with every table's fit and check files, which this
+session did not rebuild); for now the converter can add +4.13 dB to `ampLevel` itself.
+
+*Ageing* (`m10d` with the sixth session's `m3a`/`m3e`; Ageing -100, 0, +100, two loads each).
+Measured, not modelled: no effect on pitch (sixth session), amp decay times (0.431/0.836 s at
+-100, 0.428/0.833 at 0, 0.428/0.831 at +100: within the repeat scatter), or level (within 0.2
+dB); a fixed cutoff shift (resonant LPF24 at 512: harmonics 5-9 +0.3 dB at -100, -0.1 dB at
++100, about +0.16 and -0.05 semitones, as in the sixth session) and a fixed pulse width shift
+(duty 0.2517, 0.2538, 0.2545 at -100, 0, +100); both loads identical, so no spread between
+loads or notes. The converter can fold both shifts into the cutoff and the pulse width; no
+engine hook.
+
+*Sample rates* (`2cf5d30`, test only). The reference was rendered and every table checked at
+44.1 kHz; the plugin mostly runs at 48 kHz. The standard plugin test build now also runs the
+saturator checks and every fitted table except the cutoff tables at 48 and 96 kHz with the same
+tolerances: amp level, oscillator level, amp attack/decay/release, pitch and oscillator EG
+times, LFO speed, key-on delay and portamento all pass at both rates, and so do the saturators
+(worst 0.43 dB, filter types 0.31/0.34 dB). The cutoff tables do not: at 48 kHz 18 checks fail,
+all from index 944 up (up to 1400 cents at the top of LPF18/LPF12); at 96 kHz 93 fail, from
+index 720-912 depending on the type and LPF6 from 400 (up to 1230 cents). Surge's filters respond
+differently near the top of the range at another rate, so the tables, fitted to engine renders
+at 44.1 kHz, are rate-specific there; how the reference behaves at other rates is unknown (the
+recorder renders at 44.1 kHz). Not fixed: it needs either cutoff tables per rate or a
+correction for the engine's rate dependence, and reference behaviour at other rates is a
+question for Jacob (does the instrument run internally at a fixed rate?). Verified only at
+44.1 kHz: the cutoff tables (above), and the plugin checks outside the fitted tables (unison,
+drift, cutoff drift, pitch LFO phases, velocity, noise tone, portamento octave limit, first
+block after a load). The sanitizer builds run the extra rates' checks not at all (they check
+memory and threads; the TSan run would grow by most of an hour).
+
+*Asked by Jacob, answered without a change.* Surge XT's own envelope slider keeps its range
+(decision A2): Oscairn's editor uses the plugin's parameter ranges, which reach 2^8 s, and
+widening Surge XT's GUI would add to the diff against upstream. Still open: the floor for
+averaged short-envelope checks (question C), and Jacob's confirmation of the tolerance table.
+
+*Wave folder above 96 and Hard* (time-boxed, no model). Static curves fitted per probe to
+harmonics 2-12 (sine folder, triangle folder, rounded triangle tanh(b tri(g x)), |sin|^b):
+best 0.9-2.1 dB RMS up to 96 (Soft), 3.7-5.4 dB above and 1.1-4.0 dB for Hard, with the best
+family changing from one amount to the next; nothing committed. Resonance above 96 (a new
+filter), self sync and the wave shaper were not attempted.
+
+**Tests run in the tenth session.** GitHub Actions stayed disabled (no run since `cac0d8e`;
+checked after the first push).
+
+*A gate fault, found late.* The macOS gates ran on an exact export of each commit, built in
+separate directories (`surge-gate/`, outside the repository) so the working tree could change
+meanwhile. The export kept each file's commit time, older than the objects already built for
+the previous commit, so ninja rebuilt nothing after the first commit: the macOS runs for
+`6074120`, `86258b1`, `eb2a41c`, `5e0a27b`, `422f34c` and `134e4cf` tested `8ae52ad`'s
+binaries (the testrunner reported 207 test cases throughout, where `5e0a27b` adds one, and the
+plugin tests printed the old velocity line). Those six were pushed on those results and on the
+Docker Linux jobs, which build from scratch and are valid. Only `8ae52ad`'s macOS run
+(fresh build directories: testrunner 207 test cases passed, `[reference]` 635 compared, 6
+skipped; plugin tests standard 85 s, ASan/UBSan 104 s, TSan 549 s, 0 sanitizer reports) counts.
+The script now writes changed files with the current time, and the build directories were
+cleaned before the runs below. The fault hid two test problems, both fixed before the second
+push: the velocity check read a level before the start of a silent render (UBSan stops on it in
+the macOS ASan build; GCC's UBSan in Docker doesn't check float-to-integer casts), fixed in
+`d84c6d6`; and the key-on delay test (ninth session) failed in about 1 run in 10, depending on
+the oscillator's random start phase, fixed in `454fc25`. A first ordering of the per-patch
+commits also failed the Docker standard job (37 failures at the generic commit: the plugin
+still set the options at init and the new load reset them); never pushed, reordered with
+`ec14676` in front.
+
+macOS arm64 gates (cleaned build directories, fixed script): `surge-testrunner` passed with
+`[reference]` "Compared 635 patches, skipped 6" and `oscairn-analog-tests` standard, ASan/UBSan
+and TSan exit 0 with 0 sanitizer reports on `d84c6d6` (208 test cases; plugin tests 83, 107,
+540 s), `454fc25` (208; 81, 108, 547 s), `f2741c3` (208; 80, 105, 535 s), `ec14676` (208; 83,
+106, 537 s), `95e6f97` (209; 79, 106, 537 s), `00f6869` (209; 82, 114, 597 s). Third push: `68f0e94` (210 test
+cases; plugin tests 99, 247, 722 s), `4fdcec4` (210; 114, 136, 630 s), `2cf5d30` (test only,
+testrunner skipped; 141 s with the 48 and 96 kHz checks, ASan 127 s, TSan 634 s), all passed
+with 0 sanitizer reports. Re-run after the push on the six
+pushed commits: (testrunner and `[reference]` 635/6 passed on each, the test
+counts now right: 207, 207, 207, 208, 208, 208): `6074120`, `86258b1`, `eb2a41c`, `5e0a27b`
+and `422f34c` passed all three plugin builds with 0 sanitizer reports (standard 76-81 s, ASan
+96-99 s, TSan 494-510 s); `134e4cf` fails the macOS ASan/UBSan run (the velocity check's
+silent-render read, fixed in `d84c6d6`; standard and TSan passed). So the first push contains
+one commit whose macOS ASan gate fails.
+
+Docker Linux (local substitute for CI, as in the eighth session; each job exit 0, "all
+passed", no sanitizer reports): standard on `8ae52ad` (114 s of tests), `6074120` (98 s),
+`86258b1` (91 s), `eb2a41c` (93 s), `5e0a27b` (95 s), `422f34c` (95 s), `134e4cf` (95 s);
+ASan/UBSan (3173 s) and TSan (499 s) on `134e4cf`, the head of the first push, which holds the
+engine changes of `8ae52ad`, `6074120` and `5e0a27b`; standard on `d84c6d6`, `454fc25`, `f2741c3`, `ec14676`, `95e6f97` (87 s of tests each) and
+`00f6869` (88 s), ASan/UBSan (3350 s) and TSan (517 s) on `00f6869`, the head of the second
+push; standard on `68f0e94` (92 s), `4fdcec4` (99 s) and `2cf5d30` (165 s, with the 48 and 96
+kHz checks), ASan/UBSan and TSan on `4fdcec4` (3760 s, 798 s) and on `2cf5d30`, the head of the
+third push (3730 s, 688 s). One Docker ASan build
+was killed for memory (4 compile jobs while other work ran) and rerun with 3. This record
+(`doc/` only) was not run separately. Measurement repository (`b26fff1`: `half_octave_bands`):
+self-tests 26 passed.
+
+**Where this stopped** (tenth session). The saturators now match the reference's curve
+(algebraic, offsets for every filter type), the noise tone has a tilt filter and mapping, the
+portamento "2" modes have an octave limit, amp velocity sensitivity is mapped to +255, the pitch
+LFO delay at 2-6 uses measured values, and Part velocity depth and offset are measured. The
+reference-matching engine options are per patch, off by default, and plain patches play in the
+plugin exactly as in stock Surge; voice LFO releases reach 2^8 s per patch. A test merge of
+upstream `main` is clean. Part and Performance Volume curves and ageing are measured. Next:
+re-export the amp level table without the Part Volume (+4.13 dB); the converter mapping notes to
+set the four options for converted Parts (the converter repository is not ours); folding Part velocity depth/offset into the sensitivities; resonance above 96 (a new
+filter); the folder above 96 and Hard, self sync and the wave shaper (no model yet); short
+envelopes (waiting for the decision on the floor for averaged checks); moving key-on delay,
+segment drift and unison out of the large engine files to ease upstream merges.
 
 **Where this stopped** (ninth session). The amp velocity law, key-on delay (engine, table,
 note-end checks) and the portamento time table are in, and cutoff drift and the pitch LFO start
