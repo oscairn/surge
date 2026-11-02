@@ -458,6 +458,10 @@ static void testPortsAndParams(const std::vector<std::string> &patches)
         return it == infos.end() ? 0.0 : it->second.min_value;
     };
     check(minOf("a_vca_velsense") == -1536, "amp velocity sensitivity reaches -1536 dB (k = 128)");
+    check(minOf("a_pitch") == -127 && maxOf("a_pitch") == 127 && minOf("a_pbrange_up") == 0 &&
+              maxOf("a_pbrange_up") == 127 && minOf("a_pbrange_dn") == -127 &&
+              maxOf("a_pbrange_dn") == 127,
+          "note shift reaches +-127 semitones, bend up 127, bend down -127 to 127");
 
     // Ranges hold for every factory patch: a parameter exposed in Surge's own units must have
     // the same range whatever patch is loaded (those whose range follows another parameter
@@ -482,6 +486,16 @@ static void testPortsAndParams(const std::vector<std::string> &patches)
     reference.storage.getPatch().scene[0].portamento.val_max.f = 3.99f;
     // and amp velocity sensitivity down to -1536 dB
     reference.storage.getPatch().scene[0].vca_velsense.val_min.f = -1536.f;
+    // and note shift and pitch bend ranges of +-127 semitones (set after each load below, as a
+    // load resets the bend ranges)
+    auto widenPitch = [&] {
+        auto &sc = reference.storage.getPatch().scene[0];
+        sc.pitch.val_min.f = -127.f;
+        sc.pitch.val_max.f = 127.f;
+        sc.pbrange_up.val_max.i = 127;
+        sc.pbrange_dn.val_min.i = -127;
+        sc.pbrange_dn.val_max.i = 127;
+    };
     int loaded = 0;
     for (auto &path : patches)
     {
@@ -491,6 +505,7 @@ static void testPortsAndParams(const std::vector<std::string> &patches)
             continue;
         bool ok = a.load(patch);
         reference.loadRaw(patch.data(), (int)patch.size(), false);
+        widenPitch();
         bool usesFormula = false;
         for (auto &lfo : reference.storage.getPatch().scene[0].lfo)
             usesFormula |= lfo.shape.val.i == lt_formula;
@@ -1309,6 +1324,61 @@ static void testVelocityAgainstReference()
                 worst, 100 * worstK, worstDb);
 }
 
+// Note shift (scene pitch) and pitch bend ranges at their extremes, past the reference's
+// (+-48 semitones of note shift, bend ranges -48 to +24): a sine's frequency from 3 s (the bend
+// is smoothed) to the end of the note, from rising zero crossings, within 1 cent plus 0.05 % of
+// the shift of the note the shift or bend should reach (Surge's bend settles 0.027 % short).
+// +-48 is the reference's largest documented shift; it maps one to one.
+static void testNoteShiftAndBendRanges()
+{
+    namespace F = oscairn_features;
+    const double rate = 44100;
+    struct Case
+    {
+        int note;
+        const char *param;
+        double value, bend, expect; // expect: the note reached
+    };
+    const double up = 8191 / 8192.0; // a full bend up is 8191 of 8192
+    const Case cases[] = {
+        {60, "a_pitch", 48, 0, 108},     {69, "a_pitch", -48, 0, 21},
+        {0, "a_pitch", 127, 0, 127},     {127, "a_pitch", -127, 0, 0},
+        {0, "a_pbrange_up", 127, 1, 127 * up}, {108, "a_pbrange_dn", 48, -1, 60},
+        {0, "a_pbrange_dn", -127, -1, 127},
+    };
+    double worst = 0;
+    for (auto &c : cases)
+    {
+        oscairn_analog::RenderSpec s{c.note, 100, 5, 0.1, rate,
+                                     {{"a_lowcut.off", 1}, {"a_osc1_type", 1}, {c.param, c.value}},
+                                     {}};
+        s.bend = c.bend;
+        auto x = renderMono(s);
+        size_t a = (size_t)((F::onset(x, rate) + 3.0) * rate), b = (size_t)(4.95 * rate);
+        double first = -1, last = -1;
+        int n = 0;
+        for (size_t i = a; i + 1 < b && i + 1 < x.size(); ++i)
+            if (x[i] < 0 && x[i + 1] >= 0)
+            {
+                double t = i + x[i] / (x[i] - x[i + 1]);
+                if (first < 0)
+                    first = t;
+                last = t;
+                ++n;
+            }
+        double f = n > 1 ? (n - 1) * rate / (last - first) : 0;
+        double want = 440 * std::pow(2.0, (c.expect - 69) / 12.0);
+        double cents = f > 0 ? 1200 * std::log2(f / want) : 1e9;
+        worst = std::max(worst, std::fabs(cents));
+        double tol = 1 + 0.0005 * 100 * std::fabs(c.expect - c.note);
+        check(std::fabs(cents) <= tol, std::string(c.param) + " " + std::to_string(c.value) +
+                                         " at note " + std::to_string(c.note) + ": " +
+                                         std::to_string(f) + " Hz, expected " +
+                                         std::to_string(want));
+    }
+    std::printf("  note shift and bend ranges: largest difference %.2f cents\n", worst);
+}
+
 // Amp and filter saturators against the reference (fifth session, batch m2: a sine at note 48,
 // drive raw 32-80, filter LPF24 at index 1004), with the converter's mapping: drive = offset +
 // 0.75 dB x raw, offset -40.4 dB (amp) and -42.1 dB (filter), asymmetry 0.115 and 0.254, the
@@ -1858,6 +1928,7 @@ int main(int argc, char **argv)
         run("cutoff drift against the reference", [] { testCutoffDriftAgainstReference(); });
         run("pitch LFO phases against the reference", [] { testPitchLfoPhasesAgainstReference(); });
         run("velocity against the reference", [] { testVelocityAgainstReference(); });
+        run("note shift and bend ranges", [] { testNoteShiftAndBendRanges(); });
         run("saturators against the reference", [] { testSaturatorsAgainstReference(); });
         run("noise tone against the reference", [] { testNoiseToneAgainstReference(); });
         run("portamento octave limit against the reference",

@@ -84,6 +84,8 @@ void setParam(SurgeSynthesizer &synth, const std::string &name, double v)
     synth.process(); // applies queued oscillator type changes
     if (p->valtype == vt_float)
         p->val.f = (float)v; // exact value, not via 0..1
+    else if (p->valtype == vt_int)
+        p->val.i = d.i; // exact, also outside Surge's own range (the plugin's can be wider)
 }
 } // namespace
 
@@ -166,6 +168,13 @@ std::vector<float> renderNote(const RenderSpec &spec)
     }
     else
         notes.push_back(noteEv(at(hold), CLAP_EVENT_NOTE_OFF, 1, note));
+    // pitch bend from the start, before the note
+    clap_event_midi_t bend{};
+    int raw = std::clamp((int)std::lround(8192 + 8192 * spec.bend), 0, 16383);
+    bend.header = {sizeof(bend), 0, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_MIDI, 0};
+    bend.data[0] = 0xE0;
+    bend.data[1] = (uint8_t)(raw & 0x7F);
+    bend.data[2] = (uint8_t)(raw >> 7);
     std::vector<float> lr;
     lr.reserve(total * 2);
     float left[512], right[512];
@@ -173,6 +182,8 @@ std::vector<float> renderNote(const RenderSpec &spec)
     {
         uint32_t n = std::min<uint32_t>(512, total - pos);
         std::vector<const clap_event_header_t *> evs;
+        if (pos == 0 && spec.bend != 0)
+            evs.push_back(&bend.header);
         for (auto &e : notes)
             if (e.header.time >= pos && e.header.time < pos + n)
             {

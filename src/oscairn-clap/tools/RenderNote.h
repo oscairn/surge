@@ -31,6 +31,8 @@ struct RenderSpec
     // second is released at hold. None when legatoNote < 0.
     int legatoNote = -1;
     double legatoAt = 0;
+    // Pitch bend (-1..1, sent as MIDI from the start of the render; 0: none)
+    double bend = 0;
     // Turn on, in the patch, the engine options that match the reference (the analog attack
     // clamp, the amplitude velocity law, the algebraic saturators, the long LFO release and the
     // filter cutoff rate match), as a converted Part does

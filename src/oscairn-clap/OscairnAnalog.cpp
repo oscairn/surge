@@ -537,6 +537,23 @@ struct Plugin
     bool normalizePatch()
     {
         auto &patch = synth->storage.getPatch();
+        // No ceiling on note shift or pitch bend range (Jacob's decision; the instrument this
+        // plugin matches stops at +-48 semitones of note shift per Part and per Performance,
+        // and bend ranges of -48 to +24): the scene pitch reaches +-127 semitones, the bend up
+        // range 127 semitones and the bend down range -127 to +127 (negative inverts it). The
+        // engine has no limit on either; Surge's patch loader reads a bend up range outside
+        // 0-255 as a legacy value, so it stays positive. Ranges in cents (extended) keep Surge's.
+        // Set after every load, which resets the bend ranges.
+        auto &scene0 = patch.scene[0];
+        scene0.pitch.val_min.f = -127.f;
+        scene0.pitch.val_max.f = 127.f;
+        if (!scene0.pbrange_up.extend_range)
+            scene0.pbrange_up.val_max.i = 127;
+        if (!scene0.pbrange_dn.extend_range)
+        {
+            scene0.pbrange_dn.val_min.i = -127;
+            scene0.pbrange_dn.val_max.i = 127;
+        }
         for (auto &lfo : patch.scene[0].lfo)
             if (lfo.shape.val.i == lt_formula)
                 return false;
@@ -806,6 +823,7 @@ bool pluginInit(const clap_plugin_t *p)
     // instrument this plugin matches reaches k = 32 at +252, and at +255 only velocity 127
     // sounds.
     s.synth->storage.getPatch().scene[0].vca_velsense.val_min.f = -1536.f;
+    // (note shift and pitch bend ranges: in normalizePatch, as a load resets the bend ranges)
     s.synth->setSamplerate((float)s.sampleRate);
     s.normalizePatch();
     s.refreshSceneData();
