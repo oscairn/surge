@@ -2246,13 +2246,53 @@ it), and above 96 it isn't a static curve either; any fitted static curve is lim
 the 3.7-5.4 dB already found, and Hard above 192 can't be matched on harmonics alone. Nothing
 committed. Resonance above 96, self sync and the wave shaper were not attempted.
 
-*Decisions for Jacob.* (1) HPF24 above index 937 at 48 and 96 kHz: accept the exclusion, refit
-HPF24 per rate against the reference (the checks would then be against the fitting renders), or
-pick another Surge highpass for HPF24 whose top doesn't depend on the rate. (2) Rates other than
-44.1, 48 and 96 kHz: fit 88.2 and 192 kHz too, or leave them unmatched. (3) Whether the reference
-runs internally at a fixed rate (the tenth session's question) still decides what "matching" at
-48 kHz should mean; this session assumes the reference's 44.1 kHz renders are the target at every
-rate.
+*Decisions for Jacob, as asked first.* (1) HPF24 above index 937 at 48 and 96 kHz; (2) rates
+other than 44.1, 48 and 96 kHz; (3) whether the reference's 44.1 kHz behaviour is the target at
+every rate. Answered for (2) and (3): the 44.1 kHz behaviour is the target at every rate, and
+the rate match should cover every rate (below). (1) is still open (below and the register).
+
+*Known differences register* (section 11, new; Jacob's request): one entry per known difference,
+kept up to date.
+
+*Note shift and pitch bend ranges* (`f633f96`, Oscairn; Jacob's decision: no artificial limit on
+note shift or bend range). The reference's Part Note Shift and Performance Note Shift stop at
++-48 semitones each and its bend ranges at -48 to +24 (Upper and Lower; a negative Upper bends
+down); the plugin exposed Surge's scene pitch (+-7 semitones) and bend ranges (0-24), though the
+engine plays any value. The plugin's scene pitch now reaches +-127 semitones and the bend ranges
+127 (up) and -127 to +127 (down; negative inverts the bend), set again after every load because
+loading a patch resets Surge's bend ranges; ranges in cents (extended) keep Surge's. Documented
+values map one to one (note shift n -> scene pitch n; Upper u -> bend up u; Lower l -> bend down
+-l). A negative bend up range can't be stored: Surge's patch loader reads a bend up range outside
+0-255 as a legacy float value and resets both bend ranges, so the reference's negative Upper
+values have no equivalent (register). Stock Surge is unchanged (only the plugin's ranges; the
+stock comparison still passes, 80 of 80). Plugin tests: the ranges (fail without the widening,
+seen) and the extremes rendered: note shift +48 and -48 (the reference's largest), +127 from note
+0 and -127 from note 127, bend up 127 from note 0, bend down 48 from note 108 and -127 from note 0,
+each within 1 cent plus 0.05 % of the shift (worst 3.41 cents, at the 127-semitone bends: Surge's
+smoothed bend settles 0.027 % short of its target). Not covered: note shift beyond the engine's
+note range (Surge's pitch tables stop at note 255).
+
+*Cutoff rate match at other rates* (`e3fe060` generic, `3a25680` Oscairn). The tool now fits
+192 kHz too (shape error left after matching, worst over the grid: LPF24 0.41, LPF18 0.26, LPF12 0.22, LPF6 0.13, HPF24 3.51, HPF18 1.10, HPF12 0.78, HPF6
+0.40 (the OB-Xd types 0.01 up to cutoff 60), BPF12 0.47, BPF6 0.25 dB); between
+fitted rates (and between 44.1 kHz, unchanged, and 48 kHz) the matched cutoff is interpolated
+linearly in log rate, above 192 kHz the 192 kHz table is used, below 44.1 kHz the cutoff is
+unchanged. Plugin tests now run every fitted table and the saturator checks at 48, 88.2, 96,
+176.4 and 192 kHz (88.2 and 176.4 interpolated): all pass but HPF24 above index 937 (printed,
+register entry 1). At 64 kHz, tried and left out of the test, LPF24 fails at 948 (+58 cents) and
+956 (+130) (interpolation too coarse near the state-variable clamp) and the amp EG decay at
+index 116 is 4.6 % long (register entries 2 and 18). Testrunner: "Filter Cutoff Rate Match" also
+checks the interpolation (88.2 kHz from 48 and 96, 46 kHz from 44.1 and 48, 384 kHz as 192, 32
+kHz unchanged; fails without the interpolation, seen) and monotony at 64, 88.2 and 176.4 kHz.
+
+*HPF24 at the top, tried again* (nothing committed). A search over resonance (0-0.6) and cutoff
+at 96 kHz finds its best at resonance 0, 1.4 / 2.5 / 4.0 dB at cutoffs 55 / 58 / 61 (1.9 / 3.1 /
+4.1 dB at 0.05), so the state-variable highpass can't reproduce its 44.1 kHz top at a higher
+rate. HP 24 dB Driven (type 5, subtype 1) against the reference's HPF24 responses at 44.1 kHz
+(best shape error per check): from index 880 0.08-0.28 dB (the state-variable filter 0.32-2.52
+dB), at 48 and 96 kHz nearly the same, but below 848 0.17-0.51 dB (0.04-0.46). Refitted as a
+table (sweep `surge/cut5d`, `gate.py type5d`, local): 22 of 23 checks pass, index 464 fails by
+-111 cents. Not switched; a decision for Jacob (register entry 1).
 
 **Tests run in the eleventh session.** GitHub Actions stayed disabled.
 
@@ -2269,16 +2309,28 @@ Every plugin run exit 0 with 0 sanitizer reports.
 Docker Linux (local substitute for CI; exit 0, "all passed", no sanitizer reports): standard on
 `ee45bc7` (177 s of tests), `9f0a594` (141 s), `ec3de57` (132 s), `b353b7e` (335 s);
 ASan/UBSan (3996 s of tests) and TSan (554 s) on `b353b7e`, the head of the push, which holds
-the engine change of `9f0a594`. Measurement repository (`639f520`): self-tests 27 passed. This
-record (`doc/` only) was not run separately.
+the engine change of `9f0a594`. Measurement repository (`639f520`): self-tests 27 passed.
 
-**Where this stopped** (eleventh session). The cutoff tables hold at 48 and 96 kHz through the
-filter cutoff rate match (off by default, per patch), except HPF24 at the top; the amp level
-table holds the engine's level only (the converter stops adding +4.13 dB); the folder's
-departures above 96 are measured (not memoryless, aliasing). Known differences are now listed in
-section 11. Next: Jacob's decisions above; resonance above 96 (a new filter); the folder above 96
-and Hard, self sync and the wave shaper; short envelopes; moving key-on delay, segment drift and
-unison out of the large engine files.
+Later in the session (a second push): macOS gates on fresh build directories (the first set was
+deleted after the first push): `f633f96`: testrunner 211 passed, `[reference]` 635/6, plugin
+tests standard 781 s, ASan/UBSan 178 s, TSan 966 s; `e3fe060`: testrunner 211 passed,
+`[reference]` 635/6, plugin tests 277, 120, 621 s; `3a25680`: testrunner 211 passed,
+`[reference]` 635/6, plugin tests 841 s (every fitted table at six rates), 131 s, 643 s; all
+exit 0 with 0 sanitizer reports. Docker Linux standard on `f633f96` (374 s of tests), `e3fe060`
+(314 s), `3a25680` (956 s); ASan/UBSan (3623 s of tests) and TSan (651 s) on `3a25680`, the head of the
+second push, which holds the engine change of `e3fe060`. These records (`doc/` only) were not run separately; the
+gate area was deleted at the end.
+
+**Where this stopped** (eleventh session). The cutoff tables hold above 44.1 kHz through the
+filter cutoff rate match (off by default, per patch; fitted at 48, 96 and 192 kHz, interpolated
+between, checked at 48, 88.2, 96, 176.4 and 192 kHz), except HPF24 at the top (a decision for
+Jacob, register entry 1); the amp level table holds the engine's level only (the converter stops
+adding +4.13 dB); note shift and bend ranges reach 127 semitones (a deliberate difference); the
+folder's departures above 96 are measured (not memoryless, aliasing). Known differences are listed
+in section 11. Next: the HPF24 decision; denser rate fits if interpolated rates matter (64 kHz
+fails LPF24 at the top); resonance above 96 (a new filter); the folder above 96 and Hard, self sync
+and the wave shaper; short envelopes; moving key-on delay, segment drift and unison out of the
+large engine files.
 
 **Where this stopped** (tenth session). The saturators now match the reference's curve
 (algebraic, offsets for every filter type), the noise tone has a tilt filter and mapping, the
@@ -2362,21 +2414,38 @@ has one; any such reference limit found is recorded here as a deliberate differe
 been measured so far, and the fork adds no output pitch clamp (the portamento octave limit
 only moves where a glide starts, below).
 
-1. **HPF24 cutoff at the top, 48 and 96 kHz.** Best shape match off the table: 48 kHz index 976
-   -109 cents; 96 kHz 938 +140, 942 +454, 946 +251, 956 and 976 no minimum (tolerance 50
-   cents; index 937 and below, and every index at 44.1 kHz, pass). Cause: the state-variable
-   highpass's damping cap gives the 44.1 kHz filter a resonance near the top that a higher rate
-   doesn't; no cutoff move reproduces it (resonance matching tried, worse). Unresolved
-   (decision for Jacob: accept, refit per rate, or another Surge highpass). Reproduce: plugin
-   tests (`oscairn-analog-tests`, "fitted tables" at 48000/96000 Hz print these lines);
-   `oscairn-analog-rate-match fit HPF24 96000`. Code: `src/common/dsp/FilterCutoffRateMatch.h`,
-   `FilterCutoffRateMatchTables.h`; test exclusion in `testFittedTables` (`lastElsewhere`).
-2. **Cutoff at rates other than 44.1, 48 and 96 kHz.** Not matched (88.2 and 192 kHz keep the
-   engine's own response, which differs near the top as 48/96 kHz did before the rate match:
-   up to 1400 cents at the top of LPF18/12 at 48 kHz). Unresolved (the tool can fit more rates).
+1. **HPF24 cutoff at the top, above 44.1 kHz.** Best shape match off the table (tolerance 50
+   cents), index: 938 / 942 / 944 / 946 / 950 / 956 / 976: 48 kHz -12 / +1 / -6 / -1 / -27 / -49
+   / **-109**; 88.2 kHz **+117 / +444 / +126 / +1174 / +500 / +284 / +1066**; 96 kHz **+140 /
+   +454** / +45 / **+251** / +25 / no minimum / no minimum; 176.4 kHz **+151 / +422** / +36 /
+   **+125** / +25 / no minimum / no minimum; 192 kHz **+151 / +416** / +35 /
+   **+108** / +25 / no minimum / no minimum (64 kHz, not a checked rate: +9 / +76 / +460 / +175 /
+   +314 / +163 / +409). Index 937 and below at every rate, and every index at 44.1 kHz, pass.
+   Cause: the state-variable highpass's damping cap gives the 44.1 kHz filter a resonance near the
+   top that a higher rate doesn't; no cutoff, and no cutoff and resonance together, reproduce it
+   (eleventh session: matching Q1 through the resonance made 96 kHz worse; a search over
+   resonance 0-0.6 and cutoff found its best at resonance 0, 1.4 / 2.5 / 4.0 dB shape error at
+   cutoffs 55 / 58 / 61 against 1.9 / 3.1 / 4.1 at 0.05). HP 24 dB Driven matches the
+   reference's HPF24 better at the top (0.08-0.28 dB from index 880 against the state-variable
+   filter's 0.32-2.52 dB) and its top barely depends on the rate, but is worse below index 848
+   (0.17-0.51 dB against 0.04-0.46) and its refit table fails index 464 by 111 cents (22 of 23
+   checks). Unresolved (decision for Jacob: accept, switch HPF24 to HP 24 dB Driven and accept its
+   low-cutoff shape and the 464 check, or find another highpass). Reproduce: plugin tests
+   (`oscairn-analog-tests`, "fitted tables" at the other rates print these lines);
+   `oscairn-analog-rate-match fit HPF24 96000`; the driven refit: `scripts/gate.py type5d`
+   (local) with the sweep `surge/cut5d`. Code: `src/common/dsp/FilterCutoffRateMatch.h`,
+   `FilterCutoffRateMatchTables.h`; the exclusion in `testFittedTables` (`lastElsewhere`).
+2. **Cutoff between and outside the fitted rates.** The rate match is fitted at 48, 96 and 192
+   kHz and interpolated linearly in log rate between them (and between 44.1 kHz, unchanged, and
+   48); above 192 kHz the 192 kHz table is used; below 44.1 kHz the cutoff is unchanged. Checked
+   at the interpolated 88.2 and 176.4 kHz (pass but HPF24, entry 1). At 64 kHz (not a checked
+   rate) LPF24 fails at index 948 (+58 cents) and 956 (+130): the interpolation between 48 and 96
+   kHz is too coarse near the state-variable filter's clamp. Below 44.1 kHz the filters clamp
+   lower than at 44.1 kHz, so the top can't match. Unresolved (fit more rates with the tool).
    Code: as 1.
-3. **Cutoff tables beyond the OB-Xd clamp at 96 kHz** (HPF18/12/6 above cutoff 60, 16 kHz):
-   engine-against-engine shape error up to 0.93 dB after matching (the OB-Xd clamps at 22 kHz
+3. **Cutoff tables beyond the OB-Xd clamp at 96 and 192 kHz** (HPF18/12/6 above cutoff 60,
+   16 kHz): engine-against-engine shape error up to 0.93 dB (96 kHz) and 1.10 dB (192) after
+   matching (the OB-Xd clamps at 22 kHz
    at every rate, so its top responds differently at 96 kHz); the reference checks pass.
    Unresolved, small. Reproduce: `oscairn-analog-rate-match fit HPF18 96000`.
 4. **Resonance above index 96.** No Surge filter matches both probed cutoffs: LP 24 dB 0.9-1.3 dB
@@ -2434,6 +2503,21 @@ only moves where a glide starts, below).
     whether its decay equals the parameter maximum; the plugin's voice LFO decay maximum is 8,
     not 5, so such a patch could load differently in the plugin than in Surge. Deliberate (no such
     patch to test). Code: `SurgePatch.cpp` loader, plugin ranges in `OscairnAnalog.cpp`.
-15. **Sample rate of the reference.** Every reference render is at 44.1 kHz; whether the
-    instrument runs internally at a fixed rate is unknown, so matching at 48/96 kHz assumes the
-    44.1 kHz renders are the target. Unresolved (question for Jacob).
+15. **Sample rate of the reference.** Every reference render is at 44.1 kHz. Deliberate (Jacob,
+    eleventh session): the 44.1 kHz behaviour is the target at every rate.
+16. **Note shift and pitch bend range beyond the reference's.** The reference stops at +-48
+    semitones of note shift (Part and Performance each) and bend ranges of -48 to +24; the plugin's
+    scene pitch reaches +-127 semitones, its bend up range 127 and bend down range -127 to +127.
+    Deliberate (Jacob's decision: no artificial pitch limits); documented values map one to one.
+    Reproduce: plugin test "note shift and bend ranges". Code: `normalizePatch` in
+    `OscairnAnalog.cpp`.
+17. **Negative bend up range.** The reference's Upper bend range can be negative (bending up
+    lowers the pitch, to -48); Surge's patch loader reads a bend up range outside 0-255 as a legacy
+    float value and clears both ranges, so the plugin's bend up range stays 0-127 and negative
+    Upper values have no equivalent (negative Lower values do: the bend down range goes to -127).
+    Unresolved (needs a change to Surge's loader). Code: `SurgePatch.cpp` (`pbrange_up.val.i &
+    0xffffff00`).
+18. **Amp EG decay at 64 kHz.** At 64 kHz (not a checked rate) the amp EG decay at index 116 is
+    4.6 % long (0.1283 s against 0.1226; tolerance 2.5 % or 5 ms); at 48, 88.2, 96, 176.4 and
+    192 kHz every envelope table passes. Unresolved (not investigated). Reproduce: the plugin
+    tests' fitted tables at 64000 Hz.
