@@ -26,3 +26,7 @@ target_compile_definitions(oscairn-analog-tests PRIVATE
 # Renders one note through the plugin, for measuring the engine (doc/oscairn-plan.md, M1).
 add_executable(oscairn-analog-render tools/OscairnAnalogRender.cpp tools/RenderNote.cpp)
 target_link_libraries(oscairn-analog-render PRIVATE oscairn-analog-core)
+
+# Fits the filter cutoff rate match tables (src/common/dsp/FilterCutoffRateMatchTables.h).
+add_executable(oscairn-analog-rate-match tools/OscairnAnalogRateMatch.cpp tools/RenderNote.cpp)
+target_link_libraries(oscairn-analog-rate-match PRIVATE oscairn-analog-core)
