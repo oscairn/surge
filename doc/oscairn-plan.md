@@ -2151,6 +2151,135 @@ was killed for memory (4 compile jobs while other work ran) and rerun with 3. Th
 (`doc/` only) was not run separately. Measurement repository (`b26fff1`: `half_octave_bands`):
 self-tests 26 passed.
 
+**Eleventh session (2026-11-01): cutoff tables at 48 and 96 kHz, amp level without Part Volume.**
+
+GitHub Actions stayed disabled; the Linux jobs ran in the local Docker substitute (see "Tests
+run in the eleventh session"), which is not CI. No new reference batches (the recorder was not
+used).
+
+*The macOS gate script, checked first.* Before relying on it, the fixed script (changed files
+written with the current time) was shown to rebuild: a build-only run on `2bd3779`, then the
+full run on `ee45bc7`, whose only change is `FittedTables.h`: every test binary's hash changed
+(standard `81ec6d2c` -> `fbcc9dea`, ASan `86db3400` -> `ae746070`, TSan `553604b8` ->
+`8e574fb1`). The script now prints the binaries' hashes after every build, and builds the new
+fitting tool (below) where the tree has it.
+
+*Cutoff tables at 48 and 96 kHz* (`9f0a594` generic, `ec3de57` and `b353b7e` Oscairn). Why
+they failed: Surge's voice filters run at twice the host rate and compute their coefficients
+from the cutoff over that rate, and several clamp the cutoff at a fraction of it (the legacy
+ladder at 0.187 x, i.e. 16.5 kHz at 44.1 kHz, the table's plateau at 62.75; the state-variable
+filters at 0.22 x, 19.4 kHz; the OB-Xd at 22 kHz at any rate). So near the top the same cutoff
+responds differently at another rate: above a clamp it keeps opening at 48 kHz where it stops
+at 44.1 kHz, and the 6 dB slopes' high-frequency droop differs (LPF6 needed +0.5 semitone from
+index 400 at 96 kHz). Nothing in the tables is per sample; they map to the engine's response at
+44.1 kHz, which is what was matched to the reference. New storage option
+`filterCutoffRateMatch` (saved in the patch like the other four; off when absent; reset on
+load): at 48 and 96 kHz, for the ten filter configurations the cutoff tables use, the voice
+moves the filter's final cutoff (after key tracking, envelope and drift) to the one whose
+response best matches the 44.1 kHz response at the patch's cutoff (`dsp/FilterCutoffRateMatch.h`,
+piecewise linear between knots every semitone from -40 to 75 and at each clamp, non-decreasing,
+constant above the clamp; other types, rates and the option off: unchanged). The knots were
+fitted engine against engine, not against the reference: a saw at note 36 through the plugin,
+gains at the harmonics up to 16 kHz within 40 dB of the largest, shape error with the mean
+removed, a quarter-semitone scan refined by a parabola (`oscairn-analog-rate-match`, which also
+writes `FilterCutoffRateMatchTables.h`). Shape error left after matching (and with the cutoff
+unmatched), worst over the grid, dB: 48 kHz LPF24 0.05 (0.25), LPF18 0.04 (0.27), LPF12 0.04
+(0.18), LPF6 0.02 (0.09), HPF24 0.36 (0.62), HPF18 0.20 (0.20), HPF12 0.14 (0.14), HPF6 0.07
+(0.07), BPF12 0.04 (0.34), BPF6 0.02 (0.17); 96 kHz LPF24 0.28 (1.43), LPF18 0.22 (1.56), LPF12
+0.18 (1.04), LPF6 0.11 (0.52), HPF24 3.40 (5.28), HPF18 0.93, HPF12 0.66, HPF6 0.34 (the OB-Xd
+types only above 60, their 22 kHz clamp, where no cutoff matches), BPF12 0.35 (1.95), BPF6 0.19
+(1.01). The plugin's cutoff checks against the reference (unchanged code, 301 checks per rate),
+like for like on the same build: without the rate match 0 / 18 / 93 failures at 44.1 / 48 /
+96 kHz; with it 0 / 1 / 5, all HPF24 at the top: 48 kHz index 976 (-109 cents); 96 kHz 938 (+140),
+942 (+454), 946 (+251), 956 and 976 (no minimum: the shape error falls monotonically). HPF24 is
+the state-variable highpass at resonance 0.05, whose damping cap (2 - 1.52 F1) gives the 44.1 kHz
+filter a resonance at the top that a higher rate doesn't, so no cutoff reproduces it (at 96 kHz,
+at indices 956 and 976, the engine's best match to the reference itself is closer, 0.1-0.3 dB
+against the 44.1 kHz engine's 1.6-2.5 dB, but far from the table). Tried and dropped: matching the state-variable filters'
+damping at the higher rate through the resonance (the same Q1 at the matched cutoff), which made
+the 96 kHz HPF24 shape error worse (2.1/3.5/5.2 dB at cutoffs 55/58/61 against 1.9/2.8/3.3).
+The plugin test now runs every cutoff table at 48 and 96 kHz in the standard build, except HPF24
+above index 937 at those two rates, whose best match it prints instead of checking (a new
+exclusion, listed here; at 44.1 kHz every HPF24 check stays). Tests: `[signalpath]` "Filter
+Cutoff Rate Match" (unchanged at 44.1 kHz and for types without a table, non-decreasing for
+every table, one value above the ladder's clamp; in the voice at 48 kHz the ladder at cutoffs 64
+and 70 differs with the option off and is identical with it on, at 44.1 kHz on and off are
+identical; fails with the voice hook disabled, seen) and "Engine Options Are Saved In The Patch"
+with the fifth option (fails without its load, seen). Plugin: the reference renders turn the
+option on (`RenderSpec::referenceMatching`), the state test keeps it, and the stock comparison
+still passes with it read from the patch; forced on for every patch it fails on 8 of 80 factory
+patches at 48 kHz (seen). Not covered: rates other than 44.1, 48 and 96 kHz (88.2 and 192 kHz
+are left unchanged; the tool can fit them); resonance other than each type's fitted one (the
+same cutoff move is used); filter 2 is moved by the same rule but not checked separately.
+
+*Amp level table without Part Volume* (`ee45bc7`, test only; measurement repository
+`639f520`). The fit and check files behind `FittedTables.h` were found in the local fit
+directory and the export rebuilt from them byte for byte first (LPF6 from `g_type4`'s table,
+results and check manifest). `fit.py`'s level kind takes a new option `reference_offset_db`,
+added to the reference side only (self-test; it fails without the option, seen). The amp level
+was refitted from the same reference and engine sweeps with +4.13 dB (Part Volume 127 against
+the probes' 100, measured in the tenth session) and checked by rendering the engine at the new
+table values: 57 of 57 within 0.1 dB (worst 0.054 dB; before, 0.040 dB). Old/new: the table
+moves by +4.127 to +4.130 dB over 56-511 (index 431, the init amp level: -7.996 -> -3.866 dB;
+511: -5.034 -> -0.904 dB; 56: -43.433 -> -39.306 dB); every check reference moves by +4.13 dB
+(index 60: -62.13 -> -58.00 dB). The oscillator level table is a ratio against the amp level
+(fitted with the amp level curve as its base and checked at the amp table's index 431), so it
+holds as it is: re-checked at the new amp level against the reference + 4.13 dB, 14 of 14
+within 0.1 dB (worst 0.022 dB); only its check references change (index 80: -60.10 ->
+-55.97 dB). Neither saturator check changes: both saturators sit before the amp gain. The
+plugin tests pass at 44.1, 48 and 96 kHz with the new tables. **Converter**: with `ee45bc7`
+(pushed), the converter must stop adding +4.13 dB to the amp level, and maps Part Volume and
+Performance Volume to Surge's scene and global volume as 40 log10(v / 127) (0 dB at 127).
+As before, the level is fitted from every 8th index and checked at the indices in between.
+
+*Wave folder above 96 and Hard* (time-boxed, measured, no model). From the `m2` sine probes
+(note 48): how memoryless the reference is, as the mismatch between the output at input phase
+theta and pi - theta (equal for any static curve), relative to the signal: Soft 32-96 -29 to
+-20 dB, 128-255 -13 dB; Hard 32 and 96 -21 and -27 dB, 128-255 -12 to -13 dB. The harmonic phases
+above 96 depart from a static curve's by 6-7 degrees RMS, which a one-pole lowpass or first-order
+allpass after the curve doesn't explain (best 6.2-6.5 degrees). Energy between the harmonics (the
+period fit's residual): Soft 64 -63 dB, 96 -56, 128 -54, 192 -48, 255 -44 dB (peaks near 18-22 kHz,
+aliasing); Hard 96 -44, 128 -39, 160 -34, 192 -23, 224 -11, 255 -4 dB (no dropouts): at Hard 224
+and 255 the folder's aliased products are about as loud as the harmonics. So the reference folder
+is not band-limited at high amounts (the engine's folder runs oversampled and won't alias like
+it), and above 96 it isn't a static curve either; any fitted static curve is limited to roughly
+the 3.7-5.4 dB already found, and Hard above 192 can't be matched on harmonics alone. Nothing
+committed. Resonance above 96, self sync and the wave shaper were not attempted.
+
+*Decisions for Jacob.* (1) HPF24 above index 937 at 48 and 96 kHz: accept the exclusion, refit
+HPF24 per rate against the reference (the checks would then be against the fitting renders), or
+pick another Surge highpass for HPF24 whose top doesn't depend on the rate. (2) Rates other than
+44.1, 48 and 96 kHz: fit 88.2 and 192 kHz too, or leave them unmatched. (3) Whether the reference
+runs internally at a fixed rate (the tenth session's question) still decides what "matching" at
+48 kHz should mean; this session assumes the reference's 44.1 kHz renders are the target at every
+rate.
+
+**Tests run in the eleventh session.** GitHub Actions stayed disabled.
+
+macOS arm64 gates (exported trees, build directories reused from the tenth session after the
+rebuild proof above, then deleted at the end of the session): `ee45bc7` (test only, testrunner
+skipped): plugin tests standard 133 s, ASan/UBSan 151 s, TSan 871 s; `9f0a594`:
+`surge-testrunner` 211 test cases passed, `[reference]` "Compared 635 patches, skipped 6" (the
+gate's log lacked that line this once; run again by hand on the same binary), plugin tests 155,
+131, 683 s; `ec3de57`: testrunner 211 passed, `[reference]` 635/6, plugin tests 147, 175, 792 s
+(the gate also built `oscairn-analog-rate-match`); `b353b7e`: testrunner 211 passed,
+`[reference]` 635/6, plugin tests 375 s (with every cutoff table at three rates), 139, 772 s.
+Every plugin run exit 0 with 0 sanitizer reports.
+
+Docker Linux (local substitute for CI; exit 0, "all passed", no sanitizer reports): standard on
+`ee45bc7` (177 s of tests), `9f0a594` (141 s), `ec3de57` (132 s), `b353b7e` (335 s);
+ASan/UBSan (3996 s of tests) and TSan (554 s) on `b353b7e`, the head of the push, which holds
+the engine change of `9f0a594`. Measurement repository (`639f520`): self-tests 27 passed. This
+record (`doc/` only) was not run separately.
+
+**Where this stopped** (eleventh session). The cutoff tables hold at 48 and 96 kHz through the
+filter cutoff rate match (off by default, per patch), except HPF24 at the top; the amp level
+table holds the engine's level only (the converter stops adding +4.13 dB); the folder's
+departures above 96 are measured (not memoryless, aliasing). Known differences are now listed in
+section 11. Next: Jacob's decisions above; resonance above 96 (a new filter); the folder above 96
+and Hard, self sync and the wave shaper; short envelopes; moving key-on delay, segment drift and
+unison out of the large engine files.
+
 **Where this stopped** (tenth session). The saturators now match the reference's curve
 (algebraic, offsets for every filter type), the noise tone has a tilt filter and mapping, the
 portamento "2" modes have an octave limit, amp velocity sensitivity is mapped to +255, the pitch
@@ -2221,3 +2350,90 @@ types); resonance (LPF24 resonance 0-255 at cutoffs 512 and 768 is recorded,
 not fitted); a shorter analog decay in the engine (a generic change: the decay's slow
 tail); probe the other envelopes and oscillator and mixer
 levels; then milestone 2.
+
+## 11. Known differences from the reference
+
+One entry per known difference between the engine (through the plugin, with a converted
+Part's options on) and the reference, kept up to date as work lands. Fields: what differs;
+measured size and where; cause if known; status (**deliberate**: a decision, **unresolved**:
+open); how to reproduce; where in the code. Sessions refer to section 10. Rule from Jacob
+(eleventh session): no ceiling on pitch shift or transpose is added even where the reference
+has one; any such reference limit found is recorded here as a deliberate difference. None has
+been measured so far, and the fork adds no output pitch clamp (the portamento octave limit
+only moves where a glide starts, below).
+
+1. **HPF24 cutoff at the top, 48 and 96 kHz.** Best shape match off the table: 48 kHz index 976
+   -109 cents; 96 kHz 938 +140, 942 +454, 946 +251, 956 and 976 no minimum (tolerance 50
+   cents; index 937 and below, and every index at 44.1 kHz, pass). Cause: the state-variable
+   highpass's damping cap gives the 44.1 kHz filter a resonance near the top that a higher rate
+   doesn't; no cutoff move reproduces it (resonance matching tried, worse). Unresolved
+   (decision for Jacob: accept, refit per rate, or another Surge highpass). Reproduce: plugin
+   tests (`oscairn-analog-tests`, "fitted tables" at 48000/96000 Hz print these lines);
+   `oscairn-analog-rate-match fit HPF24 96000`. Code: `src/common/dsp/FilterCutoffRateMatch.h`,
+   `FilterCutoffRateMatchTables.h`; test exclusion in `testFittedTables` (`lastElsewhere`).
+2. **Cutoff at rates other than 44.1, 48 and 96 kHz.** Not matched (88.2 and 192 kHz keep the
+   engine's own response, which differs near the top as 48/96 kHz did before the rate match:
+   up to 1400 cents at the top of LPF18/12 at 48 kHz). Unresolved (the tool can fit more rates).
+   Code: as 1.
+3. **Cutoff tables beyond the OB-Xd clamp at 96 kHz** (HPF18/12/6 above cutoff 60, 16 kHz):
+   engine-against-engine shape error up to 0.93 dB after matching (the OB-Xd clamps at 22 kHz
+   at every rate, so its top responds differently at 96 kHz); the reference checks pass.
+   Unresolved, small. Reproduce: `oscairn-analog-rate-match fit HPF18 96000`.
+4. **Resonance above index 96.** No Surge filter matches both probed cutoffs: LP 24 dB 0.9-1.3 dB
+   RMS (cutoff 512) and 1.0-3.5 dB (768), the ladders 2.1-4.1 dB, Diode 4-10 dB. Cause: the
+   reference behaves like a ladder (pass band -14 dB at 255, narrow peak +28 dB at 768) with LP 24
+   dB's knee at low resonance; Surge has no such filter. Unresolved (needs a new filter). Reproduce:
+   fourth-session LPF24 resonance 0-255 probes at cutoffs 512 and 768, `scripts/res_search.py`
+   (local). Code: none (resonance maps to the chosen filter's resonance).
+5. **Wave folder above amount 96, and Hard.** Best static curves 3.7-5.4 dB RMS (harmonics 2-12)
+   above 96, Hard 1.1-4.0 dB. Cause (eleventh session): above 96 the reference isn't memoryless
+   (output at input phase theta against pi - theta -12 to -13 dB of the signal, against -20 to
+   -29 dB up to 96; harmonic phases 6-7 degrees RMS off any static curve) and isn't band-limited
+   (energy between harmonics: Soft 255 -44 dB, Hard 192 -23, 224 -11, 255 -4 dB); the engine's
+   pre-filter shaper runs oversampled. Unresolved. Reproduce: `m2` probes `wf0_*`, `wf1_*` (note
+   48), `scripts/foldfit.py` (local); the memoryless and residual measures were scratch scripts
+   (period fit with `shaper.period_fit`). Code: pre-filter shaper (`a1830c0`), sst waveshapers.
+6. **"Analog" oscillator: self sync and the wave shaper.** Not built; Saw1, Saw2, square,
+   triangle and sine map to Modern. Self sync as a restarted slave with fades fits harmonics 1-40
+   5-8 dB RMS with ratios that don't follow the nominal ones; the shaper isn't one static curve
+   on a sine (fifth harmonic 17 dB under the third at 32, against about 39 dB for sin(g x)).
+   Unresolved. Reproduce: `m3b` sync probes, fifth-session shaper probes (`scripts/m2b.py`).
+   Code: none.
+7. **Ageing.** The reference's ageing shifts the cutoff by about +0.16 to -0.05 semitone and the
+   pulse width (duty 0.2517-0.2545) for the whole Part, no spread between loads or notes.
+   Deliberate: folded into the converter's cutoff and pulse width, no engine hook. Reproduce:
+   `m10d`, `m3a`/`m3e`.
+8. **Saturators: low-level odd harmonics.** The reference has a -56 dB third harmonic at oscillator
+   level 64 that no static curve gives; at high drive the algebraic curve is within 0.5 dB.
+   Unresolved, small. Reproduce: `m2` sine probes, `scripts/satcheck.py` (local). Code:
+   `saturatorAlgebraicCurve`, `QuadFilterChain.cpp` `saturate`.
+9. **Drift: the reference's mean pitch offset.** At Voltage Drift 127 the reference's notes sit
+   +11.9 cents high on average; the engine's segment drift has no mean offset (spread matches
+   within 20 %). Unresolved (the converter could add it to the tuning). Reproduce: the sixth
+   session's drift probes, plugin test "drift against the reference". Code: segment drift in
+   `SurgeVoice.cpp`.
+10. **Part velocity sensitivity depth and offset where they clamp.** v' = v x depth / 64 + 2 x
+    (offset - 64), clamped to 0-127; where it clamps (for example depth 96: every velocity from
+    64 up plays as 127) Surge has no equivalent. Unresolved (below the clamps the converter folds
+    it into the sensitivities). Reproduce: `m10c`.
+11. **Portamento Time 122-127.** The reference glides an octave in 13.1 s at 122, 18.5 s at 124
+    and over 28 s at 127; the engine clamps portamento at 2^4 s (the plugin's range stops at
+    2^3.99 s, 0.8 x 2^3.99 = 12.7 s an octave), so 122-127 all play at that. Unresolved (an engine
+    limit). Reproduce: `m9a`/`m9c`/`m9g`/`m9h`, table `portamentoTime` (valid 1-121). Code: the
+    plugin's portamento range in `OscairnAnalog.cpp`, the engine's portamento clamp. The portamento octave limit (glides over an octave start an octave from
+    the target, the "2" modes) is a reference behaviour reproduced on purpose, off by default; it
+    limits where a glide starts, not the pitch reached.
+12. **Fits checked only against the renders they were fitted to.** The saturator curve and offsets
+    (`m2`), the filter saturator offsets for the other filter types (`m10a`), the noise tilt
+    knots (checks between knots at 24-104 only, none between 112 and 127), the pitch LFO delay at
+    2-6, the amp velocity k above +192 (+192 to +224 not probed). Unresolved until independent
+    probes exist.
+13. **Short envelopes.** Envelope times at the shortest settings aren't checked (the floor for
+    averaged short-envelope checks, question C, is open). Unresolved.
+14. **Surge 1.x patches in the plugin.** A patch of revision below 2 sets an LFO's sustain from
+    whether its decay equals the parameter maximum; the plugin's voice LFO decay maximum is 8,
+    not 5, so such a patch could load differently in the plugin than in Surge. Deliberate (no such
+    patch to test). Code: `SurgePatch.cpp` loader, plugin ranges in `OscairnAnalog.cpp`.
+15. **Sample rate of the reference.** Every reference render is at 44.1 kHz; whether the
+    instrument runs internally at a fixed rate is unknown, so matching at 48/96 kHz assumes the
+    44.1 kHz renders are the target. Unresolved (question for Jacob).
