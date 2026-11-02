@@ -116,6 +116,7 @@ std::vector<float> renderNote(const RenderSpec &spec)
     synth->storage.vcaVelocityAmplitudeLaw = spec.referenceMatching;
     synth->storage.saturatorAlgebraicCurve = spec.referenceMatching;
     synth->storage.lfoLongRelease = spec.referenceMatching;
+    synth->storage.filterCutoffRateMatch = spec.referenceMatching;
     void *data = nullptr;
     auto size = synth->saveRaw(&data);
     std::vector<uint8_t> state((uint8_t *)data, (uint8_t *)data + size);

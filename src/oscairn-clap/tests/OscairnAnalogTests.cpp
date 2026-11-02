@@ -745,6 +745,7 @@ static void testPlainPatchesMatchStock(const std::vector<std::string> &patches)
         s->storage.vcaVelocityAmplitudeLaw = true;
         s->storage.saturatorAlgebraicCurve = true;
         s->storage.lfoLongRelease = true;
+        s->storage.filterCutoffRateMatch = true;
         void *data = nullptr;
         auto size = s->saveRaw(&data);
         std::vector<uint8_t> on((uint8_t *)data, (uint8_t *)data + size);
@@ -755,7 +756,8 @@ static void testPlainPatchesMatchStock(const std::vector<std::string> &patches)
         check(text.find("analogEnvelopeAttackClamp") != std::string::npos &&
                   text.find("vcaVelocityAmplitudeLaw") != std::string::npos &&
                   text.find("saturatorAlgebraicCurve") != std::string::npos &&
-                  text.find("lfoLongRelease") != std::string::npos,
+                  text.find("lfoLongRelease") != std::string::npos &&
+                  text.find("filterCutoffRateMatch") != std::string::npos,
               "the plugin's state keeps the options");
         check(b.load(saved) && b.save() == saved, "the options round trip through the state");
         auto x = a.render(24000, 512, {noteEvent(0, CLAP_EVENT_NOTE_ON, 1, 60, 70 / 127.0)}, false);
@@ -1777,8 +1779,10 @@ static void testFittedTables(bool cutoffTables = true)
     // Sanitizer builds check every 8th index: the renders take most of their time and the
     // standard builds check them all.
     const size_t stride = sanitizerBuild ? 8 : 1;
+    // lastElsewhere: the last index checked at rates other than 44.1 kHz; above it the best
+    // match is printed, not checked (HPF24: see the plan, eleventh session)
     auto cutoff = [&](const char *name, const auto &table, const auto &responses, double tolerance,
-                      int type, int subtype, double resonance) {
+                      int type, int subtype, double resonance, int lastElsewhere = 1023) {
         for (size_t i = 0; i < std::size(responses); i += stride)
         {
             auto &r = responses[i];
@@ -1801,6 +1805,13 @@ static void testFittedTables(bool cutoffTables = true)
             }
             double curv = e[0] - 2 * e[1] + e[2];
             double best = curv > 0 ? 0.25 * (e[0] - e[2]) / curv : 1e9; // semitones from v
+            if (rate != 44100 && r.index > lastElsewhere)
+            {
+                std::printf("  %s cutoff at index %d, not checked at this rate: best match %.0f "
+                            "cents from the table\n",
+                            name, r.index, 100 * best);
+                continue;
+            }
             check(std::fabs(100 * best) <= tolerance,
                   std::string(name) + " cutoff at index " + std::to_string(r.index) +
                       ": best match " + std::to_string(100 * best) + " cents from the table");
@@ -1813,7 +1824,8 @@ static void testFittedTables(bool cutoffTables = true)
     cutoff("LPF18", T::cutoffLp18, T::cutoffLp18Responses, T::cutoffLp18Tolerance, 3, 2, 0);
     cutoff("LPF12", T::cutoffLp12, T::cutoffLp12Responses, T::cutoffLp12Tolerance, 3, 1, 0);
     cutoff("LPF6", T::cutoffLp6, T::cutoffLp6Responses, T::cutoffLp6Tolerance, 3, 0, 0);
-    cutoff("HPF24", T::cutoffHp24, T::cutoffHp24Responses, T::cutoffHp24Tolerance, 5, 0, 0.05);
+    cutoff("HPF24", T::cutoffHp24, T::cutoffHp24Responses, T::cutoffHp24Tolerance, 5, 0, 0.05,
+           937);
     cutoff("HPF18", T::cutoffHp18, T::cutoffHp18Responses, T::cutoffHp18Tolerance, 35, 6, 0);
     cutoff("HPF12", T::cutoffHp12, T::cutoffHp12Responses, T::cutoffHp12Tolerance, 20, 0, 0);
     cutoff("HPF6", T::cutoffHp6, T::cutoffHp6Responses, T::cutoffHp6Tolerance, 35, 4, 0);
@@ -1853,8 +1865,8 @@ int main(int argc, char **argv)
         run("fitted tables", [] { testFittedTables(); });
         // The same checks at the plugin's other rates (the reference was measured at 44.1 kHz),
         // in the standard build only: they check numbers, not memory or threads, and would
-        // add most of an hour to the TSan run. Not the cutoff tables, which hold only at
-        // 44.1 kHz near the top of their range (see the plan).
+        // add most of an hour to the TSan run. The cutoff tables hold there through the
+        // filter cutoff rate match, but for HPF24 above index 937 (see the plan).
         if (!sanitizerBuild)
         {
             for (double r : {48000.0, 96000.0})
@@ -1862,7 +1874,7 @@ int main(int argc, char **argv)
                 checkRate = r;
                 std::printf("at %g Hz:\n", r);
                 run("saturators against the reference", [] { testSaturatorsAgainstReference(); });
-                run("fitted tables but cutoff", [] { testFittedTables(false); });
+                run("fitted tables", [] { testFittedTables(); });
             }
             checkRate = 44100;
         }
