@@ -964,8 +964,13 @@ void SurgeSynthesizer::playVoice(int scene, char channel, char key, char velocit
         if (!reusedVoice)
         {
             const int64_t group = voiceCounter;
+            const auto lastKey = storage.last_key[scene];
+            const auto lastChannel = storage.last_channel[scene];
             for (int u = 0; u < nUnison; ++u)
             {
+                // each voice glides from last_key and then sets it to this key, so restore it
+                storage.last_key[scene] = lastKey;
+                storage.last_channel[scene] = lastChannel;
                 SurgeVoice *nvoice = getUnusedVoice(scene);
 
                 if (nvoice)
@@ -1126,9 +1131,14 @@ void SurgeSynthesizer::playVoice(int scene, char channel, char key, char velocit
 
                 float aegReuse{0.f}, fegReuse{0.f};
                 const int64_t group = voiceCounter;
+                const auto lastKey = storage.last_key[scene];
+                const auto lastChannel = storage.last_channel[scene];
 
                 for (int u = 0; u < nUnison; ++u)
                 {
+                    // each voice glides from last_key and then sets it to this key, so restore it
+                    storage.last_key[scene] = lastKey;
+                    storage.last_channel[scene] = lastChannel;
                     SurgeVoice *nvoice = getUnusedVoice(scene);
                     if (!nvoice)
                         break;
@@ -1286,9 +1296,14 @@ void SurgeSynthesizer::playVoice(int scene, char channel, char key, char velocit
             {
                 int mpeMainChannel = getMpeMainChannel(channel, key);
                 const int64_t group = voiceCounter;
+                const auto lastKey = storage.last_key[scene];
+                const auto lastChannel = storage.last_channel[scene];
 
                 for (int u = 0; u < nUnison; ++u)
                 {
+                    // each voice glides from last_key and then sets it to this key, so restore it
+                    storage.last_key[scene] = lastKey;
+                    storage.last_channel[scene] = lastChannel;
                     SurgeVoice *nvoice = getUnusedVoice(scene);
                     if (!nvoice)
                         break;

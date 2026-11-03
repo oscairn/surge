@@ -260,3 +260,33 @@ TEST_CASE("Unison Mono Returns To The Held Key", "[unison]")
         surge->process();
     REQUIRE(gatedKeys().empty());
 }
+
+TEST_CASE("Every Unison Voice Glides", "[unison]")
+{
+    for (auto mode : {pm_poly, pm_mono, pm_mono_st})
+    {
+        INFO("play mode " << mode);
+        auto surge = unisonSurge(4, 0.f, 0.5f);
+        auto &sc = surge->storage.getPatch().scene[0];
+        sc.polymode.val.i = mode;
+        sc.portamento.val.f = -1;
+        surge->playNote(0, 48, 100, 0);
+        for (int b = 0; b < 2000; b++) // past the first note's own glide
+            surge->process();
+        if (mode == pm_mono_st) // a new voice, not a legato one
+            surge->releaseNote(0, 48, 0);
+        surge->playNote(0, 60, 100, 0);
+        for (int b = 0; b < 10; b++)
+            surge->process();
+        int gliding = 0;
+        for (auto *v : surge->voices[0])
+        {
+            if (v->state.gate && v->state.key == 60)
+            {
+                gliding++;
+                CHECK(v->state.pkey < 56.f);
+            }
+        }
+        CHECK(gliding == 4);
+    }
+}
