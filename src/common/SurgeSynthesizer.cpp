@@ -1589,6 +1589,9 @@ void SurgeSynthesizer::releaseNotePostHoldCheck(int scene, char channel, char ke
 
                 if ((v->state.key == key) && (v->state.channel == channel))
                 {
+                    // Several voices can hold this key (an uber-released one, or a unison
+                    // group), and each must find the key to return to, not just the first
+                    do_switch = false;
                     int activateVoiceKey = 60, activateVoiceChannel = 0; // these will be overridden
                     auto priorityMode =
                         storage.getPatch().scene[v->state.scene_id].monoVoicePriorityMode;

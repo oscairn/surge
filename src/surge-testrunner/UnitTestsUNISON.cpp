@@ -234,3 +234,29 @@ TEST_CASE("Unison Parameters Reset When A Patch Lacks Them", "[unison]")
     REQUIRE(patch.scene[0].unison_detune.val.f == 0.25f);
     REQUIRE(patch.scene[0].unison_spread.val.f == 0.5f);
 }
+
+TEST_CASE("Unison Mono Returns To The Held Key", "[unison]")
+{
+    auto surge = unisonSurge(4, 0.1f, 0.5f);
+    surge->storage.getPatch().scene[0].polymode.val.i = pm_mono;
+    auto gatedKeys = [&]() {
+        std::vector<int> k;
+        for (auto *v : surge->voices[0])
+            if (v->state.gate && !v->state.uberrelease)
+                k.push_back(v->state.key);
+        return k;
+    };
+    surge->playNote(0, 48, 100, 0);
+    surge->process();
+    surge->playNote(0, 55, 100, 0);
+    surge->process();
+    surge->releaseNote(0, 55, 0);
+    for (int b = 0; b < 10; b++)
+        surge->process();
+    REQUIRE(gatedKeys() == std::vector<int>(4, 48));
+
+    surge->releaseNote(0, 48, 0);
+    for (int b = 0; b < 10; b++)
+        surge->process();
+    REQUIRE(gatedKeys().empty());
+}
