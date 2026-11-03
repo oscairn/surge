@@ -624,6 +624,8 @@ been offered upstream.
 | More voice LFOs | Possibly; needs GUI layout work, which upstream would have to want |
 | Routing "via" (modulation depth scaled by a second source) | Possibly; it is a general feature |
 | Saturators, wave folder stage, voice unison, ageing, key-on delay | Possibly, as generic features with neutral names |
+| Mono release returning to the held key when several voices hold the released key (`84cac66`) | Likely: a bug in Surge's own code, though without unison only reachable through an uber-released voice on the same key (not reproduced) |
+| Every unison voice gliding (`62bd6a2`) | With voice unison only (the loop it fixes is the fork's) |
 | A multimode filter in sst-filters, new folder shapes in sst-waveshapers | Likely, as library additions |
 | "Analog" oscillator type | Possibly |
 | Oscairn CLAP target, sound contexts, one-scene build, Lua-free and file-free configuration | No: Oscairn-only |
@@ -2403,6 +2405,28 @@ rule (nothing changed), and CLAP preset discovery and `prepare_preset` for the p
 self-tests passed with the uncommitted `fit.py` changes (29 tests) and each new test failed
 without its change (seen). The plugin checks quoted above ran on scratch builds of the working
 tree (not committed).
+
+**Mono and unison fixes (2026-11-02, after the twelfth session).** Two engine bugs with Voice
+Unison above 1, in separate commits. (1) `84cac66`: on a key
+release in Mono, Mono Fingered and Latch, `releaseNotePostHoldCheck` let the first voice on the key
+set `do_switch`, so the group's other voices skipped the search for the held key and kept the
+placeholder key 60; the last one played key 60, a stuck note at the wrong pitch. `do_switch` is now
+reset for each voice. Test: "Unison Mono Returns To The Held Key" (mono, unison 4: 48, 55, release
+55 returns all four voices to 48, release 48 leaves none gated; failed without the change, voices on
+60). (2) `62bd6a2`: a new voice glides from `storage.last_key` and then sets it, so only the first
+voice of a unison group glided (Poly, Mono restart, a new voice in Mono Single Trigger). Each
+voice of the group now gets the prior last key and channel. Test: "Every Unison Voice Glides" (poly,
+mono, mono single trigger with portamento: all four voices glide; without the change three of
+four started on the new key in each mode). The plugin version is 0.1.1 (`0165817`, sound change).
+The converter still writes 0.1.0 for the plugin's nodes, so the library packs the 0.1.1 binary as
+`org.oscairn.analog@0.1.0` (converter not changed here).
+
+**Tests run for these commits.** macOS arm64, each tree built from a fresh directory (exported with
+submodules): `surge-testrunner` 211 passed, 1 skipped (`84cac66`) and 212 passed, 1 skipped
+(`62bd6a2`, `0165817`); `[reference]` "Compared 635 patches, skipped 6" on all three;
+`oscairn-analog-tests` all passed on all three, and on `0165817` in ASan/UBSan (130 s) and TSan
+(675 s) builds with no reports. Linux in Docker (local substitute) on `0165817`: standard (1071 s of tests), ASan/UBSan (3794 s) and
+TSan (459 s) all passed, exit 0, no sanitizer reports.
 
 **Where this stopped** (twelfth session). HPF24 stays on the state-variable HP 24 dB; HP 24 dB
 Driven was refitted and fails at 88.2-192 kHz because it saturates; Clean is linear and doesn't
