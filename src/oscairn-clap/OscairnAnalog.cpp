@@ -23,7 +23,11 @@
  *   of touching the engine, and never waits.
  * - No Formula modulators: patches using them are refused.
  * - Presets: Surge's factory and user .fxp patches, listed through CLAP preset discovery and
- *   loaded with preset-load (the plugin has no native sound contexts).
+ *   loaded with preset-load, or prepared as sound contexts.
+ * - Oscairn's native sound contexts (oscairn.sound-contexts/draft-5, with the Oscairn SDK's
+ *   helper): each prepared sound is a Surge synthesizer of its own; MIDI channels select a
+ *   sound for new notes, and a held note stays on the sound it started on. The CLAP state is
+ *   the default sound's patch; the sound-context snapshot holds every sound.
  */
 
 #include "OscairnAnalog.h"
@@ -32,7 +36,11 @@
 #include "PatchFileHeaderStructs.h"
 #include "sst/basic-blocks/mechanics/endian-ops.h"
 
+#include <oscairn-clap/memory.h>
+#include <oscairn-clap/sound-contexts-plugin.hpp>
+
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <cstdio>
@@ -73,7 +81,8 @@ struct HeadlessLayer : SurgeSynthesizer::PluginLayer
 
 struct ParamInfo
 {
-    Parameter *p{nullptr};
+    Parameter *p{nullptr}; // the default sound's; other sounds' by ptr
+    uint32_t ptr{0};       // index in the patch's param_ptr, the same in every synthesizer
     clap_id id{0};
     bool normalized{false}; // exposed as Surge's 0..1 value instead of its own units
     bool deactivation{false}; // the parameter's off switch (1 = off), not its value
@@ -141,12 +150,51 @@ bool readFxp(const char *path, std::vector<uint8_t> *data)
     return (bool)f.read(reinterpret_cast<char *>(data->data()), size);
 }
 
-struct Plugin
+// --- sound contexts -----------------------------------------------------------------------
+
+// Every prepared sound is a whole Surge synthesizer, about 32.3 MiB each at any rate (measured on
+// macOS: 32.32 / 32.21 / 32.22 MiB at 44.1 / 96 / 192 kHz; the SurgeSynthesizer object alone is
+// 19.6 MiB), so a few are sensible: 8 with the default sound, 288 MiB declared at most.
+constexpr uint32_t contextCapacity = 8;
+constexpr size_t voiceCapacity = 256; // notes held or sounding, every sound together
+
+// A note in a sound: it goes to that sound's synthesizer under an ID of its own, and ends when
+// the synthesizer reports that ID ended.
+struct Voice : oscairn::contexts::VoiceBase
 {
-    clap_plugin_t plugin{};
+    int32_t surgeId{-1};
+    bool released{false}, choked{false}, ended{false};
+};
+
+// A sound's patch as Surge's patch data ("sub3" onwards), as a preset or a snapshot carries it.
+// The sound plays from its synthesizer (Slot); this is filled from it for a snapshot.
+struct Patch
+{
+    std::vector<uint8_t> state;
+};
+
+// The synthesizer of a sound context slot. The audio thread touches it only while the slot is
+// pinned (its context's users), the main thread only while it isn't, or with processing
+// excluded.
+struct Slot
+{
+    SurgeSynthesizer *synth{nullptr};
+    std::unique_ptr<SurgeSynthesizer> owned; // slots 1 up; slot 0 plays Plugin::synth
+    bool ringing{false}; // audio: pinned while it may still sound
+    bool silent{false};  // audio: no voice and no waiting note after its last block
+    bool fresh{false};   // audio: rendered the current block, which pins it
+};
+
+struct Plugin : oscairn::contexts::Engine<Plugin, Voice, Patch, contextCapacity, voiceCapacity>
+{
+    using Base = oscairn::contexts::Engine<Plugin, Voice, Patch, contextCapacity, voiceCapacity>;
+    static constexpr const char *stateVersion = "oscairn-analog-sounds-1";
+    static constexpr size_t maxStateBytes = size_t(64) << 20;
+
     const clap_host_t *host{nullptr};
     HeadlessLayer layer;
-    std::unique_ptr<SurgeSynthesizer> synth;
+    std::unique_ptr<SurgeSynthesizer> synth; // the default sound's (context 0)
+    std::array<Slot, contextCapacity> slots;
 
     std::vector<ParamInfo> params;
     std::unordered_map<clap_id, uint32_t> indexById;
@@ -161,13 +209,16 @@ struct Plugin
     // Odd while the audio thread applies parameter changes; save checks it didn't change.
     std::atomic<uint32_t> paramEpoch{0};
 
-    int blockPos{BLOCK_SIZE}; // read position in synth->output; BLOCK_SIZE = render next
-    double sampleRate{48000};
 
     Plugin(const clap_host_t *h) : host(h)
     {
         plugin.desc = &descriptor;
         plugin.plugin_data = this;
+    }
+
+    static Parameter *paramIn(SurgeSynthesizer &s, const ParamInfo &pi)
+    {
+        return s.storage.getPatch().param_ptr[pi.ptr];
     }
 
     // --- parameters ---------------------------------------------------------------
@@ -201,12 +252,15 @@ struct Plugin
 
     void buildParams()
     {
-        for (auto *p : synth->storage.getPatch().param_ptr)
+        auto &all = synth->storage.getPatch().param_ptr;
+        for (uint32_t index = 0; index < all.size(); ++index)
         {
+            auto *p = all[index];
             if (!exposed(*p))
                 continue;
             ParamInfo pi;
             pi.p = p;
+            pi.ptr = index;
             pi.id = fnv1a(p->get_storage_name());
             pi.normalized = stateDependent(*p);
             pi.module = moduleFor(*p);
@@ -261,6 +315,7 @@ struct Plugin
                 // with the ID of "<storage name>.off" and the init patch's state as default
                 ParamInfo off;
                 off.p = p;
+                off.ptr = index;
                 off.deactivation = true;
                 off.id = fnv1a((std::string(p->get_storage_name()) + ".off").c_str());
                 off.module = pi.module;
@@ -275,9 +330,9 @@ struct Plugin
         refreshValues();
     }
 
-    static double currentValue(const ParamInfo &pi)
+    static double currentValue(const ParamInfo &pi) { return currentValue(pi, pi.p); }
+    static double currentValue(const ParamInfo &pi, const Parameter *p)
     {
-        auto *p = pi.p;
         if (pi.deactivation)
             return p->deactivated ? 1 : 0;
         double v = pi.normalized           ? p->get_value_f01()
@@ -322,16 +377,19 @@ struct Plugin
         return it == indexById.end() ? nullptr : &params[it->second];
     }
 
-    void setParam(const ParamInfo &pi, double v)
+    static void setParamIn(SurgeSynthesizer &s, const ParamInfo &pi, double v)
     {
+        auto *p = paramIn(s, pi);
         if (pi.deactivation)
-            pi.p->deactivated = v > 0.5; // read by the engine at the next block
+            p->deactivated = v > 0.5; // read by the engine at the next block
         else
-            synth->setParameter01(synth->idForParameter(pi.p), to01(pi, v), true);
-        values[&pi - params.data()].store(currentValue(pi), std::memory_order_relaxed);
+            s.setParameter01(s.idForParameter(p), to01(pi, v), true);
     }
 
     // --- events -------------------------------------------------------------------
+    // The SDK helper (Base::process) delivers events at their sample times and renders between
+    // them; render() runs every pinned synthesizer a block at a time from a block phase counted
+    // from activation, so an event takes effect at the first block boundary at or after it.
 
     static bool validNote(int16_t channel, int16_t key)
     {
@@ -340,159 +398,340 @@ struct Plugin
 
     static char vel127(double v) { return (char)std::clamp((int)std::lround(v * 127), 0, 127); }
 
-    void endNote(const clap_event_note_t *n, bool choke)
+    int blockPos{BLOCK_SIZE}; // read position in the synthesizers' outputs; BLOCK_SIZE = next
+    double sampleRate{48000};
+    bool active{false};                         // main thread
+    double tempo{0};                            // 0: the host gave none
+    int playing{-1};                            // -1: the host gave no transport
+    int32_t nextSurgeId{0};                     // audio thread
+    char releaseVelocity{0};                    // the note-off being applied
+    bool quiet{false};                          // finishing voices without the synthesizers
+    std::array<std::array<uint8_t, 128>, 16> keySlot{}; // audio: the sound a key last started in
+
+    // Audio thread: the slots it may touch, from what it knows itself (the channels' selections,
+    // its voices, its tails and the block being rendered), never from the pin counts, which the
+    // main thread also changes.
+    uint32_t live(bool withBlock = true) const
     {
-        auto vel = vel127(n->velocity);
-        if (validNote(n->channel, n->key))
-        {
-            if (choke)
-                synth->chokeNote(n->channel, n->key, vel, n->note_id);
-            else
-                synth->releaseNote(n->channel, n->key, vel, n->note_id);
-            return;
-        }
-        if (n->note_id >= 0 && !choke)
-        {
-            synth->releaseNoteByHostNoteID(n->note_id, vel);
-            return;
-        }
-        // Wildcard key or channel: every matching note.
+        uint32_t m = 0;
+        for (auto slot : selected)
+            m |= 1u << slot;
+        for (auto &v : voices)
+            if (v.active)
+                m |= 1u << v.context;
+        for (uint32_t i = 0; i < contextCapacity; ++i)
+            if (slots[i].ringing || (withBlock && slots[i].fresh))
+                m |= 1u << i;
+        return m;
+    }
+    bool pinned(uint32_t slot) const { return live() >> slot & 1; }
+    // Pinned slots a channel's controls reach: the sound it selects and those holding its notes.
+    uint32_t targets(int16_t channel) const
+    {
+        uint32_t m = 0;
         for (int c = 0; c < 16; ++c)
-            for (int k = 0; k < 128; ++k)
-                if ((n->channel < 0 || n->channel == c) && (n->key < 0 || n->key == k))
-                {
-                    if (choke)
-                        synth->chokeNote(c, k, vel, n->note_id);
-                    else
-                        synth->releaseNote(c, k, vel, n->note_id);
-                }
+            if (channel < 0 || channel == c)
+                m |= 1u << selected[c];
+        for (auto &v : voices)
+            if (v.active && (channel < 0 || v.channel == channel))
+                m |= 1u << v.context;
+        return m;
+    }
+    template <typename F> void forTargets(int16_t channel, F &&f)
+    {
+        auto m = targets(channel) & live();
+        for (uint32_t i = 0; i < contextCapacity; ++i)
+            if (m >> i & 1)
+                f(*slots[i].synth, i);
+    }
+    void wake(uint32_t slot)
+    {
+        auto &sl = slots[slot];
+        sl.silent = false;
+        if (sl.ringing)
+            return;
+        sl.ringing = true;
+        contexts[slot].users.fetch_add(1, std::memory_order_relaxed);
     }
 
-    void midi(const uint8_t *d)
+    // Helper hooks.
+    bool accepts(const Patch &, const clap_event_note_t &) { return true; }
+    void start(Voice &v, Context &c)
     {
-        const int ch = d[0] & 0x0F;
-        switch (d[0] & 0xF0)
+        const auto slot = uint32_t(&c - contexts.data());
+        nextSurgeId = (nextSurgeId + 1) & 0x3fffffff;
+        v.surgeId = nextSurgeId;
+        wake(slot);
+        slots[slot].synth->playNote(v.channel, v.key, vel127(v.velocity), 0, v.surgeId);
+    }
+    void release(Voice &v)
+    {
+        if (v.released)
+            return;
+        v.released = true;
+        slots[v.context].synth->releaseNote(v.channel, v.key, releaseVelocity, v.surgeId);
+    }
+    // Every way a voice ends: unless its synthesizer ended it, the synthesizer chokes it.
+    void voiceFinished(Voice &v)
+    {
+        if (!quiet && !v.ended && !v.choked)
+            slots[v.context].synth->chokeNote(v.channel, v.key, 0, v.surgeId);
+    }
+    void noteOn(const clap_event_note_t &n)
+    {
+        if (validNote(n.channel, n.key) && n.port_index == 0)
+            keySlot[n.channel][n.key] = (uint8_t)selected[n.channel];
+        Base::noteOn(n);
+    }
+    void noteOff(const clap_event_note_t &n, bool choke = false, bool midi = false)
+    {
+        if (n.port_index > 0)
+            return;
+        releaseVelocity = vel127(n.velocity);
+        bool onKey = false;
+        for (auto &v : voices)
+            onKey |= v.active && v.channel == n.channel && v.key == n.key;
+        Base::noteOff(n, choke, midi);
+        if (choke)
+            return;
+        if (validNote(n.channel, n.key))
         {
-        case 0x90:
-            if (d[2])
-            {
-                synth->playNote(ch, d[1] & 0x7F, d[2] & 0x7F, 0, -1);
-                break;
-            }
-            [[fallthrough]]; // MIDI's note-on with velocity 0 is a note-off
-        case 0x80:
-            synth->releaseNote(ch, d[1] & 0x7F, d[2] & 0x7F);
+            // A key whose note its synthesizer already ended (a mono mode moved the voice to
+            // another key) is still released there, or the mono modes would go back to it.
+            auto slot = keySlot[n.channel][n.key];
+            if (!onKey && pinned(slot))
+                slots[slot].synth->releaseNote(n.channel, n.key, releaseVelocity, -1);
+            return;
+        }
+        // Wildcard key or channel: every matching key in every pinned sound, as Surge's own.
+        const auto m = live();
+        for (uint32_t i = 0; i < contextCapacity; ++i)
+            if (m >> i & 1)
+                for (int c = 0; c < 16; ++c)
+                    for (int k = 0; k < 128; ++k)
+                        if ((n.channel < 0 || n.channel == c) && (n.key < 0 || n.key == k))
+                            slots[i].synth->releaseNote(c, k, releaseVelocity, -1);
+    }
+    void applyExpression(const clap_event_note_expression_t &x)
+    {
+        if (x.port_index > 0)
+            return;
+        auto net = SurgeVoice::UNKNOWN;
+        switch (x.expression_id)
+        {
+        case CLAP_NOTE_EXPRESSION_VOLUME:
+            net = SurgeVoice::VOLUME;
             break;
-        case 0xA0:
-            synth->polyAftertouch(ch, d[1] & 0x7F, d[2] & 0x7F);
+        case CLAP_NOTE_EXPRESSION_PAN:
+            net = SurgeVoice::PAN;
             break;
-        case 0xB0:
-            synth->channelController(ch, d[1] & 0x7F, d[2] & 0x7F);
+        case CLAP_NOTE_EXPRESSION_TUNING:
+            net = SurgeVoice::PITCH;
             break;
-        case 0xD0:
-            synth->channelAftertouch(ch, d[1] & 0x7F);
+        case CLAP_NOTE_EXPRESSION_BRIGHTNESS:
+            net = SurgeVoice::TIMBRE;
             break;
-        case 0xE0:
-            synth->pitchBend(ch, ((d[2] & 0x7F) << 7 | (d[1] & 0x7F)) - 8192);
+        case CLAP_NOTE_EXPRESSION_PRESSURE:
+            net = SurgeVoice::PRESSURE;
             break;
         default:
-            break;
-        }
-    }
-
-    void apply(const clap_event_header_t *e)
-    {
-        if (e->space_id != CLAP_CORE_EVENT_SPACE_ID)
             return;
-        switch (e->type)
-        {
-        case CLAP_EVENT_NOTE_ON:
-        {
-            auto n = reinterpret_cast<const clap_event_note_t *>(e);
-            if (validNote(n->channel, n->key))
-                synth->playNote(n->channel, n->key, vel127(n->velocity), 0, n->note_id);
-            break;
         }
-        case CLAP_EVENT_NOTE_OFF:
-            endNote(reinterpret_cast<const clap_event_note_t *>(e), false);
-            break;
-        case CLAP_EVENT_NOTE_CHOKE:
-            endNote(reinterpret_cast<const clap_event_note_t *>(e), true);
-            break;
-        case CLAP_EVENT_NOTE_EXPRESSION:
+        for (auto &v : voices)
+            if (matches(v, x.note_id, x.key, x.channel))
+                slots[v.context].synth->setNoteExpression(net, v.surgeId, v.key, v.channel,
+                                                          x.value);
+    }
+    void applyMidi(const clap_event_midi_t &e)
+    {
+        if (e.port_index)
+            return;
+        const uint8_t *d = e.data;
+        const int16_t ch = d[0] & 0x0F;
+        const int kind = d[0] & 0xF0;
+        if (kind == 0x90 || kind == 0x80)
         {
-            auto x = reinterpret_cast<const clap_event_note_expression_t *>(e);
-            auto net = SurgeVoice::UNKNOWN;
-            switch (x->expression_id)
+            clap_event_note_t n{};
+            n.note_id = -1;
+            n.channel = ch;
+            n.key = d[1] & 0x7F;
+            n.velocity = (d[2] & 0x7F) / 127.0;
+            // MIDI's note-on with velocity 0 is a note-off
+            if (kind == 0x90 && (d[2] & 0x7F))
+                noteOn(n);
+            else
+                noteOff(n, false, true);
+            return;
+        }
+        forTargets(ch, [&](SurgeSynthesizer &s, uint32_t) {
+            switch (kind)
             {
-            case CLAP_NOTE_EXPRESSION_VOLUME:
-                net = SurgeVoice::VOLUME;
+            case 0xA0:
+                s.polyAftertouch(ch, d[1] & 0x7F, d[2] & 0x7F);
                 break;
-            case CLAP_NOTE_EXPRESSION_PAN:
-                net = SurgeVoice::PAN;
+            case 0xB0:
+                s.channelController(ch, d[1] & 0x7F, d[2] & 0x7F);
                 break;
-            case CLAP_NOTE_EXPRESSION_TUNING:
-                net = SurgeVoice::PITCH;
+            case 0xD0:
+                s.channelAftertouch(ch, d[1] & 0x7F);
                 break;
-            case CLAP_NOTE_EXPRESSION_BRIGHTNESS:
-                net = SurgeVoice::TIMBRE;
-                break;
-            case CLAP_NOTE_EXPRESSION_PRESSURE:
-                net = SurgeVoice::PRESSURE;
+            case 0xE0:
+                s.pitchBend(ch, ((d[2] & 0x7F) << 7 | (d[1] & 0x7F)) - 8192);
                 break;
             default:
                 break;
             }
-            if (net != SurgeVoice::UNKNOWN)
-                synth->setNoteExpression(net, x->note_id, x->key, x->channel, x->value);
-            break;
-        }
-        case CLAP_EVENT_PARAM_VALUE:
+        });
+    }
+    void applyParam(const clap_event_header_t *e)
+    {
+        if (e->space_id != CLAP_CORE_EVENT_SPACE_ID)
+            return;
+        if (e->type == CLAP_EVENT_PARAM_VALUE)
         {
             auto v = reinterpret_cast<const clap_event_param_value_t *>(e);
-            if (auto pi = find(v->param_id, v->cookie); pi && std::isfinite(v->value))
-            {
-                paramEpoch.fetch_add(1);
-                setParam(*pi, v->value);
-                paramEpoch.fetch_add(1);
-            }
-            break;
+            auto pi = find(v->param_id, v->cookie);
+            if (!pi || !std::isfinite(v->value))
+                return;
+            paramEpoch.fetch_add(1);
+            forTargets(v->channel < 16 ? v->channel : -1, [&](SurgeSynthesizer &s, uint32_t i) {
+                setParamIn(s, *pi, v->value);
+                if (i == selected[0])
+                    values[pi - params.data()].store(currentValue(*pi, paramIn(s, *pi)),
+                                                     std::memory_order_relaxed);
+            });
+            paramEpoch.fetch_add(1);
         }
-        case CLAP_EVENT_PARAM_MOD:
+        else if (e->type == CLAP_EVENT_PARAM_MOD)
         {
             auto m = reinterpret_cast<const clap_event_param_mod_t *>(e);
             auto pi = find(m->param_id, m->cookie);
             if (!pi || !(pi->flags & CLAP_PARAM_IS_MODULATABLE) || !std::isfinite(m->amount))
-                break;
+                return;
             auto depth = (float)(m->amount / (pi->max - pi->min)); // in Surge's 0..1 units
             if ((m->note_id < 0 && m->key < 0 && m->channel < 0) ||
                 !(pi->flags & CLAP_PARAM_IS_MODULATABLE_PER_NOTE_ID))
-                synth->applyParameterMonophonicModulation(pi->p, depth);
-            else
-                synth->applyParameterPolyphonicModulation(pi->p, m->note_id, m->key, m->channel,
-                                                          depth);
-            break;
+            {
+                forTargets(m->channel < 16 ? m->channel : -1, [&](SurgeSynthesizer &s, uint32_t) {
+                    s.applyParameterMonophonicModulation(paramIn(s, *pi), depth);
+                });
+                return;
+            }
+            for (auto &v : voices)
+                if (matches(v, m->note_id, m->key, m->channel))
+                {
+                    auto &s = *slots[v.context].synth;
+                    s.applyParameterPolyphonicModulation(paramIn(s, *pi), v.surgeId, v.key,
+                                                         v.channel, depth);
+                }
         }
-        case CLAP_EVENT_MIDI:
-            midi(reinterpret_cast<const clap_event_midi_t *>(e)->data);
-            break;
-        default:
-            break;
+    }
+    // After a selection for every channel: the parameters show the selected sound's values.
+    void selectedGlobally(Context &next, const clap_output_events_t *out)
+    {
+        auto &s = *slots[&next - contexts.data()].synth;
+        for (size_t i = 0; i < params.size(); ++i)
+        {
+            auto v = currentValue(params[i], paramIn(s, params[i]));
+            if (v == values[i].load(std::memory_order_relaxed))
+                continue;
+            values[i].store(v, std::memory_order_relaxed);
+            if (!out)
+                continue;
+            clap_event_param_value_t ev{};
+            ev.header = {sizeof(ev), 0, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_PARAM_VALUE, 0};
+            ev.param_id = params[i].id;
+            ev.note_id = -1;
+            ev.port_index = -1;
+            ev.channel = -1;
+            ev.key = -1;
+            ev.value = v;
+            out->try_push(out, &ev.header);
         }
     }
 
-    void emitNoteEnds(const clap_output_events_t *out, uint32_t time)
+    // One block of every pinned synthesizer, at frame s of the call.
+    void renderBlock(uint32_t s)
     {
-        for (int i = 0; i < synth->hostNoteEndedDuringBlockCount; ++i)
+        eventTime = s;
+        for (uint32_t i = 0; i < contextCapacity; ++i)
         {
-            clap_event_note_t n{};
-            n.header = {sizeof(n), time, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_NOTE_END, 0};
-            n.note_id = synth->endedHostNoteIds[i];
-            n.port_index = 0;
-            n.channel = synth->endedHostNoteOriginalChannel[i];
-            n.key = synth->endedHostNoteOriginalKey[i];
-            n.velocity = 0;
-            out->try_push(out, &n.header);
+            auto &sl = slots[i];
+            // A sound found quiet a block ago with no note since gives up its tail's pin here,
+            // before its output stops being read.
+            if (sl.ringing && sl.silent &&
+                std::none_of(voices.begin(), voices.end(),
+                             [&](const Voice &v) { return v.active && v.context == i; }))
+            {
+                sl.ringing = false;
+                contexts[i].users.fetch_sub(1, std::memory_order_release);
+            }
+            // A block pins what it renders until the next boundary: a selection can unpin a
+            // sound mid-block, while this block still reads its output.
+            const bool use = live(false) >> i & 1;
+            if (use != sl.fresh)
+            {
+                if (use)
+                    contexts[i].users.fetch_add(1, std::memory_order_relaxed);
+                else
+                    contexts[i].users.fetch_sub(1, std::memory_order_release);
+                sl.fresh = use;
+            }
+            if (!sl.fresh)
+                continue;
+            auto &sy = *sl.synth;
+            if (tempo > 0)
+                sy.time_data.tempo = tempo;
+            if (playing >= 0)
+                sy.time_data.isPlaying = playing;
+            sy.process();
+            sy.time_data.ppqPos += (double)BLOCK_SIZE * sy.time_data.tempo / (60. * sampleRate);
+            for (int k = 0; k < sy.hostNoteEndedDuringBlockCount; ++k)
+                for (auto &v : voices)
+                    if (v.active && v.context == i && v.surgeId == sy.endedHostNoteIds[k])
+                    {
+                        v.ended = true;
+                        finishVoice(v);
+                        break;
+                    }
+            sl.silent = sy.voices[0].empty() && sy.voices[1].empty() && !sy.delayedNoteCount;
+            // Released notes whose voices are all gone end, if the synthesizer didn't say so.
+            if (sl.silent)
+                for (auto &v : voices)
+                    if (v.active && v.context == i && !v.held)
+                    {
+                        v.ended = true;
+                        finishVoice(v);
+                    }
+        }
+    }
+    void render(const clap_process_t *pr, uint32_t from, uint32_t to)
+    {
+        // A choked note is choked in its synthesizer; the helper ends it after its fade.
+        for (auto &v : voices)
+            if (v.active && v.chokeLength && !v.choked)
+            {
+                v.choked = true;
+                slots[v.context].synth->chokeNote(v.channel, v.key, 0, v.surgeId);
+            }
+        float *outL = pr->audio_outputs[0].data32[0], *outR = pr->audio_outputs[0].data32[1];
+        for (uint32_t s = from; s < to; ++s)
+        {
+            if (blockPos == BLOCK_SIZE)
+            {
+                renderBlock(s);
+                blockPos = 0;
+            }
+            float l = 0, r = 0;
+            for (auto &sl : slots)
+                if (sl.fresh)
+                {
+                    l += sl.synth->output[0][blockPos];
+                    r += sl.synth->output[1][blockPos];
+                }
+            outL[s] = l;
+            outR[s] = r;
+            ++blockPos;
         }
     }
 
@@ -511,44 +750,14 @@ struct Plugin
             std::fill(outR, outR + pr->frames_count, 0.f);
             return CLAP_PROCESS_CONTINUE;
         }
-
         if (pr->transport && (pr->transport->flags & CLAP_TRANSPORT_HAS_TEMPO) &&
             pr->transport->tempo > 0)
-            synth->time_data.tempo = pr->transport->tempo;
+            tempo = pr->transport->tempo;
         if (pr->transport)
-            synth->time_data.isPlaying = pr->transport->flags & CLAP_TRANSPORT_IS_PLAYING;
-
-        auto in = pr->in_events;
-        const uint32_t count = in->size(in);
-        uint32_t next = 0;
-        for (uint32_t s = 0; s < pr->frames_count; ++s)
-        {
-            if (blockPos == BLOCK_SIZE)
-            {
-                for (; next < count; ++next)
-                {
-                    auto e = in->get(in, next);
-                    if (e->time > s)
-                        break;
-                    apply(e);
-                }
-                synth->process();
-                synth->time_data.ppqPos +=
-                    (double)BLOCK_SIZE * synth->time_data.tempo / (60. * sampleRate);
-                emitNoteEnds(pr->out_events, s);
-                blockPos = 0;
-            }
-            outL[s] = synth->output[0][blockPos];
-            outR[s] = synth->output[1][blockPos];
-            ++blockPos;
-        }
-        // Events past the next block boundary: applying them now is the same as applying
-        // them at the start of the next call, since nothing renders in between.
-        for (; next < count; ++next)
-            apply(in->get(in, next));
-
+            playing = (pr->transport->flags & CLAP_TRANSPORT_IS_PLAYING) ? 1 : 0;
+        auto status = Base::process(&plugin, pr);
         inProcess.store(false);
-        return CLAP_PROCESS_CONTINUE;
+        return status;
     }
 
     // --- state --------------------------------------------------------------------
@@ -565,9 +774,9 @@ struct Plugin
     }
 
     // Applies the one-scene, no-effects, no-formula rules to a loaded patch.
-    bool normalizePatch()
+    static bool normalizePatch(SurgeSynthesizer &s)
     {
-        auto &patch = synth->storage.getPatch();
+        auto &patch = s.storage.getPatch();
         // No ceiling on note shift or pitch bend range (Jacob's decision; the instrument this
         // plugin matches stops at +-48 semitones of note shift per Part and per Performance,
         // and bend ranges of -48 to +24): the scene pitch reaches +-127 semitones, the bend up
@@ -601,9 +810,9 @@ struct Plugin
     // patch at the start of each of its blocks; a note at the start of the first block after a
     // load would otherwise start with the previous patch's values (LFO start phases, which are
     // read only when a voice starts, stay wrong for the whole note). Audio excluded.
-    void refreshSceneData()
+    static void refreshSceneData(SurgeSynthesizer &s)
     {
-        auto &patch = synth->storage.getPatch();
+        auto &patch = s.storage.getPatch();
         patch.copy_globaldata(patch.globaldata);
         patch.copy_scenedata(patch.scenedata[0], patch.scenedataOrig[0], 0);
     }
@@ -617,13 +826,13 @@ struct Plugin
             // Notes ended by the load are reported at the start of the next block.
             synth->hostNoteEndedDuringBlockCount = 0;
             synth->loadRaw(data, (int)size, false);
-            ok = normalizePatch();
+            ok = normalizePatch(*synth);
             if (!ok && !lastGood.empty())
             {
                 synth->loadRaw(lastGood.data(), (int)lastGood.size(), false);
-                normalizePatch();
+                normalizePatch(*synth);
             }
-            refreshSceneData();
+            refreshSceneData(*synth);
             synth->storage.perform_queued_wtloads(); // here, not in process()
             for (int i = 0; i < synth->hostNoteEndedDuringBlockCount; ++i)
             {
@@ -691,6 +900,251 @@ struct Plugin
         if (hostPresetLoad)
             hostPresetLoad->loaded(host, kind, location, nullptr);
         return true;
+    }
+
+    // --- sound contexts -------------------------------------------------------------
+
+    // A synthesizer with the plugin's ranges and rules and the default patch, at the current
+    // rate, seeded as at activation. Main thread.
+    std::unique_ptr<SurgeSynthesizer> makeSynth()
+    {
+        SurgeStorage::SurgeStorageConfig config;
+        config.suppliedDataPath = SurgeStorage::skipPatchLoadDataPathSentinel;
+        config.createUserDirectory = false;
+        config.scanWavetableAndPatches = false;
+        auto s = std::make_unique<SurgeSynthesizer>(&layer, config);
+        s->storage.saveFixedTempo = true;
+        auto &scene = s->storage.getPatch().scene[0];
+        // Envelope segments up to 2^8 s: the instrument this plugin matches reaches 44 s of
+        // attack (10-90 %), past Surge's 2^5 s. Only the range grows; the envelope code has no
+        // limit, and modulation depths are in seconds-exponent units, so existing patches
+        // sound the same.
+        for (auto &eg : scene.adsr)
+            for (auto *t : {&eg.a, &eg.d, &eg.r})
+                t->val_max.f = longestEnvelopeTime;
+        // The same for the voice LFOs, which serve as the pitch, oscillator and modifier
+        // envelopes. A release past 5 only plays in a patch with lfoLongRelease (a converted
+        // Part): otherwise 5 and above still never release, as in Surge.
+        for (int l = 0; l < n_lfos_voice; l++)
+            for (auto *t : {&scene.lfo[l].attack, &scene.lfo[l].decay, &scene.lfo[l].release})
+                t->val_max.f = longestEnvelopeTime;
+        // Portamento up to just under the engine's limit of 2^4 s (Surge's range stops at
+        // 2^2): the instrument this plugin matches glides an octave in 8.9 s (10-90 %) at time
+        // 120.
+        scene.portamento.val_max.f = 3.99f;
+        // Amp velocity sensitivity under the amplitude law down to k = 128 (-12 k dB): the
+        // instrument this plugin matches reaches k = 32 at +252, and at +255 only velocity
+        // 127 sounds.
+        scene.vca_velsense.val_min.f = -1536.f;
+        // (note shift and pitch bend ranges: in normalizePatch, as a load resets the bend
+        // ranges)
+        s->setSamplerate((float)sampleRate);
+        normalizePatch(*s);
+        refreshSceneData(*s);
+        s->storage.perform_queued_wtloads();
+        s->seedRandom(renderSeed);
+        s->audio_processing_active = active;
+        return s;
+    }
+    // Loads patch data into a synthesizer as a state load does; false if it is refused.
+    static bool loadPatchInto(SurgeSynthesizer &s, const std::vector<uint8_t> &state)
+    {
+        if (state.size() < 8 || std::memcmp(state.data(), "sub3", 4) != 0)
+            return false;
+        s.loadRaw(state.data(), (int)state.size(), false);
+        if (!normalizePatch(s))
+            return false;
+        refreshSceneData(s);
+        s.storage.perform_queued_wtloads();
+        return true;
+    }
+    static std::vector<uint8_t> patchOf(SurgeSynthesizer &s)
+    {
+        void *data = nullptr;
+        auto size = s.saveRaw(&data);
+        return {(uint8_t *)data, (uint8_t *)data + size};
+    }
+    void install(Context &c, std::unique_ptr<SurgeSynthesizer> s)
+    {
+        auto &sl = slots[&c - contexts.data()];
+        // (its audio flags are the audio thread's; unpinned, it leaves them unset)
+        sl.owned = std::move(s);
+        sl.synth = sl.owned.get();
+    }
+    void discarded(Context &c)
+    {
+        auto &sl = slots[&c - contexts.data()];
+        sl.synth = nullptr;
+        sl.owned.reset();
+        c.patch = {};
+    }
+
+    // prepare: the default patch with the supplied parameter values (by parameter ID, in the
+    // parameters' own units); no patch text.
+    static uint32_t prepare(const clap_plugin_t *p, const char *name,
+                            const oscairn_sound_parameter_t *supplied, uint32_t count,
+                            const char *patch, const oscairn_asset_ref_t *base, char *message,
+                            uint32_t capacity)
+    {
+        auto fail = [&](const char *why) {
+            if (message && capacity)
+                std::snprintf(message, capacity, "%s", why);
+            return CLAP_INVALID_ID;
+        };
+        if (patch || base)
+            return fail("Oscairn Analog takes parameter values, not patch text");
+        if (!name || std::strlen(name) > 63)
+            return fail("a sound name of at most 63 bytes is needed");
+        if (count && !supplied)
+            return fail("no parameter values");
+        auto &s = self(p);
+        auto *c = s.freeSlot();
+        if (!c)
+            return fail("no free sound context");
+        std::vector<std::pair<const ParamInfo *, double>> set;
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            auto pi = s.find(supplied[i].id, nullptr);
+            auto v = supplied[i].value;
+            bool repeated = std::any_of(set.begin(), set.end(),
+                                        [&](auto &e) { return e.first == pi; });
+            if (!pi || repeated || !std::isfinite(v) || v < pi->min || v > pi->max)
+                return fail("unknown, repeated or out-of-range parameter value");
+            set.push_back({pi, v});
+        }
+        auto synth = s.makeSynth();
+        for (auto &[pi, v] : set)
+            setParamIn(*synth, *pi, v);
+        refreshSceneData(*synth);
+        s.install(*c, std::move(synth));
+        return s.publish(*c, name);
+    }
+    // prepare_preset: a Surge .fxp file, as preset-load takes it.
+    bool readPreset(uint32_t kind, const char *location, const char *loadKey, Patch &patch,
+                    std::string &error)
+    {
+        if (kind != CLAP_PRESET_DISCOVERY_LOCATION_FILE || loadKey)
+        {
+            error = "Oscairn Analog loads presets from Surge patch files only";
+            return false;
+        }
+        if (!readFxp(location, &patch.state) || patch.state.size() < 8 ||
+            std::memcmp(patch.state.data(), "sub3", 4) != 0)
+        {
+            error = "Not a Surge patch file";
+            return false;
+        }
+        return true;
+    }
+    bool buildPreset(Context &c, std::string &error)
+    {
+        auto synth = makeSynth();
+        if (!loadPatchInto(*synth, c.patch.state))
+        {
+            error = "Patch refused: it uses a Formula modulator";
+            return false;
+        }
+        install(c, std::move(synth));
+        return true;
+    }
+
+    // The snapshot: every sound's patch data, in hex on its line.
+    static bool saveSnapshot(const clap_plugin_t *p, const clap_ostream_t *stream)
+    {
+        auto &s = self(p);
+        for (uint32_t i = 0; i < contextCapacity; ++i)
+            if (s.contexts[i].prepared)
+                s.contexts[i].patch.state = patchOf(*s.slots[i].synth);
+        bool ok = Base::saveSnapshot(p, stream);
+        for (auto &c : s.contexts)
+            c.patch.state = {};
+        return ok;
+    }
+    bool writePatch(std::ostream &out, const Patch &patch)
+    {
+        static const char hex[] = "0123456789abcdef";
+        std::string line(2 * patch.state.size() + 1, ' ');
+        for (size_t i = 0; i < patch.state.size(); ++i)
+        {
+            line[1 + 2 * i] = hex[patch.state[i] >> 4];
+            line[2 + 2 * i] = hex[patch.state[i] & 15];
+        }
+        out << line;
+        return !patch.state.empty();
+    }
+    // Reading a sound builds its synthesizer, so a patch that would be refused refuses the
+    // whole snapshot before anything changes; restored() installs them.
+    std::vector<std::unique_ptr<SurgeSynthesizer>> loadingSynths;
+    void snapshotLoading(bool starting)
+    {
+        quiet = starting;
+        loadingSynths.clear();
+    }
+    bool readPatch(std::istream &in, Patch &patch)
+    {
+        std::string text;
+        if (!(in >> text) || text.size() % 2)
+            return false;
+        auto nibble = [](char c) {
+            return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1;
+        };
+        patch.state.resize(text.size() / 2);
+        for (size_t i = 0; i < patch.state.size(); ++i)
+        {
+            int hi = nibble(text[2 * i]), lo = nibble(text[2 * i + 1]);
+            if (hi < 0 || lo < 0)
+                return false;
+            patch.state[i] = (uint8_t)(hi << 4 | lo);
+        }
+        auto synth = makeSynth();
+        if (!loadPatchInto(*synth, patch.state))
+            return false;
+        loadingSynths.push_back(std::move(synth));
+        return true;
+    }
+    void restored()
+    {
+        size_t next = 0;
+        for (uint32_t i = 0; i < contextCapacity; ++i)
+        {
+            auto &c = contexts[i];
+            auto &sl = slots[i];
+            sl.ringing = sl.silent = sl.fresh = false;
+            if (!c.prepared)
+            {
+                sl.synth = nullptr;
+                sl.owned.reset();
+                continue;
+            }
+            auto built = std::move(loadingSynths[next++]);
+            if (i == 0)
+            {
+                // The default sound keeps its synthesizer, which the parameters point into.
+                synth->allNotesOff();
+                loadPatchInto(*synth, c.patch.state);
+                lastGood = c.patch.state;
+            }
+            else
+            {
+                sl.owned = std::move(built);
+                sl.synth = sl.owned.get();
+            }
+            c.patch = {};
+        }
+        for (size_t i = 0; i < params.size(); ++i)
+            values[i].store(currentValue(params[i], paramIn(*slots[selected[0]].synth, params[i])),
+                            std::memory_order_relaxed);
+    }
+
+    // oscairn.memory: what one synthesizer holds, a sound each (36 MiB: the 32.3 MiB measured and
+    // room for a patch's wavetables; the tests keep it within 25 % above the measurement).
+    static uint64_t synthBytes() { return uint64_t(36) << 20; }
+    uint32_t sounds() const
+    {
+        uint32_t n = 0;
+        for (auto &c : contexts)
+            n += c.prepared;
+        return n;
     }
 };
 
@@ -796,7 +1250,7 @@ bool paramsTextToValue(const clap_plugin_t *p, clap_id id, const char *text, dou
     return true;
 }
 void paramsFlush(const clap_plugin_t *p, const clap_input_events_t *in,
-                 const clap_output_events_t *)
+                 const clap_output_events_t *out)
 {
     auto &s = self(p);
     // Called on the main thread when not processing, or on the audio thread instead of process.
@@ -805,13 +1259,9 @@ void paramsFlush(const clap_plugin_t *p, const clap_input_events_t *in,
         s.backedOut.store(true);
     else
     {
+        s.applySelections(out);
         for (uint32_t i = 0; i < in->size(in); ++i)
-        {
-            auto e = in->get(in, i);
-            if (e->space_id == CLAP_CORE_EVENT_SPACE_ID &&
-                (e->type == CLAP_EVENT_PARAM_VALUE || e->type == CLAP_EVENT_PARAM_MOD))
-                s.apply(e);
-        }
+            s.applyParam(in->get(in, i));
     }
     s.inProcess.store(false);
 }
@@ -857,6 +1307,27 @@ bool presetLoadFromLocation(const clap_plugin_t *p, uint32_t kind, const char *l
     return self(p).loadPreset(kind, location, loadKey);
 }
 const clap_plugin_preset_load_t presetLoadExt{presetLoadFromLocation};
+
+const clap_plugin_state_t snapshotExt{Plugin::saveSnapshot, Plugin::loadSnapshot};
+const oscairn_plugin_sound_contexts_t soundContextsExt{
+    Plugin::capacity, Plugin::get,     Plugin::prepare,      Plugin::select,
+    Plugin::discard,  &snapshotExt,    Plugin::preparePreset};
+
+// oscairn.memory: a synthesizer per prepared sound. The default sound is the context; the
+// state's other sounds count as shared.
+bool memoryEstimate(const clap_plugin_t *p, double, uint32_t, oscairn_memory_t *out)
+{
+    auto &s = self(p);
+    out->shared_bytes = sizeof(Plugin) + Plugin::synthBytes() * (s.sounds() - 1);
+    out->context_bytes = Plugin::synthBytes();
+    out->asset_bytes = 0;
+    return true;
+}
+bool memoryCurrent(const clap_plugin_t *p, oscairn_memory_t *out)
+{
+    return memoryEstimate(p, 0, 0, out);
+}
+const oscairn_plugin_memory_t memoryExt{memoryEstimate, memoryCurrent};
 
 // Preset discovery: Surge's factory and user patch folders, found as Surge finds them, each
 // .fxp file in them one preset named after the file.
@@ -947,12 +1418,6 @@ const clap_preset_discovery_factory_t presetFactory{presetFactoryCount, presetFa
 bool pluginInit(const clap_plugin_t *p)
 {
     auto &s = self(p);
-    SurgeStorage::SurgeStorageConfig config;
-    config.suppliedDataPath = SurgeStorage::skipPatchLoadDataPathSentinel;
-    config.createUserDirectory = false;
-    config.scanWavetableAndPatches = false;
-    s.synth = std::make_unique<SurgeSynthesizer>(&s.layer, config);
-    s.synth->storage.saveFixedTempo = true;
     s.hostParams = static_cast<const clap_host_params_t *>(
         s.host->get_extension(s.host, CLAP_EXT_PARAMS));
     s.hostPresetLoad = static_cast<const clap_host_preset_load_t *>(
@@ -960,58 +1425,63 @@ bool pluginInit(const clap_plugin_t *p)
     if (!s.hostPresetLoad)
         s.hostPresetLoad = static_cast<const clap_host_preset_load_t *>(
             s.host->get_extension(s.host, CLAP_EXT_PRESET_LOAD_COMPAT));
-    // Envelope segments up to 2^8 s: the instrument this plugin matches reaches 44 s of attack
-    // (10-90 %), past Surge's 2^5 s. Only the range grows; the envelope code has no limit, and
-    // modulation depths are in seconds-exponent units, so existing patches sound the same.
-    for (auto &eg : s.synth->storage.getPatch().scene[0].adsr)
-        for (auto *t : {&eg.a, &eg.d, &eg.r})
-            t->val_max.f = longestEnvelopeTime;
-    // The same for the voice LFOs, which serve as the pitch, oscillator and modifier
-    // envelopes. A release past 5 only plays in a patch with lfoLongRelease (a converted Part):
-    // otherwise 5 and above still never release, as in Surge.
-    for (int l = 0; l < n_lfos_voice; l++)
-        for (auto *t : {&s.synth->storage.getPatch().scene[0].lfo[l].attack,
-                        &s.synth->storage.getPatch().scene[0].lfo[l].decay,
-                        &s.synth->storage.getPatch().scene[0].lfo[l].release})
-            t->val_max.f = longestEnvelopeTime;
-    // Portamento up to just under the engine's limit of 2^4 s (Surge's range stops at 2^2):
-    // the instrument this plugin matches glides an octave in 8.9 s (10-90 %) at time 120.
-    s.synth->storage.getPatch().scene[0].portamento.val_max.f = 3.99f;
-    // Amp velocity sensitivity under the amplitude law down to k = 128 (-12 k dB): the
-    // instrument this plugin matches reaches k = 32 at +252, and at +255 only velocity 127
-    // sounds.
-    s.synth->storage.getPatch().scene[0].vca_velsense.val_min.f = -1536.f;
-    // (note shift and pitch bend ranges: in normalizePatch, as a load resets the bend ranges)
-    s.synth->setSamplerate((float)s.sampleRate);
-    s.normalizePatch();
-    s.refreshSceneData();
-    s.synth->storage.perform_queued_wtloads();
-    s.synth->seedRandom(renderSeed);
+    s.synth = s.makeSynth();
+    s.slots[0].synth = s.synth.get();
     s.buildParams();
     s.lastGood = s.saveStateBytes();
     return true;
 }
 void pluginDestroy(const clap_plugin_t *p) { delete &self(p); }
+// Ends every note and tail without the synthesizers reporting it (activation, reset).
+void silence(Plugin &s)
+{
+    s.quiet = true;
+    s.resetVoices();
+    s.quiet = false;
+    for (uint32_t i = 0; i < contextCapacity; ++i)
+        for (bool *pin : {&s.slots[i].ringing, &s.slots[i].fresh})
+            if (*pin)
+            {
+                *pin = false;
+                s.contexts[i].users.fetch_sub(1, std::memory_order_release);
+            }
+    s.blockPos = BLOCK_SIZE;
+}
 bool pluginActivate(const clap_plugin_t *p, double rate, uint32_t, uint32_t)
 {
     auto &s = self(p);
     s.sampleRate = rate;
-    s.synth->setSamplerate((float)rate);
-    s.synth->allNotesOff();
-    s.synth->seedRandom(renderSeed);
-    s.synth->time_data.ppqPos = 0;
-    s.synth->audio_processing_active = true;
-    s.blockPos = BLOCK_SIZE;
+    s.setSampleRate(rate);
+    silence(s);
+    for (auto &sl : s.slots)
+        if (sl.synth)
+        {
+            sl.synth->setSamplerate((float)rate);
+            sl.synth->allNotesOff();
+            sl.synth->seedRandom(renderSeed);
+            sl.synth->time_data.ppqPos = 0;
+            sl.synth->audio_processing_active = true;
+        }
+    s.active = true;
     return true;
 }
-void pluginDeactivate(const clap_plugin_t *p) { self(p).synth->audio_processing_active = false; }
+void pluginDeactivate(const clap_plugin_t *p)
+{
+    auto &s = self(p);
+    s.active = false;
+    for (auto &sl : s.slots)
+        if (sl.synth)
+            sl.synth->audio_processing_active = false;
+}
 bool pluginStartProcessing(const clap_plugin_t *) { return true; }
 void pluginStopProcessing(const clap_plugin_t *) {}
 void pluginReset(const clap_plugin_t *p)
 {
     auto &s = self(p);
-    s.synth->allSoundOff();
-    s.blockPos = BLOCK_SIZE;
+    silence(s);
+    for (auto &sl : s.slots)
+        if (sl.synth)
+            sl.synth->allSoundOff();
 }
 clap_process_status pluginProcess(const clap_plugin_t *p, const clap_process_t *pr)
 {
@@ -1029,6 +1499,10 @@ const void *pluginGetExtension(const clap_plugin_t *, const char *id)
         return &stateExt;
     if (!std::strcmp(id, CLAP_EXT_PRESET_LOAD) || !std::strcmp(id, CLAP_EXT_PRESET_LOAD_COMPAT))
         return &presetLoadExt;
+    if (!std::strcmp(id, OSCAIRN_EXT_SOUND_CONTEXTS))
+        return &soundContextsExt;
+    if (!std::strcmp(id, OSCAIRN_EXT_MEMORY))
+        return &memoryExt;
     return nullptr;
 }
 void pluginOnMainThread(const clap_plugin_t *) {}

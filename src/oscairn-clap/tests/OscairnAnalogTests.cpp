@@ -31,6 +31,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -47,6 +48,14 @@
 #include <vector>
 #include <execinfo.h>
 #include <unistd.h>
+#ifdef __APPLE__
+#include <malloc/malloc.h>
+#else
+#include <malloc.h>
+#endif
+
+#include <oscairn-clap/memory.h>
+#include <oscairn-clap/sound-contexts.h>
 
 // --- allocation guard -----------------------------------------------------------------
 // Replaces global operator new for this executable; the plugin is linked in statically.
@@ -2148,6 +2157,320 @@ static void testPresets(const std::string &dir)
                 compared);
 }
 
+// --- sound contexts -------------------------------------------------------------------
+
+static size_t heapInUse()
+{
+#ifdef __APPLE__
+    malloc_statistics_t st{};
+    malloc_zone_statistics(nullptr, &st);
+    return st.size_in_use;
+#else
+    return mallinfo2().uordblks;
+#endif
+}
+
+struct Sounds
+{
+    Instance &a;
+    const oscairn_plugin_sound_contexts_t *x;
+    explicit Sounds(Instance &i)
+        : a(i), x(static_cast<const oscairn_plugin_sound_contexts_t *>(
+                    i.plugin->get_extension(i.plugin, OSCAIRN_EXT_SOUND_CONTEXTS)))
+    {
+        if (!x)
+            throw std::runtime_error("no sound contexts");
+    }
+    uint32_t preset(const std::string &path, std::string *why = nullptr)
+    {
+        char message[256] = "";
+        auto id = x->prepare_preset(a.plugin, "preset", CLAP_PRESET_DISCOVERY_LOCATION_FILE,
+                                    path.c_str(), nullptr, message, sizeof(message));
+        if (why)
+            *why = message;
+        return id;
+    }
+    std::vector<uint8_t> snapshot()
+    {
+        std::vector<uint8_t> bytes;
+        clap_ostream_t os{&bytes, [](const clap_ostream_t *s, const void *b, uint64_t n) {
+                              auto v = static_cast<std::vector<uint8_t> *>(s->ctx);
+                              v->insert(v->end(), (const uint8_t *)b, (const uint8_t *)b + n);
+                              return (int64_t)n;
+                          }};
+        if (!x->state->save(a.plugin, &os))
+            throw std::runtime_error("snapshot save failed");
+        return bytes;
+    }
+    bool restore(const std::vector<uint8_t> &bytes)
+    {
+        struct Reader
+        {
+            const std::vector<uint8_t> *bytes;
+            size_t at;
+        } r{&bytes, 0};
+        clap_istream_t is{&r, [](const clap_istream_t *s, void *b, uint64_t n) {
+                              auto rd = static_cast<Reader *>(s->ctx);
+                              n = std::min<uint64_t>({n, 1000, rd->bytes->size() - rd->at});
+                              std::memcpy(b, rd->bytes->data() + rd->at, n);
+                              rd->at += n;
+                              return (int64_t)n;
+                          }};
+        return x->state->load(a.plugin, &is);
+    }
+};
+
+// Native sound contexts: a prepared sound renders exactly as loading its patch does; a note
+// held across a switch keeps its sound while new notes take the new one; snapshots, discards,
+// capacity and memory.
+static void testSoundContexts(const std::vector<std::string> &patches)
+{
+    std::string path;
+    for (auto &p : patches)
+        if (p.find("Polysynth") != std::string::npos)
+            path = p;
+    check(!path.empty(), "a factory patch to prepare");
+    if (path.empty())
+        return;
+    const uint32_t frames = 48000;
+    std::vector<Event> notes{noteEvent(0, CLAP_EVENT_NOTE_ON, 1, 60, 0.8),
+                             noteEvent(100, CLAP_EVENT_NOTE_ON, 2, 64, 0.6),
+                             noteEvent(24000, CLAP_EVENT_NOTE_OFF, 1, 60, 0),
+                             noteEvent(26000, CLAP_EVENT_NOTE_OFF, 2, 64, 0)};
+    {
+        Instance a;
+        Sounds s(a);
+        check(s.x->capacity(a.plugin) == 8, "eight sound contexts");
+        oscairn_sound_context_info_t info{};
+        check(s.x->get(a.plugin, 0, &info) && info.id == 0 && info.selected_channels == 0xffff &&
+                  std::string(info.name) == "Default",
+              "the default sound is selected on every channel");
+    }
+    // Prepared from a preset and selected on every channel, against the patch loaded as state.
+    for (size_t i = 0; i < patches.size(); i += 64)
+    {
+        Instance a, b;
+        Sounds s(a);
+        std::string why;
+        auto id = s.preset(patches[i], &why);
+        bool loaded = b.load(patchFromFxp(patches[i]));
+        check((id != CLAP_INVALID_ID) == loaded,
+              "prepare_preset accepts what a state load accepts: " + patches[i] + " " + why);
+        if (id == CLAP_INVALID_ID)
+            continue;
+        check(s.x->select(a.plugin, id, -1), "select a prepared sound");
+        check(a.render(frames, 512, notes, false) == b.render(frames, 512, notes, false),
+              "a prepared sound renders as loading its patch: " + patches[i]);
+    }
+    // Prepared from parameter values, against the same values sent before the first block.
+    {
+        Instance a, b;
+        Sounds s(a);
+        const clap_id pitch = fnv1a("a_osc1_pitch"), level = fnv1a("a_vca_level");
+        oscairn_sound_parameter_t set[] = {{pitch, 7}, {level, -6}};
+        char message[256] = "";
+        auto id = s.x->prepare(a.plugin, "dark", set, 2, nullptr, nullptr, message,
+                               sizeof(message));
+        check(id != CLAP_INVALID_ID && s.x->select(a.plugin, id, -1),
+              std::string("prepare from parameter values: ") + message);
+        // the reference: the same values set through the parameters, saved and loaded as state
+        {
+            Instance c;
+            auto e1 = paramEvent(0, pitch, 7), e2 = paramEvent(0, level, -6);
+            InEvents in;
+            in.list = {&e1.header, &e2.header};
+            c.params->flush(c.plugin, &in.in, &c.out.out);
+            check(b.load(c.save()), "the values' patch loads");
+        }
+        check(a.render(frames, 512, notes, false) == b.render(frames, 512, notes, false),
+              "a sound prepared from values renders as those values saved and loaded");
+        oscairn_sound_parameter_t bad[] = {{pitch, 1e9}};
+        check(s.x->prepare(a.plugin, "bad", bad, 1, nullptr, nullptr, message,
+                           sizeof(message)) == CLAP_INVALID_ID &&
+                  s.x->prepare(a.plugin, "text", nullptr, 0, "patch", nullptr, message,
+                               sizeof(message)) == CLAP_INVALID_ID,
+              "out-of-range values and patch text are refused");
+    }
+    // A switch on channel 0 mid-note: the held note stays on the default sound, the next note
+    // plays the prepared one. The output is the sum of each alone.
+    {
+        auto run = [&](bool first, bool second) {
+            Instance a;
+            Sounds s(a);
+            auto id = s.preset(path);
+            std::vector<float> out;
+            auto add = [&](std::vector<float> v) { out.insert(out.end(), v.begin(), v.end()); };
+            add(a.render(9600, 512,
+                         first ? std::vector<Event>{noteEvent(0, CLAP_EVENT_NOTE_ON, 1, 60, 0.8)}
+                               : std::vector<Event>{},
+                         false));
+            if (second)
+                s.x->select(a.plugin, id, 0);
+            std::vector<Event> ev;
+            if (first)
+                ev.push_back(noteEvent(30000, CLAP_EVENT_NOTE_OFF, 1, 60, 0));
+            if (second)
+            {
+                ev.push_back(noteEvent(14400, CLAP_EVENT_NOTE_ON, 2, 67, 0.8));
+                ev.push_back(noteEvent(30000, CLAP_EVENT_NOTE_OFF, 2, 67, 0));
+            }
+            add(a.render(96000 - 9600, 512, ev, false));
+            oscairn_sound_context_info_t info{};
+            s.x->get(a.plugin, 1, &info);
+            return std::make_pair(out, info);
+        };
+        auto [both, info] = run(true, true);
+        auto held = run(true, false).first, next = run(false, true).first;
+        bool sum = both.size() == held.size() && both.size() == next.size();
+        float nextPeak = 0;
+        for (size_t i = 0; sum && i < both.size(); ++i)
+        {
+            sum = both[i] == held[i] + next[i];
+            nextPeak = std::max(nextPeak, std::fabs(next[i]));
+        }
+        check(sum, "a note held across a switch keeps its sound; the next note takes the new one");
+        check(nextPeak > 1e-3f, "the note after the switch sounds");
+        check(info.selected_channels == 1, "the prepared sound is selected on channel 0");
+    }
+    // Snapshots: two sounds, one selected on channel 3, round trip and render the same.
+    {
+        Instance a, b;
+        Sounds s(a), t(b);
+        auto id = s.preset(path);
+        s.x->select(a.plugin, id, 3); // a snapshot includes the queued selection
+        auto snap = s.snapshot();
+        check(t.restore(snap), "a snapshot loads");
+        check(t.snapshot() == snap, "a snapshot round trips byte for byte");
+        std::vector<Event> ev{noteEvent(0, CLAP_EVENT_NOTE_ON, 1, 60, 0.8),
+                              noteEvent(10, CLAP_EVENT_NOTE_ON, 2, 62, 0.8),
+                              noteEvent(24000, CLAP_EVENT_NOTE_OFF, 1, 60, 0),
+                              noteEvent(24000, CLAP_EVENT_NOTE_OFF, 2, 62, 0)};
+        ev[1].note.channel = 3;
+        ev[3].note.channel = 3;
+        check(a.render(frames, 512, ev, false) == b.render(frames, 512, ev, false),
+              "a loaded snapshot plays as the saved one");
+        auto broken = snap;
+        broken[broken.size() / 2] = 'x';
+        check(!t.restore(broken) && t.snapshot() == snap,
+              "a damaged snapshot is refused and changes nothing");
+    }
+    // Discard, capacity and refused presets.
+    {
+        Instance a;
+        Sounds s(a);
+        auto id = s.preset(path);
+        s.x->select(a.plugin, id, 5);
+        a.render(512, 512);
+        check(!s.x->discard(a.plugin, id), "a selected sound can't be discarded");
+        s.x->select(a.plugin, 0, 5);
+        a.render(512, 512);
+        check(s.x->discard(a.plugin, id) && !s.x->select(a.plugin, id, 0),
+              "an unselected sound is discarded and its ID stays invalid");
+        // a sound still sounding a note stays until its release has ended
+        auto tail = s.preset(path);
+        s.x->select(a.plugin, tail, 5);
+        auto on = noteEvent(a.position, CLAP_EVENT_NOTE_ON, 40, 60, 0.8);
+        on.note.channel = 5;
+        a.render(4800, 512, {on});
+        s.x->select(a.plugin, 0, 5);
+        auto off = noteEvent(a.position, CLAP_EVENT_NOTE_OFF, 40, 60, 0);
+        off.note.channel = 5;
+        a.render(512, 512, {off});
+        check(!s.x->discard(a.plugin, tail), "a sound releasing a note can't be discarded");
+        a.render(48000 * 4, 512);
+        check(hasNoteEnd(a, 40) && s.x->discard(a.plugin, tail),
+              "once its note has ended the sound is discarded");
+        uint32_t made = 0;
+        while (s.preset(path) != CLAP_INVALID_ID && made < 10)
+            ++made;
+        std::string why;
+        check(made == 7 && s.preset(path, &why) == CLAP_INVALID_ID && !why.empty(),
+              "seven sounds beside the default, then a refusal saying why: " +
+                  std::to_string(made));
+        std::string formula;
+        for (auto &p : patches)
+            if (p.find("Formula Modulator") != std::string::npos)
+                formula = p;
+        Instance b;
+        Sounds t(b);
+        check(t.preset(formula, &why) == CLAP_INVALID_ID && !why.empty(),
+              "a preset the plugin refuses isn't prepared: " + why);
+    }
+    // Preparing, selecting and discarding on the main thread while the audio thread plays
+    // notes on four channels (what TSan checks); every prepared sound is discarded in the end.
+    {
+        Instance a;
+        Sounds s(a);
+        std::atomic<bool> stop{false};
+        std::thread audio([&] {
+            uint32_t t = 0;
+            while (!stop.load())
+            {
+                auto on = noteEvent(a.position + 3, CLAP_EVENT_NOTE_ON, (int32_t)t, 60, 0.8);
+                auto off = noteEvent(a.position + 300, CLAP_EVENT_NOTE_OFF, (int32_t)t, 60, 0);
+                on.note.channel = off.note.channel = (int16_t)(t % 4);
+                a.render(512, 128, {on, off}, false);
+                ++t;
+            }
+        });
+        std::vector<uint32_t> ids;
+        const oscairn_sound_parameter_t pitch[] = {{fnv1a("a_osc1_pitch"), 3}};
+        for (int i = 0; i < 24; ++i)
+        {
+            char message[128];
+            auto id = s.x->prepare(a.plugin, "x", pitch, 1, nullptr, nullptr, message,
+                                   sizeof(message));
+            if (id != CLAP_INVALID_ID)
+            {
+                s.x->select(a.plugin, id, (int16_t)(i % 4));
+                ids.push_back(id);
+            }
+            oscairn_sound_context_info_t info;
+            for (uint32_t k = 0; k < 8; ++k)
+                s.x->get(a.plugin, k, &info);
+            s.x->select(a.plugin, 0, (int16_t)((i + 2) % 4));
+            ids.erase(std::remove_if(ids.begin(), ids.end(),
+                                     [&](uint32_t d) { return s.x->discard(a.plugin, d); }),
+                      ids.end());
+        }
+        for (int ch = 0; ch < 4; ++ch)
+            s.x->select(a.plugin, 0, (int16_t)ch);
+        for (int tries = 0; tries < 2000 && !ids.empty(); ++tries)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            ids.erase(std::remove_if(ids.begin(), ids.end(),
+                                     [&](uint32_t d) { return s.x->discard(a.plugin, d); }),
+                      ids.end());
+        }
+        stop = true;
+        audio.join();
+        check(ids.empty(), "every sound prepared while playing is discarded once unused");
+    }
+    // oscairn.memory: what a sound is declared to take covers what preparing one allocates.
+    for (double rate : {44100.0, 96000.0, 192000.0})
+    {
+        if (sanitizerBuild)
+            break;
+        Instance a(rate);
+        Sounds s(a);
+        auto mem = static_cast<const oscairn_plugin_memory_t *>(
+            a.plugin->get_extension(a.plugin, OSCAIRN_EXT_MEMORY));
+        oscairn_memory_t before{}, after{};
+        check(mem && mem->current(a.plugin, &before), "oscairn.memory");
+        auto heap = heapInUse();
+        s.preset(path);
+        auto used = heapInUse() - heap;
+        mem->current(a.plugin, &after);
+        std::printf("  sound contexts: preparing a sound at %g Hz allocates %.2f MiB, declared "
+                    "%.2f MiB\n",
+                    rate, used / 1048576.0, before.context_bytes / 1048576.0);
+        check(before.context_bytes >= used && before.context_bytes < used * 1.25,
+              "a sound's declared memory covers what it allocates, within 25 %");
+        check(after.shared_bytes == before.shared_bytes + before.context_bytes,
+              "a prepared sound adds a sound's memory");
+    }
+}
+
 int main(int argc, char **argv)
 {
     std::string dir = argc > 1 ? argv[1] : SURGE_FACTORY_PATCHES;
@@ -2168,6 +2491,7 @@ int main(int argc, char **argv)
         run("concurrent state", [] { testConcurrentState(); });
         run("plain patches match stock Surge", [&] { testPlainPatchesMatchStock(patches); });
         run("presets", [&] { testPresets(dir); });
+        run("sound contexts", [&] { testSoundContexts(patches); });
         run("first block after a load", [] { testFirstBlockAfterLoad(); });
         run("unison against the reference", [] { testUnisonAgainstReference(); });
         run("drift against the reference", [] { testDriftAgainstReference(); });
