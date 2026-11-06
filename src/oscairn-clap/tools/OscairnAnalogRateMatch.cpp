@@ -47,7 +47,7 @@ struct Filter
 // oversampled rate, the SVF at 0.22 x, the OB-Xd at 22 kHz.
 const Filter filters[] = {
     {"LPF24", 2, 0, 0.06, 65.5525},  {"LPF18", 3, 2, 0, 62.7389},  {"LPF12", 3, 1, 0, 62.7389},
-    {"LPF6", 3, 0, 0, 62.7389},      {"HPF24", 5, 0, 0.05, 65.5525}, {"HPF18", 35, 6, 0, 67.7263},
+    {"LPF6", 3, 0, 0, 62.7389},      {"HPF24", 5, 2, 0.05, 75}, {"HPF18", 35, 6, 0, 67.7263},
     {"HPF12", 20, 0, 0, 67.7263},    {"HPF6", 35, 4, 0, 67.7263},  {"BPF12", 23, 0, 0, 65.5525},
     {"BPF6", 6, 0, 0, 65.5525},
 };
@@ -193,6 +193,13 @@ int header(const std::string &dir)
                     clamped = top;
                 cu = cv > f.clamp ? clamped : top;
             }
+            // one knot per cutoff (a clamp on the grid is fitted twice), and one above the clamp
+            // when it is the last, so the table stays constant past it
+            k.erase(std::unique(k.begin(), k.end(),
+                                [](auto &a, auto &b) { return a.first == b.first; }),
+                    k.end());
+            if (k.back().first <= f.clamp)
+                k.push_back({f.clamp + 1, clamped});
             std::string var = std::string(f.name) + "_" + std::to_string(rate);
             std::printf("// %s: type %d, subtype %d, fitted at resonance %g, %d Hz\n"
                         "inline constexpr Knot %s[] = {\n",

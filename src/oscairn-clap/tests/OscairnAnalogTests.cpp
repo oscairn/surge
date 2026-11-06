@@ -1486,7 +1486,7 @@ static void testSaturatorsAgainstReference()
         {"LPF18", T::cutoffLp18, 3, 2, 1023, 0, -43.60, {-26.4, -34.0, -54.3, -64.3, -82.1}, {-27.1, -10.6, -29.3, -16.7, -32.2}},
         {"LPF12", T::cutoffLp12, 3, 1, 1023, 0, -43.60, {-26.4, -34.0, -54.3, -64.3, -82.1}, {-27.1, -10.6, -29.3, -16.7, -32.2}},
         {"LPF6", T::cutoffLp6, 3, 0, 1023, 0, -43.60, {-26.4, -34.0, -54.3, -64.3, -82.1}, {-27.1, -10.6, -29.3, -16.7, -32.2}},
-        {"HPF24", T::cutoffHp24, 5, 0, 0, 0.05, -42.52, {-26.9, -35.2, -56.0, -66.8, -85.2}, {-26.6, -10.7, -29.1, -17.0, -32.1}},
+        {"HPF24", T::cutoffHp24, 5, 2, 0, 0.05, -44.02, {-26.9, -35.2, -56.0, -66.8, -85.2}, {-26.6, -10.7, -29.1, -17.0, -32.1}},
         {"HPF18", T::cutoffHp18, 35, 6, 0, 0, -38.46, {-26.9, -35.0, -55.8, -66.4, -84.6}, {-26.7, -10.7, -29.2, -16.9, -32.1}},
         {"HPF12", T::cutoffHp12, 20, 0, 0, 0, -40.49, {-26.7, -34.6, -55.2, -65.6, -83.6}, {-26.8, -10.7, -29.2, -16.8, -32.1}},
         {"HPF6", T::cutoffHp6, 35, 4, 0, 0, -38.96, {-26.6, -34.4, -54.9, -65.2, -83.2}, {-27.0, -10.6, -29.3, -16.8, -32.1}},
@@ -1894,10 +1894,8 @@ static void testFittedTables(bool cutoffTables = true)
     // Sanitizer builds check every 8th index: the renders take most of their time and the
     // standard builds check them all.
     const size_t stride = sanitizerBuild ? 8 : 1;
-    // lastElsewhere: the last index checked at rates other than 44.1 kHz; above it the best
-    // match is printed, not checked (HPF24: see the plan, eleventh session)
     auto cutoff = [&](const char *name, const auto &table, const auto &responses, double tolerance,
-                      int type, int subtype, double resonance, int lastElsewhere = 1023) {
+                      int type, int subtype, double resonance) {
         for (size_t i = 0; i < std::size(responses); i += stride)
         {
             auto &r = responses[i];
@@ -1920,13 +1918,6 @@ static void testFittedTables(bool cutoffTables = true)
             }
             double curv = e[0] - 2 * e[1] + e[2];
             double best = curv > 0 ? 0.25 * (e[0] - e[2]) / curv : 1e9; // semitones from v
-            if (rate != 44100 && r.index > lastElsewhere)
-            {
-                std::printf("  %s cutoff at index %d, not checked at this rate: best match %.0f "
-                            "cents from the table\n",
-                            name, r.index, 100 * best);
-                continue;
-            }
             check(std::fabs(100 * best) <= tolerance,
                   std::string(name) + " cutoff at index " + std::to_string(r.index) +
                       ": best match " + std::to_string(100 * best) + " cents from the table");
@@ -1939,8 +1930,7 @@ static void testFittedTables(bool cutoffTables = true)
     cutoff("LPF18", T::cutoffLp18, T::cutoffLp18Responses, T::cutoffLp18Tolerance, 3, 2, 0);
     cutoff("LPF12", T::cutoffLp12, T::cutoffLp12Responses, T::cutoffLp12Tolerance, 3, 1, 0);
     cutoff("LPF6", T::cutoffLp6, T::cutoffLp6Responses, T::cutoffLp6Tolerance, 3, 0, 0);
-    cutoff("HPF24", T::cutoffHp24, T::cutoffHp24Responses, T::cutoffHp24Tolerance, 5, 0, 0.05,
-           937);
+    cutoff("HPF24", T::cutoffHp24, T::cutoffHp24Responses, T::cutoffHp24Tolerance, 5, 2, 0.05);
     cutoff("HPF18", T::cutoffHp18, T::cutoffHp18Responses, T::cutoffHp18Tolerance, 35, 6, 0);
     cutoff("HPF12", T::cutoffHp12, T::cutoffHp12Responses, T::cutoffHp12Tolerance, 20, 0, 0);
     cutoff("HPF6", T::cutoffHp6, T::cutoffHp6Responses, T::cutoffHp6Tolerance, 35, 4, 0);
@@ -3310,7 +3300,7 @@ int main(int argc, char **argv)
         // rate match is fitted at 48, 96 and 192 kHz and interpolated at 88.2 and 176.4),
         // in the standard build only: they check numbers, not memory or threads, and would
         // add most of an hour to the TSan run. The cutoff tables hold there through the
-        // filter cutoff rate match, but for HPF24 above index 937 (see the plan).
+        // filter cutoff rate match.
         if (!sanitizerBuild)
         {
             for (double r : {48000.0, 88200.0, 96000.0, 176400.0, 192000.0})
