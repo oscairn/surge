@@ -513,6 +513,9 @@ struct Plugin : oscairn::contexts::Engine<Plugin, Voice, Patch, contextCapacity,
                 slots[slot].synth->releaseNote(n.channel, n.key, releaseVelocity, -1);
             return;
         }
+        // A note named by its ID: the helper released its voice, nothing else goes.
+        if (n.note_id >= 0)
+            return;
         // Wildcard key or channel: every matching key still down in every pinned sound, as
         // Surge's own (releasing every key was 2048 calls a sound, 5 ms for eight).
         const auto m = live();

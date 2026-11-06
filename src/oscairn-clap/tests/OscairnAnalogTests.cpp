@@ -826,6 +826,21 @@ static void testNotes()
             check(e.key == 60 && e.channel == 0, "NOTE_END carries the note's key and channel");
     }
     {
+        // A note-off naming a note by its ID with wildcard key and channel ends that note only.
+        Instance a;
+        a.render(4800, 256,
+                 {noteEvent(10, CLAP_EVENT_NOTE_ON, 31, 60, 0.9),
+                  noteEvent(20, CLAP_EVENT_NOTE_ON, 32, 64, 0.9)});
+        auto off = noteEvent(a.position + 1, CLAP_EVENT_NOTE_OFF, 31, -1, 0);
+        off.note.channel = -1;
+        auto lr = a.render(48000 * 4, 256, {off});
+        float last = 0;
+        for (size_t i = lr.size() - 2 * 4800; i < lr.size(); ++i)
+            last = std::max(last, std::fabs(lr[i]));
+        check(hasNoteEnd(a, 31) && !hasNoteEnd(a, 32) && last > 1e-3f,
+              "a note-off by ID with wildcard key and channel ends only that note");
+    }
+    {
         Instance a;
         auto st = a.save();
         a.render(4800, 256, {noteEvent(10, CLAP_EVENT_NOTE_ON, 9, 60, 0.9)});
