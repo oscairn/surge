@@ -193,6 +193,14 @@ class alignas(16) SurgeSynthesizer
     void releaseScene(int s);
     int calculateChannelMask(int channel, int key);
     void softkillVoice(int scene);
+    // Chooses the voice a full Polyphony Limit releases for a new note in place of Surge's
+    // choice (Oscairn's voice budget); null, or no chooser: Surge's.
+    struct VoiceChooser
+    {
+        virtual ~VoiceChooser() = default;
+        virtual SurgeVoice *voiceToSoftkill(SurgeSynthesizer &, int scene) = 0;
+    };
+    VoiceChooser *voiceChooser{nullptr};
     void enforcePolyphonyLimit(int scene, int margin);
     int getNonUltrareleaseVoices(int scene) const;
     int getNonReleasedVoices(int scene) const;

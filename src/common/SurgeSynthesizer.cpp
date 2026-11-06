@@ -579,6 +579,13 @@ void SurgeSynthesizer::playNoteByFrequency(float freq, char velocity, int32_t id
 
 void SurgeSynthesizer::softkillVoice(int s)
 {
+    if (voiceChooser)
+        if (auto *v = voiceChooser->voiceToSoftkill(*this, s))
+        {
+            v->uber_release();
+            return;
+        }
+
     voice_list_t::iterator iter, max_playing, max_released;
     int max_age = -1, max_age_release = -1;
     iter = voices[s].begin();
@@ -6174,6 +6181,7 @@ void SurgeSynthesizer::reclaimVoiceFor(SurgeVoice *v, char key, char channel, ch
     v->state.gate = true;
     v->state.key = key;
     v->state.uberrelease = false;
+    v->fadeBlocks = v->fadeLeft = 0;
     v->state.channel = (unsigned char)channel;
     v->state.voiceChannelState = &channelState[channel];
 

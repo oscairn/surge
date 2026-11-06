@@ -17,6 +17,8 @@
  *     load ends held notes),
  *   - refusal of patches with Formula modulators,
  *   - state loads and saves on one thread while another renders (run under TSan),
+ *   - oscairn.voice-budget: voices given up past the host's limits, in the SDK's order,
+ *     faded without a click, and reported per note,
  *   - the fitted tables (FittedTables.h, milestone 1): rendering a table's engine value
  *     gives the feature measured on the reference at that index, within the tolerance.
  *
@@ -56,6 +58,7 @@
 
 #include <oscairn-clap/memory.h>
 #include <oscairn-clap/sound-contexts.h>
+#include <oscairn-clap/voice-budget.h>
 
 // --- allocation guard -----------------------------------------------------------------
 // Replaces global operator new for this executable; the plugin is linked in statically.
@@ -2769,6 +2772,271 @@ static void testSoundContexts(const std::vector<std::string> &patches)
     }
 }
 
+// oscairn.voice-budget, called as the host calls it (audio thread, between blocks, so under the
+// allocation guard).
+struct Budget
+{
+    Instance &a;
+    const oscairn_plugin_voice_budget_t *x;
+    explicit Budget(Instance &i)
+        : a(i), x(static_cast<const oscairn_plugin_voice_budget_t *>(
+                    i.plugin->get_extension(i.plugin, OSCAIRN_EXT_VOICE_BUDGET)))
+    {
+        if (!x)
+            throw std::runtime_error("no voice budget");
+    }
+    // The instance's limit and, as the host sends today, one entry for the selected sounds
+    void set(uint32_t limit, bool entry = true)
+    {
+        oscairn_voice_budget_context_t selected{OSCAIRN_VOICE_BUDGET_SELECTED, 0, 0, 5, 0};
+        forbidAllocation = true;
+        x->set_limits(a.plugin, limit, entry ? &selected : nullptr, entry ? 1 : 0);
+        forbidAllocation = false;
+    }
+    uint32_t active()
+    {
+        double cost = -1;
+        forbidAllocation = true;
+        auto n = x->active_voices(a.plugin, &cost);
+        forbidAllocation = false;
+        return n;
+    }
+    std::map<int32_t, oscairn_voice_budget_note_t> notes()
+    {
+        oscairn_voice_budget_note_t buf[64];
+        forbidAllocation = true;
+        auto n = x->notes(a.plugin, buf, 64);
+        forbidAllocation = false;
+        std::map<int32_t, oscairn_voice_budget_note_t> r;
+        for (uint32_t i = 0; i < n; ++i)
+            r[buf[i].note_id] = buf[i];
+        return r;
+    }
+};
+
+using ParamList = std::vector<std::pair<const char *, double>>;
+
+static void setParams(Instance &a, const ParamList &ps)
+{
+    std::vector<Event> ev;
+    for (auto &[name, v] : ps)
+        ev.push_back(paramEvent(0, fnv1a(name), v));
+    InEvents in;
+    for (auto &e : ev)
+        in.list.push_back(&e.header);
+    a.params->flush(a.plugin, &in.in, &a.out.out);
+}
+
+static Event noteOn(uint32_t t, int32_t id, int16_t channel, int16_t key, double vel)
+{
+    auto e = noteEvent(t, CLAP_EVENT_NOTE_ON, id, key, vel);
+    e.note.channel = channel;
+    return e;
+}
+
+// Voices given up past the host's limits: a lowered limit fades the excess out at the next
+// block, without a click; a new note takes a voice in voice-budget.h's order across two sounds;
+// the voices and notes reported, fading ones included; NOTE_END after a note's last voice;
+// Surge's own Polyphony Limit unchanged without a limit.
+static void testVoiceBudget()
+{
+    // a sine, so a cut would show as a step; velocity sets the amp's gain (-24 dB at 0)
+    const ParamList sine{{"a_osc1_type", 1},
+                         {"a_lowcut.off", 1},
+                         {"a_vca_velsense", -24},
+                         {"a_env1_release", 1}};
+    {
+        Instance a;
+        Budget b(a);
+        check(b.x->honors_volume(a.plugin), "every voice follows the volume expression");
+        setParams(a, sine);
+        auto before = a.render(4800, 64, {noteOn(0, 1, 0, 60, 1)});
+        auto after = a.render(4800, 64, {expressionEvent(a.position, CLAP_NOTE_EXPRESSION_VOLUME, 1, 0)});
+        float p0 = 0, p1 = 0;
+        for (size_t i = before.size() / 2; i < before.size(); ++i)
+            p0 = std::max(p0, std::fabs(before[i]));
+        for (size_t i = after.size() / 2; i < after.size(); ++i)
+            p1 = std::max(p1, std::fabs(after[i]));
+        check(p0 > 1e-2f && p1 < 1e-4f * p0, "a note at volume expression 0 is silent");
+    }
+    // A limit lowered from none to 2 with four notes held: the two quietest fade out from the
+    // next block over 3 ms, against the same render without the limit.
+    {
+        const uint32_t T = 24000; // a block boundary
+        std::vector<Event> on;
+        for (int k = 0; k < 4; ++k)
+            on.push_back(noteOn(1000 * k, 1 + k, 0, (int16_t)(60 + 4 * k), 0.9 - 0.1 * k));
+        Instance a, b;
+        setParams(a, sine);
+        setParams(b, sine);
+        Budget ba(a);
+        a.render(T, 64, on);
+        b.render(T, 64, on);
+        check(ba.active() == 4, "four voices");
+        ba.set(2);
+        std::vector<float> removed; // left channel, without the limit minus with it
+        uint32_t endAt = 0;
+        for (uint32_t t = T; t < T + 4800; t += 16)
+        {
+            auto x = a.render(16, 16), y = b.render(16, 16);
+            for (size_t i = 0; i < x.size(); i += 2)
+                removed.push_back(y[i] - x[i]);
+            if (!endAt && hasNoteEnd(a, 3) && hasNoteEnd(a, 4))
+                endAt = t + 16 - T;
+            if (t + 16 == T + 64)
+                check(ba.active() == 4 && ba.notes().size() == 4,
+                      "fading voices are counted and reported until they end");
+        }
+        size_t t0 = 0;
+        while (t0 < removed.size() && removed[t0] == 0)
+            ++t0;
+        // A click is a corner: the second difference, which a sine of these keys keeps under
+        // 0.5 % of its level and a 3 ms ramp's corners add 0.7 % to, and a cut makes the
+        // signal's value then.
+        auto at = [&](size_t i) { return i < removed.size() ? removed[i] : 0.f; };
+        float corner = 0, level = 0;
+        for (size_t i = 0; i < BLOCK_SIZE + 240 + 2; ++i)
+            corner = std::max(corner, std::fabs(at(i) - 2 * (i ? at(i - 1) : 0.f) +
+                                                (i > 1 ? at(i - 2) : 0.f)));
+        for (size_t i = 300; i < 2700; ++i)
+            level = std::max(level, std::fabs(removed[i]));
+        std::printf("  voice budget: fade from sample %zu, NOTE_END by %u, largest second "
+                    "difference %.5f of %.4f\n",
+                    t0, endAt, corner, level);
+        check(t0 < BLOCK_SIZE, "a lowered limit takes effect within a block");
+        check(endAt >= 96 && endAt <= BLOCK_SIZE + 240 + 16,
+              "the voices given up fade over 2 to 5 ms, then end");
+        check(level > 1e-2f && corner <= 0.02f * level,
+              "no click: no second difference over 2 % of the faded notes' level");
+        auto n = ba.notes();
+        check(ba.active() == 2 && n.size() == 2 && n.count(1) && n.count(2) && !hasNoteEnd(a, 1) &&
+                  !hasNoteEnd(a, 2),
+              "the two loudest notes keep sounding");
+    }
+    // Two sounds: the default on channel 0, a prepared one on channel 1.
+    {
+        Instance a;
+        setParams(a, sine);
+        Sounds s(a);
+        Budget b(a);
+        std::vector<oscairn_sound_parameter_t> values;
+        for (auto &[name, v] : sine)
+            values.push_back({fnv1a(name), v});
+        char message[256] = "";
+        auto id = s.x->prepare(a.plugin, "second", values.data(), (uint32_t)values.size(), nullptr,
+                               nullptr, message, sizeof(message));
+        check(id != CLAP_INVALID_ID && s.x->select(a.plugin, id, 1),
+              std::string("a second sound on channel 1: ") + message);
+        // 1: default, quiet, held; 2: default, loud, released; 3, 4: second, loud and quieter, held
+        a.render(9600, 64,
+                 {noteOn(0, 1, 0, 60, 0.2), noteOn(0, 2, 0, 62, 1), noteOn(0, 3, 1, 64, 1),
+                  noteOn(0, 4, 1, 65, 0.5), noteEvent(4800, CLAP_EVENT_NOTE_OFF, 2, 62, 0)});
+        b.set(4);
+        a.render(4800, 64);
+        auto n = b.notes();
+        check(b.active() == 4 && a.out.noteEnds.empty(), "at the limit, nothing is given up");
+        check(n.size() == 4 && n[2].loudness > n[4].loudness && n[4].loudness > n[1].loudness,
+              "the released note is louder than note 4, which is louder than note 1");
+        // one process() call: the room is made at the note, not at the next call's start
+        a.render(4800, 4800, {noteOn(a.position, 5, 1, 67, 0.9)});
+        check(hasNoteEnd(a, 2) && !hasNoteEnd(a, 1) && !hasNoteEnd(a, 3) && !hasNoteEnd(a, 4) &&
+                  !hasNoteEnd(a, 5) && b.active() == 4,
+              "a new note takes a released voice first, of another sound and louder");
+        a.render(4800, 4800, {noteOn(a.position, 6, 1, 69, 0.9)});
+        check(hasNoteEnd(a, 4) && !hasNoteEnd(a, 1) && !hasNoteEnd(a, 3) && !hasNoteEnd(a, 5) &&
+                  !hasNoteEnd(a, 6) && b.active() == 4,
+              "then the quietest held voice of the new note's own sound, before a quieter one "
+              "of another sound");
+    }
+    // Unison 3: voices and notes reported; NOTE_END only after a note's last voice.
+    {
+        Instance a;
+        auto ps = sine;
+        ps.push_back({"a_unison_voices", 3});
+        setParams(a, ps);
+        Budget b(a);
+        a.render(4800, 64, {noteOn(0, 7, 0, 60, 1), noteOn(0, 8, 0, 67, 0.5)});
+        auto n = b.notes();
+        const double ratio = std::pow(10.0, -24 * (1 - 64 / 127.0) / 20);
+        check(b.active() == 6 && n.size() == 2 && n[7].voices == 3 && n[8].voices == 3 &&
+                  n[7].key == 60 && n[7].channel == 0 && n[7].port_index == 0,
+              "six voices, two notes of three voices, by the host's address");
+        check(n[7].loudness > 0.1f && n[7].loudness <= 1.0001f &&
+                  std::fabs(n[8].loudness / n[7].loudness / ratio - 1) < 0.02,
+              "a note's loudness is its amp's gain");
+        b.set(4);
+        a.render(64, 64);
+        check(b.active() == 6 && b.notes()[8].voices == 3,
+              "fading voices are counted until they end");
+        a.render(1024, 64);
+        n = b.notes();
+        check(b.active() == 4 && n[7].voices == 3 && n[8].voices == 1 && !hasNoteEnd(a, 8),
+              "two of a note's three voices given up: the note sounds on, no NOTE_END");
+        b.set(3);
+        a.render(64, 64);
+        check(!hasNoteEnd(a, 8), "no NOTE_END while a note's last voice fades");
+        a.render(1024, 64);
+        check(hasNoteEnd(a, 8) && !hasNoteEnd(a, 7) && b.active() == 3 && b.notes().size() == 1,
+              "NOTE_END once a note's last voice has ended");
+    }
+    // Surge's Polyphony Limit (4) full: without a limit from the host it releases the oldest
+    // note, exactly as stock Surge renders; under a budget, the quietest.
+    {
+        HeadlessLayer layer;
+        SurgeStorage::SurgeStorageConfig config;
+        config.suppliedDataPath = SurgeStorage::skipPatchLoadDataPathSentinel;
+        config.createUserDirectory = false;
+        config.scanWavetableAndPatches = false;
+        auto stock = std::make_unique<SurgeSynthesizer>(&layer, config);
+        stock->storage.getPatch().polylimit.val.i = 4;
+        stock->storage.getPatch().scene[0].vca_velsense.val.f = -24;
+        void *data = nullptr;
+        auto size = stock->saveRaw(&data);
+        std::vector<uint8_t> patch((uint8_t *)data, (uint8_t *)data + size);
+        const double vel[5] = {0.9, 0.3, 0.9, 0.9, 0.9};
+        std::vector<Event> ev;
+        for (int k = 0; k < 5; ++k)
+            ev.push_back(noteOn(3200 * k, 1 + k, 0, (int16_t)(60 + 2 * k), vel[k]));
+        Instance a, b, c;
+        check(a.load(patch) && b.load(patch) && c.load(patch), "the patch loads");
+        auto plugin = a.render(24000, 64, ev);
+
+        auto &sp = stock->storage.getPatch();
+        stock->setSamplerate(48000);
+        stock->seedRandom(0x05CA1A4E); // the plugin's render seed
+        sp.scenemode.val.i = sm_single;
+        sp.scene_active.val.i = 0;
+        sp.fx_disable.val.i = (1 << n_fx_slots) - 1;
+        sp.copy_globaldata(sp.globaldata);
+        sp.copy_scenedata(sp.scenedata[0], sp.scenedataOrig[0], 0);
+        stock->audio_processing_active = true;
+        std::vector<float> ref;
+        for (uint32_t t = 0; t < 24000; t += BLOCK_SIZE)
+        {
+            for (int k = 0; k < 5; ++k)
+                if (t == 3200u * k)
+                    stock->playNote(0, 60 + 2 * k, (char)std::lround(vel[k] * 127), 0, k + 1);
+            stock->process();
+            stock->time_data.ppqPos += (double)BLOCK_SIZE * stock->time_data.tempo / (60. * 48000);
+            for (int i = 0; i < BLOCK_SIZE; ++i)
+            {
+                ref.push_back(stock->output[0][i]);
+                ref.push_back(stock->output[1][i]);
+            }
+        }
+        check(plugin == ref, "with no limit, the Polyphony Limit steals exactly as stock Surge");
+        check(hasNoteEnd(a, 1) && !hasNoteEnd(a, 2), "stock: the oldest note goes");
+        Budget bb(b), bc(c);
+        bb.set(0); // a budget, no limit
+        b.render(24000, 64, ev);
+        check(hasNoteEnd(b, 2) && !hasNoteEnd(b, 1),
+              "under a budget, the Polyphony Limit releases the quietest note");
+        bc.set(2);
+        bc.set(0, false);
+        check(c.render(24000, 64, ev) == plugin, "with the budget gone, stock again");
+    }
+}
+
 int main(int argc, char **argv)
 {
     std::string dir = argc > 1 ? argv[1] : SURGE_FACTORY_PATCHES;
@@ -2790,6 +3058,7 @@ int main(int argc, char **argv)
         run("plain patches match stock Surge", [&] { testPlainPatchesMatchStock(patches); });
         run("presets", [&] { testPresets(dir); });
         run("sound contexts", [&] { testSoundContexts(patches); });
+        run("voice budget", [] { testVoiceBudget(); });
         run("first block after a load", [] { testFirstBlockAfterLoad(); });
         run("unison against the reference", [] { testUnisonAgainstReference(); });
         run("drift against the reference", [] { testDriftAgainstReference(); });

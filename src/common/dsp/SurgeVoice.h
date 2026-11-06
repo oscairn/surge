@@ -70,6 +70,15 @@ class alignas(16) SurgeVoice
 
     void release();
     void uber_release();
+    // Gives the voice up for a limit outside the patch (Oscairn's voice budget): its amp gain
+    // falls linearly to zero over the next `blocks` blocks, and then it ends.
+    void fadeOut(int blocks)
+    {
+        if (!fadeBlocks)
+            fadeBlocks = fadeLeft = std::max(blocks, 1);
+    }
+    int fadeBlocks{0}, fadeLeft{0};            // 0: not fading
+    float ampGain() const { return FBP.Gain; } // this block's: level, velocity, EG and fade
 
     void sampleRateReset();
     bool process_block(QuadFilterChainState &, int);

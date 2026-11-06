@@ -30,6 +30,9 @@
  *   the default sound's patch; the sound-context snapshot holds every sound, and a snapshot's
  *   sounds can be prepared beside the playing ones (oscairn.sound-snapshots/draft-3), the
  *   outgoing ones ringing out into the host's ring-out buffer.
+ * - Oscairn's voice budget (oscairn.voice-budget/draft-1): past the host's limits, Surge
+ *   voices of every sound are given up in the SDK's order and fade out over 3 ms. With no
+ *   limit set, Surge steals voices as it always has.
  */
 
 #include "OscairnAnalog.h"
@@ -194,7 +197,8 @@ struct Slot
     uint32_t fadeLeft{0}; // audio: frames of that fade left
 };
 
-struct Plugin : oscairn::contexts::Engine<Plugin, Voice, Patch, contextCapacity, voiceCapacity>
+struct Plugin : oscairn::contexts::Engine<Plugin, Voice, Patch, contextCapacity, voiceCapacity>,
+                SurgeSynthesizer::VoiceChooser
 {
     using Base = oscairn::contexts::Engine<Plugin, Voice, Patch, contextCapacity, voiceCapacity>;
     static constexpr const char *stateVersion = "oscairn-analog-sounds-1";
@@ -464,6 +468,167 @@ struct Plugin : oscairn::contexts::Engine<Plugin, Voice, Patch, contextCapacity,
         contexts[slot].users.fetch_add(1, std::memory_order_relaxed);
     }
 
+    // --- oscairn.voice-budget -------------------------------------------------------
+    // A voice is one Surge voice (a unison copy is one) of any sound the audio thread may
+    // touch. Past the host's limits, voices are given up in voice-budget.h's order (the SDK's
+    // victim()) and fade out over 3 ms; with no limit set, nothing here runs and Surge steals as
+    // it always has. Audio thread only.
+    oscairn::voices::Limits budget; // as set_limits last gave it
+    static constexpr size_t surgeVoices = contextCapacity * MAX_VOICES;
+    std::array<oscairn::voices::Candidate, surgeVoices> candidates{};
+    std::array<SurgeVoice *, surgeVoices> candidateVoice{}; // null: no voice there
+
+    bool budgeted() const { return budget.limit || budget.count; }
+    static bool monoSound(SurgeSynthesizer &s)
+    {
+        return s.storage.getPatch().scene[0].polymode.val.i != pm_poly;
+    }
+    // Linear, 1 at full level: the amp's gain (level, velocity, envelope, fade) and the note's
+    // volume expression.
+    static double voiceGain(const SurgeVoice &v)
+    {
+        return v.ampGain() * v.noteExpressions[SurgeVoice::VOLUME];
+    }
+    // f(note, voice) for each Surge voice playing one of the helper's notes, in pinned sounds.
+    template <typename F> void forNoteVoices(F &&f)
+    {
+        const auto m = live();
+        for (auto &n : voices)
+            if (n.active && (m >> n.context & 1))
+                for (auto *sv : slots[n.context].synth->voices[0])
+                    if (sv->host_note_id == n.surgeId)
+                        f(n, *sv);
+    }
+    // Describes every Surge voice as a Candidate. Held: its note's key is down (a pedal
+    // doesn't count); in a mono or legato sound, its gate, so a sustained mono note is kept.
+    void describeVoices()
+    {
+        candidateVoice.fill(nullptr);
+        const auto m = live();
+        for (uint32_t slot = 0; slot < contextCapacity; ++slot)
+        {
+            if (!(m >> slot & 1))
+                continue;
+            auto &sy = *slots[slot].synth;
+            const auto &c = contexts[slot];
+            const bool mono = monoSound(sy), selected = c.selected.load(std::memory_order_relaxed);
+            for (auto *sv : sy.voices[0])
+            {
+                const size_t i = slot * MAX_VOICES + size_t(sv - sy.voices_array[0].data());
+                candidates[i] = {c.id,
+                                 selected,
+                                 mono && sv->state.gate,
+                                 sv->fadeBlocks || sv->state.uberrelease,
+                                 mono,
+                                 voiceGain(*sv),
+                                 uint64_t(INT32_MAX - sv->age)}; // age counts blocks
+                candidateVoice[i] = sv;
+            }
+        }
+        forNoteVoices([&](Voice &n, SurgeVoice &sv) {
+            const size_t i = n.context * MAX_VOICES +
+                             size_t(&sv - slots[n.context].synth->voices_array[0].data());
+            candidates[i].held |= n.held;
+        });
+    }
+    // Voices sounding and not on their way out, of context `id` or of all.
+    uint32_t keeping(uint32_t id = oscairn::voices::none) const
+    {
+        uint32_t n = 0;
+        for (size_t i = 0; i < surgeVoices; ++i)
+            n += candidateVoice[i] && !candidates[i].ending &&
+                 (id == oscairn::voices::none || candidates[i].context == id);
+        return n;
+    }
+    int victim(uint32_t incoming, uint32_t only = oscairn::voices::none)
+    {
+        return oscairn::voices::victim(
+            surgeVoices, [&](size_t i) { return candidateVoice[i] ? &candidates[i] : nullptr; },
+            budget, incoming, only);
+    }
+    bool giveUp(int i)
+    {
+        if (i < 0)
+            return false;
+        candidateVoice[i]->fadeOut(std::max(1, (int)std::ceil(chokeFrames / (double)BLOCK_SIZE)));
+        candidates[i].ending = true;
+        return true;
+    }
+    // Before a note starts in `slot`: room for the voices it will add within the limits.
+    void makeRoom(uint32_t slot, int16_t key)
+    {
+        if (!budgeted())
+            return;
+        describeVoices();
+        auto &sy = *slots[slot].synth;
+        const auto &c = contexts[slot];
+        uint32_t adding = (uint32_t)sy.unisonVoiceCount(0);
+        if (monoSound(sy))
+            adding = keeping(c.id) ? 0 : adding; // the new note takes the sounding one's place
+        else if (sy.storage.getPatch().scene[0].polyVoiceRepeatedKeyMode != NEW_VOICE_EVERY_NOTEON)
+            for (auto *sv : sy.voices[0])
+                if (sv->state.key == key)
+                    adding = 0; // reuses that key's voice
+        const auto own = budget.of(c.id, c.selected.load(std::memory_order_relaxed));
+        while (own.limit && keeping(c.id) + adding > own.limit && giveUp(victim(c.id, c.id)))
+            ;
+        while (budget.limit && keeping() + adding > budget.limit && giveUp(victim(c.id)))
+            ;
+    }
+    // At a block's start (from the helper's process, after the selections): voices past a
+    // limit set_limits lowered fade out.
+    void keepWithinLimits()
+    {
+        if (!budgeted())
+            return;
+        describeVoices();
+        const auto m = live();
+        for (uint32_t slot = 0; slot < contextCapacity; ++slot)
+        {
+            if (!(m >> slot & 1))
+                continue;
+            const auto &c = contexts[slot];
+            const auto own = budget.of(c.id, c.selected.load(std::memory_order_relaxed));
+            while (own.limit && keeping(c.id) > own.limit &&
+                   giveUp(victim(oscairn::voices::none, c.id)))
+                ;
+        }
+        while (budget.limit && keeping() > budget.limit && giveUp(victim(oscairn::voices::none)))
+            ;
+    }
+    // Surge's Polyphony Limit, full: under a budget, the voice it releases is chosen in the
+    // same order, within that sound.
+    SurgeVoice *voiceToSoftkill(SurgeSynthesizer &s, int) override
+    {
+        if (!budgeted())
+            return nullptr;
+        describeVoices();
+        for (uint32_t slot = 0; slot < contextCapacity; ++slot)
+            if (slots[slot].synth == &s)
+            {
+                const int i = victim(contexts[slot].id, contexts[slot].id);
+                return i < 0 ? nullptr : candidateVoice[i];
+            }
+        return nullptr;
+    }
+    uint32_t countVoices()
+    {
+        uint32_t n = 0;
+        const auto m = live();
+        for (uint32_t slot = 0; slot < contextCapacity; ++slot)
+            if (m >> slot & 1)
+                n += (uint32_t)slots[slot].synth->voices[0].size();
+        return n;
+    }
+    uint32_t writeNotes(oscairn_voice_budget_note_t *out, uint32_t capacity)
+    {
+        oscairn::voices::Report<voiceCapacity> report;
+        forNoteVoices([&](Voice &n, SurgeVoice &sv) {
+            report.add(n.noteId, 0, n.channel, n.key, voiceGain(sv));
+        });
+        return report.write(out, capacity);
+    }
+
     // Helper hooks.
     bool accepts(const Patch &, const clap_event_note_t &) { return true; }
     void start(Voice &v, Context &c)
@@ -472,6 +637,7 @@ struct Plugin : oscairn::contexts::Engine<Plugin, Voice, Patch, contextCapacity,
         nextSurgeId = (nextSurgeId + 1) & 0x3fffffff;
         v.surgeId = nextSurgeId;
         wake(slot);
+        makeRoom(slot, v.key);
         slots[slot].synth->playNote(v.channel, v.key, vel127(v.velocity), 0, v.surgeId);
     }
     void release(Voice &v)
@@ -975,6 +1141,7 @@ struct Plugin : oscairn::contexts::Engine<Plugin, Voice, Patch, contextCapacity,
         config.createUserDirectory = false;
         config.scanWavetableAndPatches = false;
         auto s = std::make_unique<SurgeSynthesizer>(&layer, config);
+        s->voiceChooser = this;
         s->storage.saveFixedTempo = true;
         auto &scene = s->storage.getPatch().scene[0];
         // Envelope segments up to 2^8 s: the instrument this plugin matches reaches 44 s of
@@ -1395,6 +1562,27 @@ bool memoryCurrent(const clap_plugin_t *p, oscairn_memory_t *out)
 }
 const oscairn_plugin_memory_t memoryExt{memoryEstimate, memoryCurrent};
 
+// oscairn.voice-budget: Surge's voices across every sound (see Plugin's voice budget section).
+// Every voice multiplies its amp by its note's volume expression.
+bool budgetHonorsVolume(const clap_plugin_t *) { return true; }
+void budgetSetLimits(const clap_plugin_t *p, uint32_t limit,
+                     const oscairn_voice_budget_context_t *contexts, uint32_t count)
+{
+    self(p).budget.set(limit, contexts, count);
+}
+uint32_t budgetActiveVoices(const clap_plugin_t *p, double *cost)
+{
+    if (cost)
+        *cost = 0; // no estimate: the host measures the instance
+    return self(p).countVoices();
+}
+uint32_t budgetNotes(const clap_plugin_t *p, oscairn_voice_budget_note_t *notes, uint32_t capacity)
+{
+    return self(p).writeNotes(notes, capacity);
+}
+const oscairn_plugin_voice_budget_t voiceBudgetExt{budgetHonorsVolume, budgetSetLimits,
+                                                   budgetActiveVoices, budgetNotes};
+
 // Preset discovery: Surge's factory and user patch folders, found as Surge finds them, each
 // .fxp file in them one preset named after the file.
 const clap_preset_discovery_provider_descriptor_t providerDescriptor{
@@ -1574,6 +1762,8 @@ const void *pluginGetExtension(const clap_plugin_t *, const char *id)
         return &soundSnapshotsExt;
     if (!std::strcmp(id, OSCAIRN_EXT_MEMORY))
         return &memoryExt;
+    if (!std::strcmp(id, OSCAIRN_EXT_VOICE_BUDGET))
+        return &voiceBudgetExt;
     return nullptr;
 }
 void pluginOnMainThread(const clap_plugin_t *) {}

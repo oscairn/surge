@@ -1307,6 +1307,8 @@ bool SurgeVoice::process_block(QuadFilterChainState &Q, int Qe)
         SIMD_MM(store_ss)(((float *)&Q.DPR[i] + Qe), SIMD_MM(load_ss)(&postOutput[1][i]));
     }
     SetQFB(&Q, Qe);
+    if (fadeBlocks && !fadeLeft)
+        state.keep_playing = false; // faded out over this block
 
     age++;
     if (!state.gate)
@@ -1462,6 +1464,12 @@ void SurgeVoice::SetQFB(QuadFilterChainState *Q, int e) // Q == 0 means init(ial
                             localcopy[id_vcavel].f * (1.f - velocitySource.get_output(0))) *
                modsources[ms_ampeg]->get_output(0);
     float FB = scene->feedback.get_extended(localcopy[id_feedback].f);
+
+    if (Q && fadeBlocks)
+    {
+        fadeLeft = std::max(fadeLeft - 1, 0);
+        Gain *= (float)fadeLeft / (float)fadeBlocks;
+    }
 
     if (!Q)
     {
