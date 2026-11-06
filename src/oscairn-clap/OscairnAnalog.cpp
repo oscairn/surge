@@ -197,6 +197,8 @@ struct Slot
     uint32_t fadeLeft{0}; // audio: frames of that fade left
 };
 
+void clear(SurgeSynthesizer &s);
+
 struct Plugin : oscairn::contexts::Engine<Plugin, Voice, Patch, contextCapacity, voiceCapacity>,
                 SurgeSynthesizer::VoiceChooser
 {
@@ -419,6 +421,9 @@ struct Plugin : oscairn::contexts::Engine<Plugin, Voice, Patch, contextCapacity,
     int32_t nextSurgeId{0};                     // audio thread
     char releaseVelocity{0};                    // the note-off being applied
     bool quiet{false};                          // finishing voices without the synthesizers
+    // Audio thread: sounds a reset found unpinned, which the main thread may be using; each is
+    // cleared when it is next pinned, at the start of a process() call, before any event.
+    uint32_t stale{0};
     std::array<std::array<uint8_t, 128>, 16> keySlot{}; // audio: the sound a key last started in
 
     // Audio thread: the slots it may touch, from what it knows itself (the channels' selections,
@@ -575,10 +580,17 @@ struct Plugin : oscairn::contexts::Engine<Plugin, Voice, Patch, contextCapacity,
         while (budget.limit && keeping() + adding > budget.limit && giveUp(victim(c.id)))
             ;
     }
-    // At a block's start (from the helper's process, after the selections): voices past a
-    // limit set_limits lowered fade out.
+    // At a block's start (from the helper's process, after the selections): a sound a reset left
+    // stale is cleared, and voices past a limit set_limits lowered fade out.
     void keepWithinLimits()
     {
+        if (const auto m = stale & live())
+        {
+            for (uint32_t i = 0; i < contextCapacity; ++i)
+                if (m >> i & 1)
+                    clear(*slots[i].synth);
+            stale &= ~m;
+        }
         if (!budgeted())
             return;
         describeVoices();
@@ -1704,6 +1716,57 @@ void silence(Plugin &s)
     }
     s.blockPos = BLOCK_SIZE;
 }
+// A synthesizer as a fresh one is after activation, its patch kept (activation, reset): at once,
+// where Surge's allSoundOff() fades over 8 blocks and then stops any note struck meanwhile.
+// Audio thread: nothing here allocates or locks.
+void clear(SurgeSynthesizer &s)
+{
+    for (auto &c : s.channelState)
+        std::memset(&c, 0, sizeof(c)); // bend, pressure and RPN state too, as constructed
+    s.stopSound(); // voices, waiting notes, keys, pedals, hold buffers, the scene's filters
+    s.approachingAllSoundOff = false;
+    s.mpeEnabled = false; // only ever turned on by RPN here
+    auto &st = s.storage;
+    auto &patch = st.getPatch();
+    std::memset(st.poly_aftertouch, 0, sizeof(st.poly_aftertouch));
+    for (int sc = 0; sc < n_scenes; ++sc)
+    {
+        s.midiKeyPressedForScene[sc].fill(0); // the lowest, highest and latest key
+        st.last_key[sc] = 60; // where portamento glides from
+        auto &ms = patch.scene[sc].modsources;
+        for (auto m : {ms_pitchbend, ms_modwheel, ms_breath, ms_expression, ms_sustain,
+                       ms_aftertouch, ms_lowest_key, ms_highest_key, ms_latest_key})
+        {
+            auto *c = static_cast<ControllerModulationSource *>(ms[m]);
+            const float to = c->target[0];
+            c->init(0.f);
+            // The patch keeps the mod wheel's position (it is saved with it): it glides there
+            // from 0, as after a load.
+            if (m == ms_modwheel)
+                c->set_target(to);
+        }
+        for (auto m : {ms_alternate_bipolar, ms_alternate_unipolar})
+            static_cast<AlternateModulationSource *>(ms[m])->state = false;
+        // Scene LFOs run every block, voices or not, and keep their phase into the next note:
+        // set up again as the synthesizer's constructor does (reseeded below).
+        for (int l = 0; l < n_lfos_scene; ++l)
+            static_cast<LFOModulationSource *>(ms[ms_slfo1 + l])
+                ->assign(&st, &patch.scene[sc].lfo[n_lfos_voice + l], patch.scenedata[sc], 0,
+                         &patch.stepsequences[sc][n_lfos_voice + l],
+                         &patch.msegs[sc][n_lfos_voice + l],
+                         &patch.formulamods[sc][n_lfos_voice + l]);
+        // which modulators run is worked out at each block; a voice started before the first
+        // block reads it as constructed
+        std::fill(std::begin(patch.scene[sc].modsource_doprocess),
+                  std::end(patch.scene[sc].modsource_doprocess), false);
+    }
+    // The output gains glide in from 0 over a fresh synthesizer's first blocks.
+    for (auto *g : {&s.amp, &s.amp_mute})
+        g->set_target_instant(0.f);
+    Plugin::refreshSceneData(s); // the patch's values, without the last block's modulation
+    s.seedRandom(renderSeed);
+    s.time_data.ppqPos = st.songpos = 0; // a free-running LFO starting before the first block
+}
 bool pluginActivate(const clap_plugin_t *p, double rate, uint32_t, uint32_t)
 {
     auto &s = self(p);
@@ -1714,11 +1777,10 @@ bool pluginActivate(const clap_plugin_t *p, double rate, uint32_t, uint32_t)
         if (sl.synth)
         {
             sl.synth->setSamplerate((float)rate);
-            sl.synth->allNotesOff();
-            sl.synth->seedRandom(renderSeed);
-            sl.synth->time_data.ppqPos = 0;
+            clear(*sl.synth);
             sl.synth->audio_processing_active = true;
         }
+    s.stale = 0;
     s.active = true;
     return true;
 }
@@ -1735,10 +1797,13 @@ void pluginStopProcessing(const clap_plugin_t *) {}
 void pluginReset(const clap_plugin_t *p)
 {
     auto &s = self(p);
+    // the sounds this thread may touch, before silence() unpins the tails
+    const auto m = s.live();
+    for (uint32_t i = 0; i < contextCapacity; ++i)
+        if (m >> i & 1)
+            clear(*s.slots[i].synth);
+    s.stale = ~m & ((1u << contextCapacity) - 1);
     silence(s);
-    for (auto &sl : s.slots)
-        if (sl.synth)
-            sl.synth->allSoundOff();
 }
 clap_process_status pluginProcess(const clap_plugin_t *p, const clap_process_t *pr)
 {

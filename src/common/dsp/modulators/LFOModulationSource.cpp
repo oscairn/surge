@@ -20,6 +20,7 @@
  * https://github.com/surge-synthesizer/surge
  */
 #include "LFOModulationSource.h"
+#include <algorithm>
 #include <cmath>
 #include "DebugHelpers.h"
 #include "MSEGModulationHelper.h"
@@ -53,6 +54,9 @@ void LFOModulationSource::assign(SurgeStorage *storage, LFOStorage *lfo, pdata *
 
     iout = 0;
     output = 0;
+    // as constructed, so that assigning again starts the LFO afresh
+    std::fill(std::begin(output_multi), std::end(output_multi), 0.f);
+    everAttacked = false;
     step = 0;
     env_state = lfoeg_stuck; // in the case we process this without an attack, we want to be 'done'
     env_val = 0.f;

@@ -19,6 +19,7 @@
  *   - state loads and saves on one thread while another renders (run under TSan),
  *   - oscairn.voice-budget: voices given up past the host's limits, in the SDK's order,
  *     faded without a click, and reported per note,
+ *   - CLAP reset: at once, and the instance then plays as a fresh one,
  *   - the fitted tables (FittedTables.h, milestone 1): rendering a table's engine value
  *     gives the feature measured on the reference at that index, within the tolerance.
  *
@@ -3037,6 +3038,239 @@ static void testVoiceBudget()
     }
 }
 
+// CLAP reset, as the host sends it to an instance it takes over (audio thread, before giving it a
+// state): it takes effect at once, so a note in the next block sounds at full level; the
+// instance then plays exactly as a fresh one with the same state, whatever it played before
+// (notes held, the pedals, bend, pressure, controllers, MPE turned on by RPN, MIDI's all sound
+// off); every prepared sound with it; and nothing is allocated (reset runs under the allocation
+// guard).
+static void testReset(const std::vector<std::string> &patches)
+{
+    auto at = [](std::vector<Event> ev, uint64_t from) {
+        for (auto &e : ev)
+            e.time += (uint32_t)from;
+        return ev;
+    };
+    auto reset = [](Instance &a) {
+        forbidAllocation = true;
+        a.plugin->reset(a.plugin);
+        forbidAllocation = false;
+    };
+    // what the outgoing Performance played: held notes, one released under the pedal, both
+    // pedals, bend, pressure, controllers, MPE turned on by RPN and, just before the reset,
+    // MIDI's all sound off
+    auto busy = [](int16_t ch) {
+        const uint8_t cc = 0xB0 | ch;
+        return std::vector<Event>{
+            noteOn(0, 1, ch, 48, 0.8),       noteOn(0, 2, ch, 60, 0.8),
+            noteOn(0, 3, ch, 64, 0.8),       noteOn(0, 4, ch, 67, 0.8),
+            noteOn(50, 5, ch, 72, 0.7), // an odd count, so the alternating sources are flipped
+            midiEvent(100, cc, 64, 127),     midiEvent(150, cc, 66, 127),
+            midiEvent(200, 0xE0 | ch, 0x7F, 0x7F), midiEvent(300, cc, 1, 100),
+            midiEvent(310, cc, 2, 90),       midiEvent(320, cc, 11, 40),
+            midiEvent(400, 0xD0 | ch, 90, 0), midiEvent(500, 0xA0 | ch, 60, 70),
+            midiEvent(600, cc, 101, 0),      midiEvent(601, cc, 100, 6),
+            midiEvent(602, cc, 6, 1),        noteEvent(10000, CLAP_EVENT_NOTE_OFF, 1, 48, 0),
+            midiEvent(23990, cc, 120, 0)}; // all sound off: Surge's fade, cut short by the reset
+    };
+    // what the incoming one plays: a data entry (an RPN the outgoing one left selected would
+    // take it), a bend and two notes
+    auto incoming = [](int16_t ch, int32_t id) {
+        return std::vector<Event>{midiEvent(0, 0xB0 | ch, 6, 1), midiEvent(0, 0xE0 | ch, 0, 0x50),
+                                  noteOn(0, id, ch, 60, 0.8), noteOn(0, id + 1, ch, 64, 0.6),
+                                  noteEvent(24000, CLAP_EVENT_NOTE_OFF, id, 60, 0),
+                                  noteEvent(24000, CLAP_EVENT_NOTE_OFF, id + 1, 64, 0)};
+    };
+    auto rms = [](const std::vector<float> &lr, size_t from, size_t to) {
+        double e = 0;
+        for (size_t i = 2 * from; i < 2 * to; ++i)
+            e += (double)lr[i] * lr[i];
+        return std::sqrt(e / (2 * (to - from)));
+    };
+    const uint32_t frames = 48000;
+
+    // At once: notes struck in the first block after a reset sound at full level.
+    {
+        Instance a, b;
+        a.render(24000, 64, busy(0), false);
+        reset(a);
+        const size_t ended = a.out.noteEnds.size();
+        auto x = a.render(frames, 64, at(incoming(0, 11), a.position));
+        auto y = b.render(frames, 64, incoming(0, 11));
+        check(rms(y, 4800, 24000) > 1e-3 && rms(x, 4800, 24000) >= 0.99 * rms(y, 4800, 24000),
+              "notes struck in the block after a reset sound at full level: " +
+                  std::to_string(rms(x, 4800, 24000)) + " against " +
+                  std::to_string(rms(y, 4800, 24000)));
+        // reset has no output events; the notes it ended are not reported later either
+        bool stale = false;
+        for (size_t k = ended; k < a.out.noteEnds.size(); ++k)
+            stale |= a.out.noteEnds[k].note_id >= 1 && a.out.noteEnds[k].note_id <= 4;
+        check(!stale && hasNoteEnd(a, 11) && hasNoteEnd(a, 12),
+              "no NOTE_END after a reset for the notes it ended; the next notes end");
+    }
+
+    // As a fresh instance: reset and the same state loaded again, or another Performance's state
+    // after this one played; kept loaded and reset with no load (its state unchanged); the host's
+    // takeover (reset, deactivate, load, activate) against a fresh instance loaded before
+    // activation. Every 8th factory patch, and one where what the reset clears would show:
+    // oscillator 1's pitch follows every controller, key and alternating source it clears and a
+    // free-running, tempo-synced voice LFO, played on channel 1 (where MPE left on would change
+    // how the bend applies).
+    std::vector<uint8_t> routed;
+    {
+        HeadlessLayer layer;
+        SurgeStorage::SurgeStorageConfig config;
+        config.suppliedDataPath = SurgeStorage::skipPatchLoadDataPathSentinel;
+        config.createUserDirectory = false;
+        config.scanWavetableAndPatches = false;
+        auto s = std::make_unique<SurgeSynthesizer>(&layer, config);
+        auto &sc = s->storage.getPatch().scene[0];
+        sc.lfo[0].trigmode.val.i = lm_freerun;
+        sc.lfo[0].rate.temposync = true;
+        float depth = 0.02f;
+        for (auto m : {ms_polyaftertouch, ms_aftertouch, ms_breath, ms_expression, ms_sustain,
+                       ms_lowest_key, ms_highest_key, ms_latest_key, ms_alternate_bipolar,
+                       ms_lfo1})
+            s->setModDepth01(sc.osc[0].pitch.id, m, 0, 0, depth += 0.01f);
+        void *data = nullptr;
+        auto size = s->saveRaw(&data);
+        routed.assign((uint8_t *)data, (uint8_t *)data + size);
+    }
+    struct Case
+    {
+        std::string name;
+        std::vector<uint8_t> patch, other;
+        int16_t channel;
+    };
+    std::vector<Case> cases;
+    for (size_t i = 0; i < patches.size(); i += 8)
+        cases.push_back({patches[i], patchFromFxp(patches[i]),
+                         patchFromFxp(patches[(i * 7 + 13) % patches.size()]), 0});
+    cases.push_back({"routed", routed, patchFromFxp(patches[0]), 1});
+    int compared = 0;
+    for (auto &c : cases)
+    {
+        const auto &x = c.patch;
+        const auto ch = c.channel;
+        Instance f;
+        if (!f.load(x))
+            continue;
+        auto fresh = f.render(frames, 64, incoming(ch, 11), false);
+        Instance g;
+        g.plugin->stop_processing(g.plugin);
+        g.plugin->deactivate(g.plugin);
+        g.load(x);
+        g.activate(48000);
+        auto freshLoadedFirst = g.render(frames, 64, incoming(ch, 11), false);
+        for (int way = 0; way < 4; ++way)
+        {
+            Instance a;
+            if (!a.load(way == 1 ? c.other : x))
+                a.load(x);
+            a.render(25000, 64, busy(ch), false); // not a whole beat at 120 BPM
+            const auto before = a.save();
+            reset(a);
+            if (way == 3)
+            {
+                a.plugin->stop_processing(a.plugin);
+                a.plugin->deactivate(a.plugin);
+            }
+            if (way != 2)
+                a.load(x);
+            if (way == 3)
+                a.activate(48000);
+            // with no load it keeps its state (which holds the mod wheel's position)
+            std::vector<float> kept;
+            if (way == 2)
+            {
+                check(a.save() == before, "a reset leaves the state as it was: " + c.name);
+                Instance k;
+                k.load(before);
+                kept = k.render(frames, 64, incoming(ch, 11), false);
+            }
+            auto y = a.render(frames, 64, at(incoming(ch, 11), a.position), false);
+            static const char *ways[] = {"the same state loaded again", "after another state",
+                                         "no load", "deactivated, loaded and activated"};
+            check(y == (way == 3 ? freshLoadedFirst : way == 2 ? kept : fresh),
+                  std::string("after a reset, ") + ways[way] + ", it renders as a fresh "
+                  "instance: " + c.name);
+        }
+        ++compared;
+    }
+    check(compared > 50, "patches compared after a reset: " + std::to_string(compared));
+
+    // Every sound: two prepared presets on channels 1 and 2, the first then taken off channel 1
+    // while its notes ring on; after a reset the instance plays as one that never played.
+    {
+        std::string p1 = patches[patches.size() / 3], p2 = patches[2 * patches.size() / 3];
+        auto prepare = [&](Instance &a, Sounds &s) {
+            auto id1 = s.preset(p1), id2 = s.preset(p2);
+            check(id1 != CLAP_INVALID_ID && id2 != CLAP_INVALID_ID &&
+                      s.x->select(a.plugin, id1, 1) && s.x->select(a.plugin, id2, 2),
+                  "two presets prepared and selected");
+            return id2;
+        };
+        Instance a, b;
+        Sounds sa(a), sb(b);
+        auto a2 = prepare(a, sa);
+        std::vector<Event> ev;
+        for (int16_t ch : {0, 1, 2})
+            for (auto e : busy(ch))
+            {
+                // the mod wheel's position is the sound's state, which a reset keeps (above)
+                const auto &d = e.midi.data;
+                if (e.header.type == CLAP_EVENT_MIDI && (d[0] & 0xF0) == 0xB0 && d[1] == 1)
+                    continue;
+                if (e.header.type != CLAP_EVENT_MIDI)
+                    e.note.note_id += ch * 100;
+                ev.push_back(e);
+            }
+        a.render(12000, 64, ev, false);
+        sa.x->select(a.plugin, a2, 1);
+        a.render(12000, 64, {}, false);
+        reset(a);
+        sb.x->select(b.plugin, prepare(b, sb), 1);
+        std::vector<Event> after;
+        for (int16_t ch : {0, 1, 2})
+            for (auto e : incoming(ch, 11 + 10 * ch))
+                after.push_back(e);
+        auto x = a.render(frames, 64, at(after, a.position));
+        auto y = b.render(frames, 64, after);
+        check(rms(y, 4800, 24000) > 1e-3 && x == y,
+              "after a reset every sound plays as in an instance that never played");
+    }
+    // A sound silent and selected by no channel at the reset (which the main thread may be
+    // using, so it is cleared when next selected) plays as one that never played.
+    {
+        auto idle = [](Instance &a, Sounds &s) {
+            char message[256] = "";
+            auto id = s.x->prepare(a.plugin, "idle", nullptr, 0, nullptr, nullptr, message,
+                                   sizeof(message));
+            check(id != CLAP_INVALID_ID && s.x->select(a.plugin, id, 3),
+                  std::string("a sound prepared and selected: ") + message);
+            return id;
+        };
+        Instance a, b;
+        Sounds sa(a), sb(b);
+        auto id = idle(a, sa);
+        auto off = noteEvent(4800, CLAP_EVENT_NOTE_OFF, 1, 48, 0);
+        off.note.channel = 3;
+        a.render(9600, 64,
+                 {noteOn(0, 1, 3, 48, 0.8), midiEvent(100, 0xE3, 0x7F, 0x7F),
+                  midiEvent(200, 0xD3, 90, 0), off},
+                 false);
+        sa.x->select(a.plugin, 0, 3);
+        a.render(2 * 48000, 64, {}, false); // it goes quiet and is unpinned
+        reset(a);
+        sa.x->select(a.plugin, id, 3);
+        idle(b, sb);
+        auto x = a.render(frames, 64, at(incoming(3, 11), a.position));
+        auto y = b.render(frames, 64, incoming(3, 11));
+        check(rms(y, 4800, 24000) > 1e-3 && x == y,
+              "after a reset a sound idle at the reset plays as in an instance that never played");
+    }
+}
+
 int main(int argc, char **argv)
 {
     std::string dir = argc > 1 ? argv[1] : SURGE_FACTORY_PATCHES;
@@ -3059,6 +3293,7 @@ int main(int argc, char **argv)
         run("presets", [&] { testPresets(dir); });
         run("sound contexts", [&] { testSoundContexts(patches); });
         run("voice budget", [] { testVoiceBudget(); });
+        run("reset", [&] { testReset(patches); });
         run("first block after a load", [] { testFirstBlockAfterLoad(); });
         run("unison against the reference", [] { testUnisonAgainstReference(); });
         run("drift against the reference", [] { testDriftAgainstReference(); });
