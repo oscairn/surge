@@ -153,9 +153,10 @@ bool readFxp(const char *path, std::vector<uint8_t> *data)
 
 // --- sound contexts -----------------------------------------------------------------------
 
-// Every prepared sound is a whole Surge synthesizer, about 32.3 MiB each at any rate (measured on
-// macOS: 32.32 / 32.21 / 32.22 MiB at 44.1 / 96 / 192 kHz; the SurgeSynthesizer object alone is
-// 19.6 MiB), so a few are sensible: 8 with the default sound, 288 MiB declared at most.
+// Every prepared sound is a whole Surge synthesizer, about 32 MiB each at any rate (the median of
+// three preparations on macOS: 32.1-34.2 MiB at 44.1, 96 and 192 kHz; the SurgeSynthesizer
+// object alone is 19.6 MiB), so a few are sensible: 8 with the default sound, 288 MiB declared at
+// most.
 constexpr uint32_t contextCapacity = 8;
 constexpr size_t voiceCapacity = 256; // notes held or sounding, every sound together
 
@@ -1151,8 +1152,9 @@ struct Plugin : oscairn::contexts::Engine<Plugin, Voice, Patch, contextCapacity,
                             std::memory_order_relaxed);
     }
 
-    // oscairn.memory: what one synthesizer holds, a sound each (36 MiB: the 32.3 MiB measured and
-    // room for a patch's wavetables; the tests keep it within 25 % above the measurement).
+    // oscairn.memory: what one synthesizer holds, a sound each (36 MiB: single preparations
+    // measured 28.7-34.3 MiB on macOS, 31.3 on Linux; the tests keep it at or above the median of
+    // three preparations and within 25 % of it).
     static uint64_t synthBytes() { return uint64_t(36) << 20; }
     uint32_t sounds() const
     {

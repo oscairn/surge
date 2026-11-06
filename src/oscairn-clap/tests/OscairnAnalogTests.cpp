@@ -2584,13 +2584,23 @@ static void testSoundContexts(const std::vector<std::string> &patches)
             a.plugin->get_extension(a.plugin, OSCAIRN_EXT_MEMORY));
         oscairn_memory_t before{}, after{};
         check(mem && mem->current(a.plugin, &before), "oscairn.memory");
-        auto heap = heapInUse();
-        s.preset(path);
-        auto used = heapInUse() - heap;
-        mem->current(a.plugin, &after);
-        std::printf("  sound contexts: preparing a sound at %g Hz allocates %.2f MiB, declared "
-                    "%.2f MiB\n",
-                    rate, used / 1048576.0, before.context_bytes / 1048576.0);
+        // The heap's in-use count moves by a few MiB between single preparations (seen: 28.7
+        // to 34.3 MiB), so the median of three.
+        std::vector<double> deltas;
+        for (int k = 0; k < 3; ++k)
+        {
+            auto heap = heapInUse();
+            s.preset(path);
+            deltas.push_back((double)heapInUse() - (double)heap);
+            if (k == 0)
+                mem->current(a.plugin, &after);
+        }
+        std::sort(deltas.begin(), deltas.end());
+        auto used = deltas[1];
+        std::printf("  sound contexts: preparing a sound at %g Hz allocates %.2f MiB (%.2f-%.2f), "
+                    "declared %.2f MiB\n",
+                    rate, used / 1048576.0, deltas[0] / 1048576.0, deltas[2] / 1048576.0,
+                    before.context_bytes / 1048576.0);
         check(before.context_bytes >= used && before.context_bytes < used * 1.25,
               "a sound's declared memory covers what it allocates, within 25 %");
         check(after.shared_bytes == before.shared_bytes + before.context_bytes,
