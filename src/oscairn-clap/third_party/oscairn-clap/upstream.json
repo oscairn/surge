@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/oscairn/oscairn",
   "path": "core/clap-ext",
-  "commit": "eecdee46d5e865889f51a7c4a2c8e80353cd198a",
+  "commit": "2d1424aac1896bb0f968bec79b388ea09e71ed3c",
   "note": "The Oscairn plugin SDK's extension headers (MIT): sound-contexts.h, sound-contexts-plugin.hpp, assets.h and memory.h, unchanged."
 }
