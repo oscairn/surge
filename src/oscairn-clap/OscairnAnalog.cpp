@@ -28,7 +28,8 @@
  *   helper): each prepared sound is a Surge synthesizer of its own; MIDI channels select a
  *   sound for new notes, and a held note stays on the sound it started on. The CLAP state is
  *   the default sound's patch; the sound-context snapshot holds every sound, and a snapshot's
- *   sounds can be prepared beside the playing ones (oscairn.sound-snapshots/draft-1).
+ *   sounds can be prepared beside the playing ones (oscairn.sound-snapshots/draft-2), the
+ *   outgoing ones ringing out into the host's ring-out buffer.
  */
 
 #include "OscairnAnalog.h"
@@ -737,13 +738,23 @@ struct Plugin : oscairn::contexts::Engine<Plugin, Voice, Patch, contextCapacity,
                 renderBlock(s);
                 blockPos = 0;
             }
+            // A retiring sound (selected by no channel, still sounding) goes to the ring-out
+            // buffer when the host gives one (oscairn.sound-snapshots draft 2).
             float l = 0, r = 0;
-            for (auto &sl : slots)
-                if (sl.fresh)
+            for (uint32_t i = 0; i < contextCapacity; ++i)
+            {
+                auto &sl = slots[i];
+                if (!sl.fresh)
+                    continue;
+                if (retiring(i))
                 {
-                    l += sl.synth->output[0][blockPos];
-                    r += sl.synth->output[1][blockPos];
+                    ringOut[0][s] += sl.synth->output[0][blockPos];
+                    ringOut[1][s] += sl.synth->output[1][blockPos];
+                    continue;
                 }
+                l += sl.synth->output[0][blockPos];
+                r += sl.synth->output[1][blockPos];
+            }
             outL[s] = l;
             outR[s] = r;
             ++blockPos;
@@ -1326,7 +1337,8 @@ bool presetLoadFromLocation(const clap_plugin_t *p, uint32_t kind, const char *l
 const clap_plugin_preset_load_t presetLoadExt{presetLoadFromLocation};
 
 const clap_plugin_state_t snapshotExt{Plugin::saveSnapshot, Plugin::loadSnapshot};
-const oscairn_plugin_sound_snapshots_t soundSnapshotsExt{Plugin::prepareSnapshot};
+const oscairn_plugin_sound_snapshots_t soundSnapshotsExt{Plugin::prepareSnapshot,
+                                                        Plugin::setRingOut};
 const oscairn_plugin_sound_contexts_t soundContextsExt{
     Plugin::capacity, Plugin::get,     Plugin::prepare,      Plugin::select,
     Plugin::discard,  &snapshotExt,    Plugin::preparePreset};

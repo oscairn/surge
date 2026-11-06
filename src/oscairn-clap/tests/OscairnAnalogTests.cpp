@@ -245,6 +245,7 @@ struct Instance
     const clap_plugin_audio_ports_t *ports{nullptr};
     const clap_plugin_note_ports_t *notePorts{nullptr};
     uint64_t position{0}; // samples rendered since activation
+    std::function<void(uint32_t)> beforeProcess; // called with each process() call's frames
     OutEvents out;
 
     explicit Instance(double rate = 48000, const clap_host_t *h = &host)
@@ -310,6 +311,8 @@ struct Instance
             pr.audio_outputs_count = 1;
             pr.in_events = &in.in;
             pr.out_events = &out.out;
+            if (beforeProcess)
+                beforeProcess(n);
             forbidAllocation = guard;
             auto status = plugin->process(plugin, &pr);
             forbidAllocation = false;
@@ -2461,6 +2464,81 @@ static void testSoundContexts(const std::vector<std::string> &patches)
             sum = both[i] == held[i] + next[i] || std::fabs(both[i] - held[i] - next[i]) < 1e-9f;
         check(sum, "a note held across a snapshot switch keeps its sound; the next note takes the "
                    "incoming one");
+    }
+    // Draft 2's ring-out: with a ring-out buffer before every process() call, the outgoing sound
+    // (the held note) plays there, and the main output holds only the incoming sound.
+    {
+        auto run = [&](bool first, bool second, bool ringOut, std::vector<float> *ring) {
+            Instance a;
+            Sounds s(a);
+            auto snaps = static_cast<const oscairn_plugin_sound_snapshots_t *>(
+                a.plugin->get_extension(a.plugin, OSCAIRN_EXT_SOUND_SNAPSHOTS));
+            // the buffer stays valid through the process() call, as the host keeps it
+            std::vector<float> rl(512), rr(512);
+            float *ch[2] = {rl.data(), rr.data()};
+            clap_audio_buffer_t b{};
+            b.data32 = ch;
+            b.channel_count = 2;
+            if (ringOut)
+                a.beforeProcess = [&](uint32_t) {
+                    std::fill(rl.begin(), rl.end(), 0.f);
+                    std::fill(rr.begin(), rr.end(), 0.f);
+                    snaps->ring_out(a.plugin, &b);
+                };
+            std::vector<float> out;
+            auto add = [&](std::vector<float> v) { out.insert(out.end(), v.begin(), v.end()); };
+            add(a.render(9600, 512,
+                         first ? std::vector<Event>{noteEvent(0, CLAP_EVENT_NOTE_ON, 1, 60, 0.8)}
+                               : std::vector<Event>{},
+                         false));
+            if (second)
+            {
+                uint32_t ids[16];
+                s.prepareSnapshot(incoming, ids);
+                for (int16_t ch = 0; ch < 16; ++ch)
+                    s.x->select(a.plugin, ids[ch], ch);
+            }
+            std::vector<Event> ev;
+            if (first)
+                ev.push_back(noteEvent(30000, CLAP_EVENT_NOTE_OFF, 1, 60, 0));
+            if (second)
+            {
+                ev.push_back(noteEvent(14400, CLAP_EVENT_NOTE_ON, 2, 67, 0.8));
+                ev.push_back(noteEvent(30000, CLAP_EVENT_NOTE_OFF, 2, 67, 0));
+            }
+            // one block at a time, so the ring-out buffer can be read after each call
+            for (uint32_t done = 0; done < 96000 - 9600; done += 480)
+            {
+                std::vector<Event> now;
+                for (auto e : ev)
+                    if (e.time >= done + 9600 && e.time < done + 9600 + 480)
+                        now.push_back(e);
+                add(a.render(480, 512, now, false));
+                if (ring)
+                    for (uint32_t k = 0; k < 480; ++k)
+                    {
+                        ring->push_back(ringOut ? rl[k] : 0);
+                        ring->push_back(ringOut ? rr[k] : 0);
+                    }
+            }
+            return out;
+        };
+        std::vector<float> ring;
+        auto main = run(true, true, true, &ring);
+        auto held = run(true, false, false, nullptr), next = run(false, true, false, nullptr);
+        bool ok = main.size() == held.size() && main.size() == next.size() &&
+                  ring.size() + 2 * 9600 == held.size();
+        float ringPeak = 0;
+        for (size_t i = 0; ok && i < main.size(); ++i)
+        {
+            const size_t r = i - 2 * 9600; // ring holds the frames after the switch
+            const float rv = i >= 2 * 9600 ? ring[r] : 0;
+            ok = (i < 2 * 9600 ? main[i] == held[i] + next[i] : main[i] == next[i]) &&
+                 (i < 2 * 9600 || rv == held[i] || std::fabs(rv - held[i]) < 1e-9f);
+            ringPeak = std::max(ringPeak, std::fabs(rv));
+        }
+        check(ok && ringPeak > 1e-3f, "with a ring-out buffer the outgoing sound rings out there and "
+                                      "the main output holds the incoming one");
     }
     // Too few free contexts: refused, nothing added.
     {
