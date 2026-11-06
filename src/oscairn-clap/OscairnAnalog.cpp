@@ -27,7 +27,8 @@
  * - Oscairn's native sound contexts (oscairn.sound-contexts/draft-5, with the Oscairn SDK's
  *   helper): each prepared sound is a Surge synthesizer of its own; MIDI channels select a
  *   sound for new notes, and a held note stays on the sound it started on. The CLAP state is
- *   the default sound's patch; the sound-context snapshot holds every sound.
+ *   the default sound's patch; the sound-context snapshot holds every sound, and a snapshot's
+ *   sounds can be prepared beside the playing ones (oscairn.sound-snapshots/draft-1).
  */
 
 #include "OscairnAnalog.h"
@@ -171,6 +172,9 @@ struct Voice : oscairn::contexts::VoiceBase
 struct Patch
 {
     std::vector<uint8_t> state;
+    // A snapshot's sound, built while reading it (main thread, beside whatever plays), installed
+    // when the sound is published or the snapshot loaded.
+    std::unique_ptr<SurgeSynthesizer> built;
 };
 
 // The synthesizer of a sound context slot. The audio thread touches it only while the slot is
@@ -181,7 +185,8 @@ struct Slot
     SurgeSynthesizer *synth{nullptr};
     std::unique_ptr<SurgeSynthesizer> owned; // slots 1 up; slot 0 plays Plugin::synth
     bool ringing{false}; // audio: pinned while it may still sound
-    bool silent{false};  // audio: no voice and no waiting note after its last block
+    bool silent{false};  // audio: quiet after its last block (see renderBlock)
+    uint32_t quietBlocks{0}; // audio: blocks in a row without voices, under -120 dB
     bool fresh{false};   // audio: rendered the current block, which pins it
 };
 
@@ -448,6 +453,7 @@ struct Plugin : oscairn::contexts::Engine<Plugin, Voice, Patch, contextCapacity,
     {
         auto &sl = slots[slot];
         sl.silent = false;
+        sl.quietBlocks = 0;
         if (sl.ringing)
             return;
         sl.ringing = true;
@@ -694,9 +700,17 @@ struct Plugin : oscairn::contexts::Engine<Plugin, Voice, Patch, contextCapacity,
                         finishVoice(v);
                         break;
                     }
-            sl.silent = sy.voices[0].empty() && sy.voices[1].empty() && !sy.delayedNoteCount;
+            const bool voiceless =
+                sy.voices[0].empty() && sy.voices[1].empty() && !sy.delayedNoteCount;
+            // Quiet: no voice and no waiting note, and the output (the scene's filters ring on
+            // after the last voice) exactly zero for a block, or under -120 dB for a second.
+            float peak = 0;
+            for (int k = 0; k < BLOCK_SIZE; ++k)
+                peak = std::max({peak, std::fabs(sy.output[0][k]), std::fabs(sy.output[1][k])});
+            sl.quietBlocks = voiceless && peak < 1e-6f ? sl.quietBlocks + 1 : 0;
+            sl.silent = voiceless && (peak == 0 || sl.quietBlocks * BLOCK_SIZE >= sampleRate);
             // Released notes whose voices are all gone end, if the synthesizer didn't say so.
-            if (sl.silent)
+            if (voiceless)
                 for (auto &v : voices)
                     if (v.active && v.context == i && !v.held)
                     {
@@ -1036,8 +1050,15 @@ struct Plugin : oscairn::contexts::Engine<Plugin, Voice, Patch, contextCapacity,
         }
         return true;
     }
+    // A preset's sound, or a snapshot's (oscairn.sound-snapshots), already built by readPatch.
+    // Nothing is shared between sounds: each synthesizer has its own tables.
     bool buildPreset(Context &c, std::string &error)
     {
+        if (c.patch.built)
+        {
+            install(c, std::move(c.patch.built));
+            return true;
+        }
         auto synth = makeSynth();
         if (!loadPatchInto(*synth, c.patch.state))
         {
@@ -1073,13 +1094,9 @@ struct Plugin : oscairn::contexts::Engine<Plugin, Voice, Patch, contextCapacity,
         return !patch.state.empty();
     }
     // Reading a sound builds its synthesizer, so a patch that would be refused refuses the
-    // whole snapshot before anything changes; restored() installs them.
-    std::vector<std::unique_ptr<SurgeSynthesizer>> loadingSynths;
-    void snapshotLoading(bool starting)
-    {
-        quiet = starting;
-        loadingSynths.clear();
-    }
+    // whole snapshot before anything changes; restored() or buildPreset installs it. It touches
+    // only the new synthesizer, so it can run while the plugin renders (prepareSnapshot).
+    void snapshotLoading(bool starting) { quiet = starting; }
     bool readPatch(std::istream &in, Patch &patch)
     {
         std::string text;
@@ -1099,12 +1116,11 @@ struct Plugin : oscairn::contexts::Engine<Plugin, Voice, Patch, contextCapacity,
         auto synth = makeSynth();
         if (!loadPatchInto(*synth, patch.state))
             return false;
-        loadingSynths.push_back(std::move(synth));
+        patch.built = std::move(synth);
         return true;
     }
     void restored()
     {
-        size_t next = 0;
         for (uint32_t i = 0; i < contextCapacity; ++i)
         {
             auto &c = contexts[i];
@@ -1116,7 +1132,6 @@ struct Plugin : oscairn::contexts::Engine<Plugin, Voice, Patch, contextCapacity,
                 sl.owned.reset();
                 continue;
             }
-            auto built = std::move(loadingSynths[next++]);
             if (i == 0)
             {
                 // The default sound keeps its synthesizer, which the parameters point into.
@@ -1126,7 +1141,7 @@ struct Plugin : oscairn::contexts::Engine<Plugin, Voice, Patch, contextCapacity,
             }
             else
             {
-                sl.owned = std::move(built);
+                sl.owned = std::move(c.patch.built);
                 sl.synth = sl.owned.get();
             }
             c.patch = {};
@@ -1309,6 +1324,7 @@ bool presetLoadFromLocation(const clap_plugin_t *p, uint32_t kind, const char *l
 const clap_plugin_preset_load_t presetLoadExt{presetLoadFromLocation};
 
 const clap_plugin_state_t snapshotExt{Plugin::saveSnapshot, Plugin::loadSnapshot};
+const oscairn_plugin_sound_snapshots_t soundSnapshotsExt{Plugin::prepareSnapshot};
 const oscairn_plugin_sound_contexts_t soundContextsExt{
     Plugin::capacity, Plugin::get,     Plugin::prepare,      Plugin::select,
     Plugin::discard,  &snapshotExt,    Plugin::preparePreset};
@@ -1501,6 +1517,8 @@ const void *pluginGetExtension(const clap_plugin_t *, const char *id)
         return &presetLoadExt;
     if (!std::strcmp(id, OSCAIRN_EXT_SOUND_CONTEXTS))
         return &soundContextsExt;
+    if (!std::strcmp(id, OSCAIRN_EXT_SOUND_SNAPSHOTS))
+        return &soundSnapshotsExt;
     if (!std::strcmp(id, OSCAIRN_EXT_MEMORY))
         return &memoryExt;
     return nullptr;

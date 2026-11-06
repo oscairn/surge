@@ -2218,6 +2218,40 @@ struct Sounds
                           }};
         return x->state->load(a.plugin, &is);
     }
+    // oscairn.sound-snapshots: a snapshot's sounds prepared beside the playing ones.
+    bool prepareSnapshot(const std::vector<uint8_t> &bytes, uint32_t (&ids)[16],
+                         std::string *why = nullptr)
+    {
+        auto snaps = static_cast<const oscairn_plugin_sound_snapshots_t *>(
+            a.plugin->get_extension(a.plugin, OSCAIRN_EXT_SOUND_SNAPSHOTS));
+        if (!snaps)
+            throw std::runtime_error("no sound snapshots");
+        struct Reader
+        {
+            const std::vector<uint8_t> *bytes;
+            size_t at;
+        } r{&bytes, 0};
+        clap_istream_t is{&r, [](const clap_istream_t *s, void *b, uint64_t n) {
+                              auto rd = static_cast<Reader *>(s->ctx);
+                              n = std::min<uint64_t>({n, 1000, rd->bytes->size() - rd->at});
+                              std::memcpy(b, rd->bytes->data() + rd->at, n);
+                              rd->at += n;
+                              return (int64_t)n;
+                          }};
+        char message[256] = "";
+        bool ok = snaps->prepare(a.plugin, &is, ids, message, sizeof(message));
+        if (why)
+            *why = message;
+        return ok;
+    }
+    uint32_t prepared()
+    {
+        uint32_t n = 0;
+        oscairn_sound_context_info_t info;
+        for (uint32_t k = 0; k < x->capacity(a.plugin); ++k)
+            n += x->get(a.plugin, k, &info);
+        return n;
+    }
 };
 
 // Native sound contexts: a prepared sound renders exactly as loading its patch does; a note
@@ -2354,6 +2388,92 @@ static void testSoundContexts(const std::vector<std::string> &patches)
         check(!t.restore(broken) && t.snapshot() == snap,
               "a damaged snapshot is refused and changes nothing");
     }
+    // oscairn.sound-snapshots: the next Performance's sounds prepared beside the playing ones
+    // and selected at the cue. The incoming snapshot: its default sound a factory patch loaded
+    // as state, and the preset sound selected on channel 3.
+    std::vector<uint8_t> incoming;
+    {
+        Instance b;
+        Sounds t(b);
+        check(b.load(patchFromFxp(patches[0])), "the incoming default patch loads");
+        t.x->select(b.plugin, t.preset(path), 3);
+        incoming = t.snapshot();
+    }
+    std::vector<Event> snapNotes{noteEvent(0, CLAP_EVENT_NOTE_ON, 1, 60, 0.8),
+                                 noteEvent(10, CLAP_EVENT_NOTE_ON, 2, 62, 0.8),
+                                 noteEvent(24000, CLAP_EVENT_NOTE_OFF, 1, 60, 0),
+                                 noteEvent(24000, CLAP_EVENT_NOTE_OFF, 2, 62, 0)};
+    snapNotes[1].note.channel = snapNotes[3].note.channel = 3;
+    {
+        Instance a, c;
+        Sounds s(a), u(c);
+        uint32_t ids[16];
+        auto t0 = std::chrono::steady_clock::now();
+        std::string why;
+        bool ok = s.prepareSnapshot(incoming, ids, &why);
+        auto ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0)
+                      .count();
+        std::printf("  sound snapshots: two sounds prepared beside the playing one in %.1f ms\n",
+                    ms);
+        check(ok && s.prepared() == 3, "a snapshot's two sounds are prepared beside: " + why);
+        check(ids[0] != 0 && ids[3] != ids[0] && ids[3] != CLAP_INVALID_ID,
+              "each channel gets the new sound it selects in the snapshot");
+        for (int16_t ch = 0; ch < 16; ++ch)
+            s.x->select(a.plugin, ids[ch], ch);
+        check(u.restore(incoming), "the snapshot loads in another instance");
+        check(a.render(frames, 512, snapNotes, false) == c.render(frames, 512, snapNotes, false),
+              "the prepared snapshot plays as the snapshot loaded");
+    }
+    // A note held across the switch keeps the outgoing sound; the next note takes the incoming.
+    {
+        auto run = [&](bool first, bool second) {
+            Instance a;
+            Sounds s(a);
+            std::vector<float> out;
+            auto add = [&](std::vector<float> v) { out.insert(out.end(), v.begin(), v.end()); };
+            add(a.render(9600, 512,
+                         first ? std::vector<Event>{noteEvent(0, CLAP_EVENT_NOTE_ON, 1, 60, 0.8)}
+                               : std::vector<Event>{},
+                         false));
+            if (second)
+            {
+                uint32_t ids[16];
+                s.prepareSnapshot(incoming, ids);
+                for (int16_t ch = 0; ch < 16; ++ch)
+                    s.x->select(a.plugin, ids[ch], ch);
+            }
+            std::vector<Event> ev;
+            if (first)
+                ev.push_back(noteEvent(30000, CLAP_EVENT_NOTE_OFF, 1, 60, 0));
+            if (second)
+            {
+                ev.push_back(noteEvent(14400, CLAP_EVENT_NOTE_ON, 2, 67, 0.8));
+                ev.push_back(noteEvent(30000, CLAP_EVENT_NOTE_OFF, 2, 67, 0));
+            }
+            add(a.render(96000 - 9600, 512, ev, false));
+            return out;
+        };
+        auto both = run(true, true), held = run(true, false), next = run(false, true);
+        bool sum = both.size() == held.size() && both.size() == next.size();
+        // exactly, but for what the outgoing sound still rings below -120 dB a second after its
+        // last voice, when it stops rendering (here under 1e-9)
+        for (size_t i = 0; sum && i < both.size(); ++i)
+            sum = both[i] == held[i] + next[i] || std::fabs(both[i] - held[i] - next[i]) < 1e-9f;
+        check(sum, "a note held across a snapshot switch keeps its sound; the next note takes the "
+                   "incoming one");
+    }
+    // Too few free contexts: refused, nothing added.
+    {
+        Instance a;
+        Sounds s(a);
+        for (int i = 0; i < 6; ++i)
+            s.preset(path);
+        uint32_t ids[16];
+        std::string why;
+        check(s.prepared() == 7 && !s.prepareSnapshot(incoming, ids, &why) && !why.empty() &&
+                  s.prepared() == 7,
+              "a snapshot needing more contexts than are free is refused, nothing added: " + why);
+    }
     // Discard, capacity and refused presets.
     {
         Instance a;
@@ -2428,6 +2548,13 @@ static void testSoundContexts(const std::vector<std::string> &patches)
             oscairn_sound_context_info_t info;
             for (uint32_t k = 0; k < 8; ++k)
                 s.x->get(a.plugin, k, &info);
+            if (i % 6 == 5)
+            {
+                uint32_t snapIds[16];
+                if (s.prepareSnapshot(incoming, snapIds))
+                    for (auto d : {snapIds[0], snapIds[3]})
+                        ids.push_back(d);
+            }
             s.x->select(a.plugin, 0, (int16_t)((i + 2) % 4));
             ids.erase(std::remove_if(ids.begin(), ids.end(),
                                      [&](uint32_t d) { return s.x->discard(a.plugin, d); }),
