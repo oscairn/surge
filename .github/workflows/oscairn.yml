@@ -49,7 +49,9 @@ jobs:
       - name: Build
         run: cmake --build build --target oscairn-analog oscairn-analog-tests
       - name: Test
-        timeout-minutes: 60 # the ASan run takes about 31 minutes on the ARM64 runner
+        # The ASan run took 31 minutes on the ARM64 runner with the fourth session's tests; the
+        # thirteenth session's takes 77-100 minutes in the local Docker substitute.
+        timeout-minutes: 180
         env:
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
           TSAN_OPTIONS: halt_on_error=1
