@@ -955,7 +955,7 @@ fitted from):
 | Amp level | `a_vca_level` | 56-511 (below: under -63 dB, clamped) | 57 of 57 within 0.1 dB | yes |
 | LFO speed | `a_lfo0_rate` | 18-380 | 46 of 46 within 2 % (242 re-recorded: 0.47 %) | yes |
 | Amp EG attack | `a_env1_attack` | 100-255 | 17 of 17 (third session, with the longer range) | yes |
-| Amp EG decay | `a_env1_decay` | 100-255 | 17 of 17 | yes |
+| Amp EG decay | `a_env1_decay` | 72-255 (72-95 from averaged probes, thirteenth session) | 17 of 17; below 100, 2 of 2 averaged checks within 2.5 % or 2 ms | yes |
 | Amp EG release | `a_env1_release` | 112-255 | 16 of 16 (108: 8.4 % off, outside) | yes |
 | Cutoff, LPF24 | `a_filter1_cutoff` (LP 24 dB, resonance 0.06) | 320-1004 (note 24 below 384, note 36 from there) | Third session: fitted from every 8th index plus the first index after each kink, pieces between kinks interpolated separately: 154 of 154 within 50 cents, 51 of them next to kinks (median 3 cents at note 36, 7 at note 24; largest 20 and 35) | yes |
 | Cutoff, LPF18 / LPF12 / LPF6 | Legacy Ladder 18 / 12 / 6 dB | 384-992 / 384-992 / 384-944 | LPF24 shape plus a smooth difference from a step-32 sweep; 19 of 19 / 24 of 24 (fourth session, with probes at 936-960; before: 18 of 19, 944 143 cents off) / 18 of 19 (976: 50.4 cents) | yes, the valid spans |
@@ -2428,6 +2428,288 @@ submodules): `surge-testrunner` 211 passed, 1 skipped (`84cac66`) and 212 passed
 (675 s) builds with no reports. Linux in Docker (local substitute) on `0165817`: standard (1071 s of tests), ASan/UBSan (3794 s) and
 TSan (459 s) all passed, exit 0, no sanitizer reports.
 
+**Thirteenth session (2026-11-05): HPF24 with HP 24 dB Clean tried and not applied; the decay
+table from index 72; CLAP presets; self sync and the wave shaper measured.**
+
+GitHub Actions stayed disabled (CI on oscairn/surge is down); Linux checks ran in the local
+Docker substitute. No new reference batches (the recorder was not used). The twelfth session's
+Driven tooling and diffs were no longer in the scratch area; the tooling below was rebuilt.
+
+*HPF24 with HP 24 dB Clean* (Jacob's decision: try type 5, subtype 2; nothing committed). Clean's
+resonance does nothing below about 0.65 (its damping is capped at Q 0.5), so resonance 0.05 was
+kept; fits at 0, 0.1 and 0.15 gave the same table within 0.3 cents. Cutoff table: engine sweep
+`surge/cut5c` (note 36, -48 to 68 semitones in quarter steps; silent above 68), fitted like the
+state-variable table (LPF24 shape plus a smooth difference) from -47 dB, with the twelfth
+session's break at index 475 (where the reference's fundamental leaves the shape measure's 40 dB
+range) and the closest non-decreasing curve (two new `fit.py` options, kept as a patch, not
+committed since the switch wasn't applied): 24 of 25 measurement-side checks pass, 560 fails
+(-57 cents; without the break 464 fails too, -135). Saturator offset by the tenth session's rule:
+at its index 0 (-46.06) Clean passes a sine at note 60 1.50 dB louder than the state-variable
+filter at its index 0, so -42.52 -> -44.02 dB; every filter saturator check passes with it at
+every rate. Rate match refitted for Clean (`oscairn-analog-rate-match`, clamp 75, its frequency
+bound): it is linear, so engine against engine it matches to within 0.015 dB up to cutoff 67 at 48
+and 96 kHz and 0.10 dB at 192 kHz (unmatched 0.03-1.35 dB). The plugin's checks with the print-only
+exclusion removed (every index gated at every rate), best match from the table in cents,
+state-variable filter (as committed) / Clean; 938 and up at rates above 48 kHz were print-only
+before:
+
+| Index | 44.1 kHz | 48 kHz | 88.2 kHz | 96 kHz | 176.4 kHz | 192 kHz |
+|---|---|---|---|---|---|---|
+| 368 | - / +15 | - / +18 | - / +25 | - / +23 | - / -25 | - / -25 |
+| 400 | +0 / +6 | +0 / +7 | +0 / +5 | +0 / +5 | +0 / +26 | +0 / +25 |
+| 432 | +0 / +3 | +0 / +2 | +0 / +10 | +0 / +6 | +0 / +0 | +0 / +1 |
+| 464 | +20 / -14 | +20 / -12 | +21 / -11 | +20 / -13 | +21 / -20 | +21 / -9 |
+| 496 | +2 / +8 | +2 / +10 | +2 / +19 | +2 / +22 | +3 / +33 | +3 / +42 |
+| 528 | +1 / +16 | +1 / +18 | +1 / +18 | +1 / +18 | +1 / +20 | +1 / +22 |
+| 560 | +7 / +61 | +7 / +64 | +7 / +67 | +7 / +64 | +7 / +95 | +7 / +74 |
+| 592 | +0 / -12 | +0 / -10 | +0 / -8 | +0 / -8 | +1 / -3 | +0 / -2 |
+| 624 | -5 / -34 | -5 / -32 | -4 / -31 | -4 / -31 | -3 / -28 | -4 / -28 |
+| 656 | +1 / +23 | +1 / +25 | +2 / +25 | +1 / +25 | +2 / +25 | +1 / +25 |
+| 688 | +2 / +25 | +2 / +26 | +3 / +26 | +2 / +26 | +3 / +27 | +2 / +27 |
+| 720 | +0 / -9 | +0 / -8 | +1 / -7 | +1 / -7 | +1 / -6 | +1 / -6 |
+| 752 | +0 / +8 | +0 / +10 | +1 / +10 | +1 / +10 | +1 / +10 | +0 / +10 |
+| 784 | +4 / +16 | +4 / +18 | +5 / +18 | +4 / +18 | +5 / +19 | +4 / +19 |
+| 816 | +6 / +4 | +7 / +6 | +9 / +7 | +8 / +7 | +9 / +7 | +9 / +7 |
+| 848 | +10 / -5 | +10 / -4 | +12 / -2 | +10 / -3 | +11 / -2 | +10 / -2 |
+| 880 | +1 / +2 | +1 / +4 | +5 / +6 | +4 / +5 | +6 / +6 | +5 / +5 |
+| 912 | +2 / +8 | +3 / +9 | +18 / +12 | +21 / +9 | +26 / +10 | +25 / +9 |
+| 938 | -25 / -16 | -12 / -13 | +117 / -11 | +140 / -15 | +151 / -14 | +151 / -15 |
+| 942 | +18 / +3 | +1 / +4 | +444 / +6 | +454 / +3 | +422 / +3 | +416 / +2 |
+| 944 | +3 / +1 | -6 / +3 | +126 / +5 | +45 / +1 | +36 / +2 | +35 / +1 |
+| 946 | -7 / +4 | -1 / +6 | +1174 / +8 | +251 / +4 | +125 / +4 | +108 / +3 |
+| 950 | -15 / +0 | -27 / +2 | +500 / +4 | +25 / +0 | +25 / +1 | +25 / +0 |
+| 956 | -18 / +2 | -49 / +4 | +284 / +6 | no min / +1 | no min / +3 | no min / +1 |
+| 976 | -25 / +6 | -109 / +8 | +1066 / +14 | no min / +7 | no min / +7 | no min / +5 |
+
+Shape error at the table's cutoff, dB: below index 848 the state-variable filter 0.04-0.46 (44.1
+kHz), Clean 0.09-0.68; from 880 the state-variable filter 0.32-2.52 at 44.1 kHz (up to 3.61 at 192
+kHz), Clean 0.13-0.31 at every rate. Clean passes everything from index 592 up at every rate,
+but fails index 560 at every rate (44.1 kHz too), so per Jacob's rule HPF24 stays on the
+state-variable filter, with its exclusion above 937 at other rates (register entry 1). The
+failure at 560 is the fit, not noise: the reference's best Clean match there sits 0.6 semitone
+above the curve through its neighbours (544 and 576), and the checks are the only renders
+between them. Kept locally: `scripts/gate_type5c.py` (fit and check), `scripts/surge_cut5c.py`
+(sweep), the trial's full diff and the `fit.py` patch (scratch).
+
+*Short envelopes at the 2 ms floor* (`84a8b30`, test only). Jacob's decision: commit the tables
+only where they pass with the 2 ms floor for averaged checks. The averaged probes (fourth
+session: means of 3-8 repeats at note 96, indices 40-96) were refitted against a new engine sweep
+with the reference-matching options on (`surge/egshort_ref`, scene highpass off; the earlier
+sweep had them off, and the analog attack clamp shortens attacks by up to 1 ms there), from 40,
+56, 72, 88 and 96, and checked at 48, 60, 64, 68, 76 and 80. Decay passes at 48, 76 and 80 and
+fails at 60, 64 and 68 (2.4-2.6 ms short); attack passes 6 of 6 at 44.1 and 48 kHz but not at
+88.2-192 kHz; release fails at 68, and its committed table only holds from 112. So only the
+decay table is extended: from index 72 (72-95 from the averaged fit, 96 up unchanged; joins
+monotonically), with averaged checks at 76 and 80 (reference 24.73 and 30.40 ms; engine 25.03
+and 29.03 ms at 44.1 kHz, worst over the six rates 29.02 / 28.84 ms at 176.4 kHz). The test renders
+them at note 96 with the scene highpass off and one-period windows (0.956 ms) and a 2 ms floor;
+with the old table they fail (56 ms engine, seen). The rest is in register entry 13.
+
+*CLAP presets* (`56ebc92`). The plugin has no native sound contexts, so RFC 0005's path for
+pooled instruments: the entry offers `clap.preset-discovery-factory/2` (and its draft-2 ID) with
+one provider, which declares the `.fxp` file type and Surge's factory patch folder (factory
+content) and user patch folder (user content), found as Surge finds its data (a `SurgeStorage`
+built once in `init`, so portable installs and `PIPELINE_OVERRIDE_DATA_HOME` work as in Surge);
+a folder that doesn't exist isn't declared. `get_metadata` checks the file's `.fxp` header only
+(fast, as CLAP asks) and reports one preset named after the file, for `org.oscairn.analog`; a
+file that isn't a Surge patch is an error. `clap.preset-load/2` (and the draft ID) takes a file
+location without a load key, reads the patch data after the `.fxp` header (its size checked
+against the file's) and loads it as a state load does (same refusals, the patch kept on
+refusal); on success it asks the host to rescan parameter values and calls `loaded`, otherwise
+`on_error` with the reason. Surge's third-party patch folder (2920 patches) isn't declared (not
+asked for; one line). Patches the plugin refuses (Formula modulators) are listed, and refused
+when loaded. Tests (`presets`): the provider declares only `.fxp` and the factory folder; a
+crawl of it finds all 641 factory patches and each is listed as one preset named after its file
+for this plugin; a non-patch file is refused with an error; every 8th factory patch loaded with
+preset-load gives the same saved state and the same render (a note, 1 s at 48 kHz) as the same
+patch loaded as state (79 compared; the 2 refused are refused by both and reported, keeping the
+patch); a missing file, a load key and a plugin location are refused. Each check failed with its
+part undone (no discovery factory, no preset-load extension, a wrong preset name, no rescan:
+seen). Oscairn's own scanner (`oscairn-plugin-scan --presets`) on the built plugin lists the 641
+factory patches with `PIPELINE_OVERRIDE_DATA_HOME` pointing at the source tree's data, and none
+on this machine without it (no Surge data installed). The version stays 0.1.1: no sound or
+memory figure changed.
+
+*Native sound contexts and snapshots prepared beside* (`3a8b0ee` vendored headers, `0e9f667`
+contexts, `f063847` headers updated, `5bc3457` snapshots prepared beside, `2593f69` version 0.2.0,
+`d4fc698` memory check as a median, `b66bf6c` headers updated, `d15a237` ring-out, `53a885f`
+draft 3 and the choke of a retiring tail;
+asked by Jacob after the presets, so Performance switches reuse one instance). The plugin
+offers `oscairn.sound-contexts/draft-5` through the Oscairn SDK's MIT helper
+(`sound-contexts-plugin.hpp`, vendored unchanged with `sound-contexts.h`, `assets.h` and
+`memory.h` from oscairn/oscairn `72afff2`, then `eecdee4` for `oscairn.sound-snapshots`,
+`2d1424a` for its draft 2 and `b9e90c7` for draft 3,
+`src/oscairn-clap/third_party/oscairn-clap`, the commit in `upstream.json`), as the sfizz, Octet and setBfree forks do. Not the design in
+section 4 (contexts as scene blocks sharing one voice pool and the storage's tables): each
+sound is a whole Surge synthesizer, which leaves the engine untouched (`[reference]` and every
+existing plugin check unchanged) but costs memory, so the capacity is 8 (the default sound and
+seven prepared). What a sound costs, measured with the allocator's statistics (the heap's in-use
+count around preparing one from a factory patch): about 32 MiB at any rate (macOS: single
+preparations 28.7-34.3 MiB, the median of three 32.1-34.2 MiB at 44.1, 96 and 192 kHz; Linux in
+Docker 31.3 MiB; `sizeof(SurgeSynthesizer)` is 19.6 MiB, and a `SurgeStorage` built alone allocated 8.8
+MiB), so 8 sounds hold about 260 MiB; sharing the storage's tables between
+the synthesizers (section 4's plan) is what would make more sounds sensible. `oscairn.memory` declares 36 MiB a sound (the measurement plus room for a patch's
+wavetables): the default sound as the context, every other prepared sound as shared.
+
+How it works. The helper keeps the slots, the selection queue (applied at the start of each
+process call, before its events), the voices (a note held in a sound), the pins and the
+snapshot. A note keeps the sound its channel selected when it started: it goes to that sound's
+synthesizer under an ID of the plugin's own, and its helper voice ends (`NOTE_END` with the
+host's note ID) when the synthesizer reports that ID ended, or when a released note's
+synthesizer has no voice left. Every pinned synthesizer (selected on a channel, holding a note,
+or still sounding) renders a block at a time from the block phase counted from activation, as
+the single synthesizer did, so events still take effect at the first block boundary at or after
+them; a sound that rings on after its last note stays pinned until a block finds it without
+voices or waiting notes and with its output exactly zero for a block, or under -120 dB for a
+second (Surge removes the last voice while the scene's filters still ring), and gives up the pin
+at the next boundary, before its output stops being read; a block likewise pins what it renders until the next boundary (a selection applied
+mid-block would otherwise unpin a sound whose output the block still reads). The audio thread
+decides what it may touch from what it knows itself (the channels' selections, its voices, its
+tails, the block), never from the pin counts, which the main thread's `select` also raises: the
+first version went by the counts, and TSan found its read of a freshly prepared synthesizer
+racing the main thread's write. MIDI controllers, aftertouch and pitch bend go to the channel's selected sound and
+to the sounds holding the channel's notes; note expressions and polyphonic modulation to the
+notes they name; parameter changes to the sounds selected on the event's channel (all selected
+sounds for channel -1); the parameter values shown are channel 1's sound, refreshed (with
+`PARAM_VALUE` events) after a selection for every channel. A key whose note its synthesizer
+already ended (a mono mode moved the voice to another key) is still released there, so the mono
+modes don't return to it. `prepare` takes parameter values (by ID, in the parameters' units,
+checked against their ranges; no patch text); `prepare_preset` takes a Surge `.fxp` file as
+preset-load does, refusing what a state load refuses. The CLAP state stays the default sound's
+patch (what the converter writes and the library packs); the snapshot holds every sound's patch
+data in hex, a line each, and is validated by building every sound's synthesizer before
+anything changes. `oscairn.sound-snapshots/draft-3` (instant Performance changes, Oscairn
+`347b2fc`, `2d1424a`, `b9e90c7`) is the helper's `prepareSnapshot`, `setRingOut` and
+`chokeRetiring`: every sound of the next Performance's snapshot,
+its Default too, becomes a new context beside the playing ones, all or nothing; reading a
+snapshot's patch builds its synthesizer into the patch, touching nothing a playing sound uses,
+and publishing installs it. Nothing is shared between sounds (each synthesizer has its own
+tables), so a change needs as many free contexts as the snapshot has sounds: with the default
+playing, up to 7. Measured: preparing a two-sound snapshot beside the playing sound takes 25 ms
+(macOS arm64, release build, main thread); the switch itself is the selections, applied at the
+start of the next process call. An outgoing sound refuses `discard` while it holds a voice, a
+tail or the block being rendered (the default sound, ID 0, is never discarded). With `ring_out`,
+while the host gives a ring-out buffer (four channels) for a process() call, every sound
+selected by no channel that still renders (an outgoing Performance's) adds its output to the
+channels the helper's `retiring()` gives (0-1) instead of to the main port. At a second change
+while the first one's tail rings, `choke_retiring` makes the helper choke that sound's voices into
+channels 2-3; the plugin fades the whole sound's output there itself over the choke time (3 ms),
+because its tail outlives its voices (the scene's filters), which would otherwise move to
+channels 0-1 once the last voice ends, and then cuts it (all sound off, its tail's pin given up). A snapshot load or activation ends every note without the synthesizers
+reporting it.
+
+Differences from before, for a single sound: MIDI note-offs on a key held twice release the
+oldest note first (the helper's MIDI dialect; before, both); a choked note's `NOTE_END` comes
+after the helper's 3 ms fade rather than when Surge's voice ends; every note now ends with a
+`NOTE_END`, MIDI notes too (with note ID -1). Known limit: a key released while its sound is no
+longer pinned (its notes ended, its channels moved on) isn't released in that synthesizer, so a
+mono patch prepared again later could remember it; nothing renders it meanwhile.
+
+Tests (`sound contexts`): eight contexts, the default selected on every channel; every 64th
+factory patch prepared with `prepare_preset` and selected on every channel renders exactly as
+the patch loaded as state (refused patches refused by both); a sound prepared from parameter
+values (oscillator 1 pitch +7, amp level -6) renders exactly as those values set, saved and
+loaded; on channel 0, a note held while the channel switches to a prepared sound and a note
+after it render exactly as each alone, summed (the held note stays on the default sound); a
+snapshot with a sound selected on channel 3 loads, round trips byte for byte and plays as the
+saved one, and a damaged one is refused and changes nothing; a selected sound, and one still
+releasing a note, can't be discarded, and can once its note has ended (its `NOTE_END` seen); a
+discarded ID can't be selected; seven sounds beside the default, then a refusal with a reason;
+a preset the plugin refuses (a Formula modulator) isn't prepared; a snapshot's two sounds
+prepared beside the default and selected at the cue play exactly as the snapshot loaded in
+another instance (sounds built from the defaults instead: fails, seen); a note held across a
+snapshot switch keeps the outgoing sound and the next note takes the incoming one (the sum of
+each alone, exactly but for the outgoing sound's last ring below 1e-9 when it stops rendering);
+with a four-channel ring-out buffer before every process() call, the held note plays in channels
+0-1 (as alone, to its last ring below 1e-9) and the main output holds only the incoming sound,
+exactly (fails with the routing undone, seen); at a second change (`choke_retiring`, then the
+selections) the first change's tail fades out in channels 2-3 and is exactly silent there from
+the choke time and two blocks on, while the second change's outgoing sound takes channels 0-1
+exactly as it played before (fails without the plugin's own fade, seen); a snapshot needing more contexts than are free is refused and
+adds nothing; 24 rounds of preparing,
+selecting, discarding and (every sixth) preparing a snapshot while another thread plays notes
+on four channels end with every
+prepared sound discarded (under TSan: the race above, seen with the audio thread going by the pin
+counts); the declared memory covers
+what preparing a sound allocates (the median of three preparations), within 25 %, at 44.1, 96
+and 192 kHz (not in sanitizer
+builds, whose allocator the statistics don't see). Each failed with its part undone (notes always
+to the default synthesizer; releases to the channel's current sound instead of the note's;
+parameter values not applied; snapshot patches not validated; 30 MiB declared: seen). The
+existing plugin checks pass unchanged. `oscairn-plugin-check` (Oscairn `72afff2`) passes in
+the engine and in a worker (`OSCAIRN_PLUGIN_WORKER`, the worker processes seen as its
+children); it plays the plugin as a pooled instrument, not through its contexts.
+
+*Self sync* (time-boxed, measured, not built). One master period of each `m3b` sync probe
+(note 48, averaged over 0.3-0.9 s) against a model, harmonics 1-40, residual against the
+signal: a slave wave whose phase advances at the nominal ratio (2^(25 raw / 1200)) times a
+window g of the master phase, which rises over [0, a], is 1, falls over b and is 0 for a span z
+before the next period, the output g^p times the slave wave, through a one-pole highpass. With
+the ratio fixed at its nominal value: sine raw 24 -38.9 dB (a 0.20, b 0.22, z 0.05, p 1.0), 96
+-25.8; triangle 24 -34.8, 96 -22.4; Saw1 24 -17.0, 48 -6.8, 96 -21.6, 144 -15.0, 192 -16.2; Saw2
+24 -17.0; square 24 -10.1, 96 -7.6 dB. A first fit with the ratio free (amplitude window only, no
+slowing; -3 to -9 dB) found the nominal ratio within 1 % for the triangle at 24, Saw1 at 24-192 and
+the sine at 96 (the sine at 24: 1.53 for 1.41), so the pitch scale is 25 cents a step, and the
+sixth session's odd ratios came from its restart model. The slave doesn't restart: it slows to a stop and restarts. Window
+widths differ between probes (a and b near 0.2 for sines and triangles; the saw and square fits
+are poorer and less certain); more probes (sync amounts between 24 and 96, two notes) are needed
+before a fixed window can be fitted. Not built.
+
+*Wave shaper* (time-boxed, measured, not built). On a sine (`m2b` `ws_sine_*`, note 48), a
+static curve (polynomial of degree 31) of the input fits one period, harmonics 1-40, to -33.7
+(48), -23.7 (80), -20.3 (112) and -19.6 dB (128 at oscillator level 256); with a one-pole
+highpass after the curve at 0.1 x f0 (13 Hz at note 48) -38.0, -36.8, -31.8 and -30.1 dB (0.05
+and 0.2 x f0 both worse). So the shaper is close to a static curve plus a low highpass; whether
+the highpass is fixed in Hz needs probes at another note. Saw2 through the shaper doesn't fit
+this way (-5 to -11 dB; its input isn't a sine). Not built.
+
+*Wave folder above 96 and Hard* (time-boxed). The same static-curve fit with and without the
+highpass on `m2` `wf0_*`/`wf1_*` (harmonics 1-120): Soft 128 improves from -19.1 to -30.7 dB, but
+Soft 64 and 96 and Hard 96 get worse with it, and above 128 both stay -11 to -21 dB (aliasing,
+eleventh session). Not conclusive; nothing changed. *Resonance above 96:* not attempted.
+
+*Converter* (not this repository): HPF24 stays type 5, subtype 0 (HP 24 dB, Standard) at
+resonance 0.05 with the committed table and saturator offset -42.52 dB; nothing to change for it.
+Had Clean been applied: `a_filter1_subtype` 2 (and 2 for filter 2), the new table, and filter
+saturator offset -44.02 dB. Short envelopes: use the committed `ampDecay` values from index 72 (the
+table below 72 holds index 72's value, unchecked); attack and release below 100 and 112 as before.
+Presets and sound contexts need nothing from the converter, but the plugin is now 0.2.0
+(`2593f69`): the converter still writes 0.1.0 for the plugin's nodes.
+
+**Tests run in the thirteenth session.** GitHub Actions stayed down (local substitutes). macOS
+arm64, every commit's tree exported (submodules at their gitlinks) and built from a fresh
+directory, each test binary's hash printed: `surge-testrunner` built with Lua as Surge builds it
+and run from the source tree, 212 passed and 1 skipped, and `[reference]` "Compared 635 patches,
+skipped 6", all passed, on every commit; `oscairn-analog-tests` (with `SURGE_SKIP_LUA`): `84a8b30`
+911 s, `56ebc92` 945 s (ASan/UBSan 144 s, TSan 717 s), `3a8b0ee` 993 s, `0e9f667` 929 s,
+`f063847` **1 failure** (the memory check: one preparation measured 28.71 MiB against 36 MiB
+declared, over 25 %; fixed by `d4fc698`), `5bc3457` 1245 s, `2593f69` 1174 s, `d4fc698` 2329 s,
+`b66bf6c` 1950 s, `d15a237` 2470 s, `53a885f` 3638 s (ASan/UBSan 238 s, TSan 1017 s); the times
+grew with other sessions' builds running beside. Every sanitizer run had 0 reports. From
+`3a8b0ee` on, `oscairn-plugin-check` (Oscairn's build at the time) passed on each fresh build in
+the engine and in a worker. The `84a8b30` and `56ebc92` testrunner runs were first started
+from the build directory without Lua (wrong; they failed to find their data and the
+Lua-dependent Formula patches) and then run again as above, which is what is reported.
+Docker Linux (standard; exit 0, "all passed", 0 sanitizer reports): `84a8b30` 968 s, `56ebc92`
+1032 s, `3a8b0ee` 1176 s, `0e9f667` 1105 s, `f063847` 1396 s, `5bc3457` 1269 s, `2593f69` 1489
+s, `d4fc698` 1249 s, `b66bf6c` 1690 s, `d15a237` 1513 s, `53a885f` 1699 s; ASan/UBSan and TSan on
+`56ebc92` (4647 s, 605 s) and on `53a885f`, the head (5968 s, 838 s). On Linux a sound measured
+31.3 MiB. Commits whose trees were later rewritten before any push (contexts and version
+commits made and remade while the snapshots, the block pin and the memory comment were fixed)
+were never gated and don't exist on the branch. The measurement repository was not changed.
+
+**Where this stopped** (thirteenth session). HPF24 stays on the state-variable HP 24 dB: Clean
+passes everything but index 560 (at every rate), Driven fails above 48 kHz; a decision for Jacob
+again (register entry 1). The amp EG decay table holds from index 72; attack and release below
+100 and 112 don't pass with the 2 ms floor (entry 13). The plugin lists Surge's factory and user
+patches through CLAP preset discovery and loads them with preset-load, and offers native sound
+contexts (up to 8 sounds, a synthesizer each, 36 MiB declared a sound) with snapshots prepared
+beside for instant Performance changes. Self sync and the wave
+shaper have measured models (a slowing slave, a static curve plus a low highpass), not built.
+Next: Jacob's HPF24 decision; self sync probes between raw 24 and 96 at two notes, and shaper
+probes at another note, to fix the window and highpass; resonance above 96 (a new filter);
+sharing the storage's tables between the sounds' synthesizers if more sounds are wanted.
+
 **Where this stopped** (twelfth session). HPF24 stays on the state-variable HP 24 dB; HP 24 dB
 Driven was refitted and fails at 88.2-192 kHz because it saturates; Clean is linear and doesn't
 depend on the rate but matches less well at low cutoffs. Decision for Jacob: Driven with
@@ -2543,9 +2825,14 @@ only moves where a glide starts, below).
    state-variable filter's 0.32-2.52 dB); twelfth session: switched on Jacob's decision, refitted
    (25 of 25 checks with a break at 475) and rate matched, it fails at 88.2-192 kHz (4, 1, 16
    and 17 checks at 88.2, 96, 176.4 and 192 kHz, from index 496) because it saturates inside its loop, so its shape depends on
-   the level and the rate; not applied. HP 24 dB Clean: 0.13-0.32 dB from 880 at 44.1 and 192 kHz
-   alike, 0.19-0.68 below. Unresolved (decision for Jacob: the state-variable filter as now, Driven
-   with failures at 88.2-192 kHz, or Clean). Reproduce: plugin tests
+   the level and the rate; not applied. HP 24 dB Clean (thirteenth session, on Jacob's decision):
+   refitted (sweep `surge/cut5c`, `scripts/gate_type5c.py type5c3`, with the break at 475),
+   saturator offset -44.02 dB and rate match refitted; it passes every check from index 592 up
+   at every rate (938-976 within 16 cents) but fails index 560 at every rate (+61 / +64 / +67 /
+   +64 / +95 / +74 cents at 44.1 / 48 / 88.2 / 96 / 176.4 / 192 kHz), so per Jacob's rule it was
+   not applied (numbers in section 10, thirteenth session). Unresolved (decision for Jacob: the
+   state-variable filter as now, Driven with failures at 88.2-192 kHz, or Clean with index 560
+   failing, or reference probes between 528 and 592 to refit Clean). Reproduce: plugin tests
    (`oscairn-analog-tests`, "fitted tables" at the other rates print these lines);
    `oscairn-analog-rate-match fit HPF24 96000`; the driven refit: `scripts/gate.py type5d`
    (local) with the sweep `surge/cut5d`. Code: `src/common/dsp/FilterCutoffRateMatch.h`,
@@ -2582,8 +2869,13 @@ only moves where a glide starts, below).
    triangle and sine map to Modern. Self sync as a restarted slave with fades fits harmonics 1-40
    5-8 dB RMS with ratios that don't follow the nominal ones; the shaper isn't one static curve
    on a sine (fifth harmonic 17 dB under the third at 32, against about 39 dB for sin(g x)).
-   Unresolved. Reproduce: `m3b` sync probes, fifth-session shaper probes (`scripts/m2b.py`).
-   Code: none.
+   Thirteenth session (models found, not built): self sync fits a slave whose phase advances at
+   the nominal ratio (25 cents a step holds) times a window that slows it to a stop and restarts
+   it once per master period, its amplitude the window to a power: sine and triangle -35 to -39
+   dB at raw 24, -22 to -26 dB at 96; saws and squares -7 to -22 dB. The shaper on a sine is a
+   static curve followed by a highpass near 0.1 x f0 (13 Hz at note 48): -30 to -38 dB at 48-128
+   against -20 to -34 dB without the highpass. Unresolved. Reproduce: `m3b` sync probes,
+   fifth-session shaper probes (`scripts/m2b.py`), thirteenth-session fits (section 10). Code: none.
 7. **Ageing.** The reference's ageing shifts the cutoff by about +0.16 to -0.05 semitone and the
    pulse width (duty 0.2517-0.2545) for the whole Part, no spread between loads or notes.
    Deliberate: folded into the converter's cutoff and pulse width, no engine hook. Reproduce:
@@ -2613,9 +2905,16 @@ only moves where a glide starts, below).
     knots (checks between knots at 24-104 only, none between 112 and 127), the pitch LFO delay at
     2-6, the amp velocity k above +192 (+192 to +224 not probed). Unresolved until independent
     probes exist.
-13. **Short envelopes.** Envelope times at the shortest settings aren't checked. Jacob decided a
-    2 ms floor for averaged short-envelope checks (twelfth session); the tables are to be
-    committed where they pass and the rest listed here (not done yet). Unresolved.
+13. **Short envelopes.** Jacob decided a 2 ms floor for averaged short-envelope checks (twelfth
+    session). Thirteenth session: the amp EG decay table holds from index 72 (averaged checks 76
+    and 80 pass at every checked rate, worst -1.56 ms). Not committed: decay 40-71 (60, 64, 68
+    are 2.4-2.6 ms short: 14.15 / 16.33 / 18.78 ms against 16.78 / 18.70 / 21.19); attack 40-99
+    (passes at 44.1 and 48 kHz, 6 of 6, but at 88.2-192 kHz the engine's short attacks run long:
+    index 48 10.2 ms against 7.66 at 176.4 kHz, 80 29.0-29.3 against 26.76 from 88.2 kHz);
+    release 40-111 (68: 19.95 against 17.16 ms; and the long table's 108 is 8.4 % off, so no
+    contiguous range reaches 112). Below index 40 there are no averaged probes. Unresolved.
+    Reproduce: `scripts/egshort_fit_ref_2ms.py` with the sweep `surge/egshort_ref`
+    (`scripts/surge_eg_short_ref.py`, the reference-matching options on). Code: the amp EG.
 14. **Surge 1.x patches in the plugin.** A patch of revision below 2 sets an LFO's sustain from
     whether its decay equals the parameter maximum; the plugin's voice LFO decay maximum is 8,
     not 5, so such a patch could load differently in the plugin than in Surge. Deliberate (no such
