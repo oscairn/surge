@@ -7,6 +7,7 @@ project(oscairn-analog)
 add_library(oscairn-analog-core STATIC OscairnAnalog.cpp OscairnAnalog.h)
 target_include_directories(oscairn-analog-core PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/third_party/oscairn-clap/include
   ${SURGE_SOURCE_DIR}/libs/clap-juce-extensions/clap-libs/clap/include)
 target_link_libraries(oscairn-analog-core PUBLIC surge::surge-common)
 
