@@ -22,17 +22,22 @@
  * - State is loaded on the main thread. While it loads, process() outputs silence instead
  *   of touching the engine, and never waits.
  * - No Formula modulators: patches using them are refused.
+ * - Presets: Surge's factory and user .fxp patches, listed through CLAP preset discovery and
+ *   loaded with preset-load (the plugin has no native sound contexts).
  */
 
 #include "OscairnAnalog.h"
 
 #include "SurgeSynthesizer.h"
+#include "PatchFileHeaderStructs.h"
+#include "sst/basic-blocks/mechanics/endian-ops.h"
 
 #include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <thread>
@@ -108,6 +113,32 @@ std::string moduleFor(const Parameter &p)
     default:
         return p.scene == 0 ? "Global" : "Scene";
     }
+}
+
+// --- presets ----------------------------------------------------------------------------
+// Surge's .fxp patch files, listed through CLAP preset discovery and loaded with preset-load.
+
+// Reads a Surge .fxp file: its chunk header ('CcnK', 'FPCh', 'cjs3') and, with data, the patch
+// data after it. False when the file isn't one.
+bool readFxp(const char *path, std::vector<uint8_t> *data)
+{
+    namespace mech = sst::basic_blocks::mechanics;
+    std::error_code ec;
+    auto fileSize = fs::file_size(string_to_path(path), ec);
+    std::ifstream f(string_to_path(path), std::ios::binary);
+    sst::io::fxChunkSetCustom h{};
+    if (ec || !f.read(reinterpret_cast<char *>(&h), sizeof(h)) ||
+        mech::endian_read_int32BE((uint32_t)h.chunkMagic) != 'CcnK' ||
+        mech::endian_read_int32BE((uint32_t)h.fxMagic) != 'FPCh' ||
+        mech::endian_read_int32BE((uint32_t)h.fxID) != 'cjs3')
+        return false;
+    if (!data)
+        return true;
+    uint32_t size = mech::endian_read_int32BE((uint32_t)h.chunkSize);
+    if (size == 0 || size > fileSize - sizeof(h))
+        return false;
+    data->resize(size);
+    return (bool)f.read(reinterpret_cast<char *>(data->data()), size);
 }
 
 struct Plugin
@@ -632,6 +663,35 @@ struct Plugin
         excludingAudio(save);
         return out;
     }
+
+    const clap_host_preset_load_t *hostPresetLoad{nullptr};
+    const clap_host_params_t *hostParams{nullptr};
+
+    // A Surge .fxp file as the whole patch (CLAP preset-load; Oscairn loads it into a spare
+    // instance). Refused, the patch stays and the host is told why. Main thread.
+    bool loadPreset(uint32_t kind, const char *location, const char *loadKey)
+    {
+        std::vector<uint8_t> data;
+        const char *why = nullptr;
+        if (kind != CLAP_PRESET_DISCOVERY_LOCATION_FILE || !location || loadKey)
+            why = "Oscairn Analog loads presets from Surge patch files only";
+        else if (!readFxp(location, &data) || data.size() < 8 ||
+                 std::memcmp(data.data(), "sub3", 4) != 0)
+            why = "Not a Surge patch file";
+        else if (!loadStateBytes(data.data(), data.size()))
+            why = "Patch refused: it uses a Formula modulator";
+        if (why)
+        {
+            if (hostPresetLoad)
+                hostPresetLoad->on_error(host, kind, location, loadKey, 0, why);
+            return false;
+        }
+        if (hostParams)
+            hostParams->rescan(host, CLAP_PARAM_RESCAN_VALUES);
+        if (hostPresetLoad)
+            hostPresetLoad->loaded(host, kind, location, nullptr);
+        return true;
+    }
 };
 
 Plugin &self(const clap_plugin_t *p) { return *static_cast<Plugin *>(p->plugin_data); }
@@ -791,6 +851,97 @@ bool stateLoad(const clap_plugin_t *p, const clap_istream_t *stream)
 }
 const clap_plugin_state_t stateExt{stateSave, stateLoad};
 
+bool presetLoadFromLocation(const clap_plugin_t *p, uint32_t kind, const char *location,
+                            const char *loadKey)
+{
+    return self(p).loadPreset(kind, location, loadKey);
+}
+const clap_plugin_preset_load_t presetLoadExt{presetLoadFromLocation};
+
+// Preset discovery: Surge's factory and user patch folders, found as Surge finds them, each
+// .fxp file in them one preset named after the file.
+const clap_preset_discovery_provider_descriptor_t providerDescriptor{
+    CLAP_VERSION_INIT, "org.oscairn.analog.patches", "Oscairn Analog patches", "Oscairn"};
+
+struct Provider
+{
+    clap_preset_discovery_provider_t provider{};
+    const clap_preset_discovery_indexer_t *indexer{nullptr};
+};
+
+bool providerInit(const clap_preset_discovery_provider_t *p)
+{
+    auto indexer = static_cast<Provider *>(p->provider_data)->indexer;
+    SurgeStorage::SurgeStorageConfig config;
+    config.suppliedDataPath = SurgeStorage::skipPatchLoadDataPathSentinel;
+    config.createUserDirectory = false;
+    config.scanWavetableAndPatches = false;
+    auto storage = std::make_unique<SurgeStorage>(config);
+    clap_preset_discovery_filetype_t fxp{"Surge XT patch", nullptr, "fxp"};
+    if (!indexer->declare_filetype(indexer, &fxp))
+        return false;
+    auto factory = path_to_string(storage->datapath / "patches_factory");
+    auto user = path_to_string(storage->userPatchesPath);
+    clap_preset_discovery_location_t locations[] = {
+        {CLAP_PRESET_DISCOVERY_IS_FACTORY_CONTENT, "Factory patches",
+         CLAP_PRESET_DISCOVERY_LOCATION_FILE, factory.c_str()},
+        {CLAP_PRESET_DISCOVERY_IS_USER_CONTENT, "User patches",
+         CLAP_PRESET_DISCOVERY_LOCATION_FILE, user.c_str()}};
+    for (auto &l : locations)
+    {
+        std::error_code ec;
+        if (fs::is_directory(string_to_path(l.location), ec) &&
+            !indexer->declare_location(indexer, &l))
+            return false;
+    }
+    return true;
+}
+void providerDestroy(const clap_preset_discovery_provider_t *p)
+{
+    delete static_cast<Provider *>(p->provider_data);
+}
+bool providerGetMetadata(const clap_preset_discovery_provider_t *, uint32_t kind,
+                         const char *location,
+                         const clap_preset_discovery_metadata_receiver_t *receiver)
+{
+    if (kind != CLAP_PRESET_DISCOVERY_LOCATION_FILE || !location || !readFxp(location, nullptr))
+    {
+        receiver->on_error(receiver, 0, "Not a Surge patch file");
+        return false;
+    }
+    auto name = path_to_string(string_to_path(location).stem());
+    if (!receiver->begin_preset(receiver, name.c_str(), nullptr))
+        return true;
+    clap_universal_plugin_id_t id{"clap", descriptor.id};
+    receiver->add_plugin_id(receiver, &id);
+    return true;
+}
+const void *providerGetExtension(const clap_preset_discovery_provider_t *, const char *)
+{
+    return nullptr;
+}
+
+uint32_t presetFactoryCount(const clap_preset_discovery_factory_t *) { return 1; }
+const clap_preset_discovery_provider_descriptor_t *
+presetFactoryDescriptor(const clap_preset_discovery_factory_t *, uint32_t i)
+{
+    return i == 0 ? &providerDescriptor : nullptr;
+}
+const clap_preset_discovery_provider_t *
+presetFactoryCreate(const clap_preset_discovery_factory_t *,
+                    const clap_preset_discovery_indexer_t *indexer, const char *id)
+{
+    if (!indexer || std::strcmp(id, providerDescriptor.id))
+        return nullptr;
+    auto s = new Provider;
+    s->indexer = indexer;
+    s->provider = {&providerDescriptor, s, providerInit, providerDestroy, providerGetMetadata,
+                   providerGetExtension};
+    return &s->provider;
+}
+const clap_preset_discovery_factory_t presetFactory{presetFactoryCount, presetFactoryDescriptor,
+                                                    presetFactoryCreate};
+
 // --- plugin -----------------------------------------------------------------------------
 
 bool pluginInit(const clap_plugin_t *p)
@@ -802,6 +953,13 @@ bool pluginInit(const clap_plugin_t *p)
     config.scanWavetableAndPatches = false;
     s.synth = std::make_unique<SurgeSynthesizer>(&s.layer, config);
     s.synth->storage.saveFixedTempo = true;
+    s.hostParams = static_cast<const clap_host_params_t *>(
+        s.host->get_extension(s.host, CLAP_EXT_PARAMS));
+    s.hostPresetLoad = static_cast<const clap_host_preset_load_t *>(
+        s.host->get_extension(s.host, CLAP_EXT_PRESET_LOAD));
+    if (!s.hostPresetLoad)
+        s.hostPresetLoad = static_cast<const clap_host_preset_load_t *>(
+            s.host->get_extension(s.host, CLAP_EXT_PRESET_LOAD_COMPAT));
     // Envelope segments up to 2^8 s: the instrument this plugin matches reaches 44 s of attack
     // (10-90 %), past Surge's 2^5 s. Only the range grows; the envelope code has no limit, and
     // modulation depths are in seconds-exponent units, so existing patches sound the same.
@@ -869,6 +1027,8 @@ const void *pluginGetExtension(const clap_plugin_t *, const char *id)
         return &paramsExt;
     if (!std::strcmp(id, CLAP_EXT_STATE))
         return &stateExt;
+    if (!std::strcmp(id, CLAP_EXT_PRESET_LOAD) || !std::strcmp(id, CLAP_EXT_PRESET_LOAD_COMPAT))
+        return &presetLoadExt;
     return nullptr;
 }
 void pluginOnMainThread(const clap_plugin_t *) {}
@@ -902,7 +1062,12 @@ bool entryInit(const char *) { return true; }
 void entryDeinit() {}
 const void *entryFactory(const char *id)
 {
-    return std::strcmp(id, CLAP_PLUGIN_FACTORY_ID) ? nullptr : &factory;
+    if (!std::strcmp(id, CLAP_PLUGIN_FACTORY_ID))
+        return &factory;
+    if (!std::strcmp(id, CLAP_PRESET_DISCOVERY_FACTORY_ID) ||
+        !std::strcmp(id, CLAP_PRESET_DISCOVERY_FACTORY_ID_COMPAT))
+        return &presetFactory;
+    return nullptr;
 }
 } // namespace
 

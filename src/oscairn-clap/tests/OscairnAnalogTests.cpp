@@ -238,11 +238,11 @@ struct Instance
     uint64_t position{0}; // samples rendered since activation
     OutEvents out;
 
-    explicit Instance(double rate = 48000)
+    explicit Instance(double rate = 48000, const clap_host_t *h = &host)
     {
         auto factory = static_cast<const clap_plugin_factory_t *>(
             oscairn_analog_entry.get_factory(CLAP_PLUGIN_FACTORY_ID));
-        plugin = factory->create_plugin(factory, &host, "org.oscairn.analog");
+        plugin = factory->create_plugin(factory, h, "org.oscairn.analog");
         if (!plugin || !plugin->init(plugin))
             throw std::runtime_error("plugin creation failed");
         params = static_cast<const clap_plugin_params_t *>(
@@ -1917,6 +1917,237 @@ static void testFittedTables(bool cutoffTables = true)
     cutoff("BPF6", T::cutoffBp6, T::cutoffBp6Responses, T::cutoffBp6Tolerance, 6, 0, 0);
 }
 
+// CLAP presets. Discovery: the plugin's provider declares Surge's factory patch folder (found
+// as Surge finds its data, here the source tree's through PIPELINE_OVERRIDE_DATA_HOME) for .fxp
+// files, and reports each file as one preset named after it, for this plugin. Loading: every
+// 8th factory patch loaded with preset-load plays and saves exactly as the same patch loaded
+// as the plugin's state; a refused preset is reported to the host and keeps the patch.
+struct PresetHost
+{
+    std::vector<std::string> loaded, errors;
+    int rescans{0};
+};
+static PresetHost presetHost;
+static const clap_host_preset_load_t hostPresetLoad{
+    [](const clap_host_t *, uint32_t, const char *location, const char *, int32_t,
+       const char *msg) {
+        presetHost.errors.push_back(std::string(location ? location : "") + ": " + msg);
+    },
+    [](const clap_host_t *, uint32_t, const char *location, const char *load_key) {
+        presetHost.loaded.push_back(std::string(location) + (load_key ? "#key" : ""));
+    }};
+static const clap_host_params_t hostParams{
+    [](const clap_host_t *, clap_param_rescan_flags flags) {
+        presetHost.rescans += (flags & CLAP_PARAM_RESCAN_VALUES) != 0;
+    },
+    [](const clap_host_t *, clap_id, clap_param_clear_flags) {},
+    [](const clap_host_t *) {}};
+static const clap_host_t presetClapHost = {
+    CLAP_VERSION_INIT,
+    nullptr,
+    "oscairn-analog-tests",
+    "Oscairn",
+    "",
+    "0",
+    [](const clap_host_t *, const char *id) -> const void * {
+        if (!std::strcmp(id, CLAP_EXT_PRESET_LOAD))
+            return &hostPresetLoad;
+        if (!std::strcmp(id, CLAP_EXT_PARAMS))
+            return &hostParams;
+        return nullptr;
+    },
+    [](const clap_host_t *) {},
+    [](const clap_host_t *) {},
+    [](const clap_host_t *) {},
+};
+
+static void testPresets(const std::string &dir)
+{
+    auto factory = static_cast<const clap_preset_discovery_factory_t *>(
+        oscairn_analog_entry.get_factory(CLAP_PRESET_DISCOVERY_FACTORY_ID));
+    check(factory && factory->count(factory) == 1, "one preset discovery provider");
+    if (!factory || factory->count(factory) != 1)
+        return;
+    check(oscairn_analog_entry.get_factory(CLAP_PRESET_DISCOVERY_FACTORY_ID_COMPAT) == factory,
+          "the draft preset discovery factory ID gives the same factory");
+
+    struct Indexer
+    {
+        std::vector<std::string> extensions;
+        std::vector<clap_preset_discovery_location_t> locations;
+        std::vector<std::string> paths;
+    } ix;
+    clap_preset_discovery_indexer_t indexer{
+        CLAP_VERSION_INIT, "oscairn-analog-tests", "Oscairn", "", "0", &ix,
+        [](const clap_preset_discovery_indexer_t *i, const clap_preset_discovery_filetype_t *t) {
+            static_cast<Indexer *>(i->indexer_data)->extensions.push_back(t->file_extension);
+            return true;
+        },
+        [](const clap_preset_discovery_indexer_t *i, const clap_preset_discovery_location_t *l) {
+            auto x = static_cast<Indexer *>(i->indexer_data);
+            x->locations.push_back(*l);
+            x->paths.push_back(l->location ? l->location : "");
+            return true;
+        },
+        [](const clap_preset_discovery_indexer_t *, const clap_preset_discovery_soundpack_t *) {
+            return true;
+        },
+        [](const clap_preset_discovery_indexer_t *, const char *) -> const void * {
+            return nullptr;
+        }};
+    // Surge's data folder: the source tree's (the factory patches' parent)
+    auto data = fs::path(dir).parent_path().u8string();
+    setenv("PIPELINE_OVERRIDE_DATA_HOME", data.c_str(), 1);
+    auto provider =
+        factory->create(factory, &indexer, factory->get_descriptor(factory, 0)->id);
+    bool initialized = provider && provider->init(provider);
+    unsetenv("PIPELINE_OVERRIDE_DATA_HOME");
+    check(initialized, "the preset provider initializes");
+    if (!initialized)
+    {
+        if (provider)
+            provider->destroy(provider);
+        return;
+    }
+    check(ix.extensions == std::vector<std::string>{"fxp"}, "the provider declares .fxp files");
+    std::string factoryFolder;
+    for (size_t i = 0; i < ix.locations.size(); ++i)
+    {
+        auto &l = ix.locations[i];
+        std::error_code ec;
+        if (l.kind == CLAP_PRESET_DISCOVERY_LOCATION_FILE &&
+            (l.flags & CLAP_PRESET_DISCOVERY_IS_FACTORY_CONTENT) &&
+            fs::equivalent(fs::path(ix.paths[i]), fs::path(dir), ec))
+            factoryFolder = ix.paths[i];
+    }
+    check(!factoryFolder.empty(), "the provider declares the factory patch folder");
+
+    struct Receiver
+    {
+        std::vector<std::string> names;
+        std::vector<std::string> plugins;
+        int errors{0};
+    };
+    auto metadata = [&](const std::string &path, Receiver &r) {
+        clap_preset_discovery_metadata_receiver_t m{};
+        m.receiver_data = &r;
+        m.on_error = [](const clap_preset_discovery_metadata_receiver_t *m, int32_t,
+                        const char *) { ++static_cast<Receiver *>(m->receiver_data)->errors; };
+        m.begin_preset = [](const clap_preset_discovery_metadata_receiver_t *m, const char *name,
+                            const char *load_key) {
+            static_cast<Receiver *>(m->receiver_data)
+                ->names.push_back(std::string(name ? name : "") + (load_key ? "#key" : ""));
+            return true;
+        };
+        m.add_plugin_id = [](const clap_preset_discovery_metadata_receiver_t *m,
+                             const clap_universal_plugin_id_t *id) {
+            static_cast<Receiver *>(m->receiver_data)
+                ->plugins.push_back(std::string(id->abi) + ":" + id->id);
+        };
+        m.set_soundpack_id = [](const clap_preset_discovery_metadata_receiver_t *,
+                                const char *) {};
+        m.set_flags = [](const clap_preset_discovery_metadata_receiver_t *, uint32_t) {};
+        m.add_creator = [](const clap_preset_discovery_metadata_receiver_t *, const char *) {};
+        m.set_description = [](const clap_preset_discovery_metadata_receiver_t *,
+                               const char *) {};
+        m.set_timestamps = [](const clap_preset_discovery_metadata_receiver_t *,
+                              clap_timestamp, clap_timestamp) {};
+        m.add_feature = [](const clap_preset_discovery_metadata_receiver_t *, const char *) {};
+        m.add_extra_info = [](const clap_preset_discovery_metadata_receiver_t *, const char *,
+                              const char *) {};
+        return provider->get_metadata(provider, CLAP_PRESET_DISCOVERY_LOCATION_FILE,
+                                      path.c_str(), &m);
+    };
+    // Every .fxp in the declared folder, as a host crawls it: one preset each, named after the
+    // file, for this plugin.
+    int listed = 0;
+    if (!factoryFolder.empty())
+    {
+        std::vector<std::string> crawled;
+        for (auto &e : fs::recursive_directory_iterator(fs::path(factoryFolder)))
+            if (e.is_regular_file() && e.path().extension() == ".fxp")
+                crawled.push_back(e.path().u8string());
+        check(crawled.size() == factoryPatches(dir).size(),
+              "the crawl finds every factory patch");
+        for (auto &path : crawled)
+        {
+            Receiver r;
+            bool ok = metadata(path, r);
+            bool right = ok && r.names == std::vector<std::string>{fs::path(path).stem().u8string()} &&
+                         r.plugins == std::vector<std::string>{"clap:org.oscairn.analog"} &&
+                         !r.errors;
+            check(right, "the provider lists a factory patch: " + path);
+            listed += right;
+        }
+    }
+    {
+        auto bogus = (fs::temp_directory_path() / "oscairn-analog-tests-not-a-patch.fxp").u8string();
+        std::ofstream(bogus, std::ios::binary) << "not a patch";
+        Receiver r;
+        check(!metadata(bogus, r) && r.names.empty() && r.errors == 1,
+              "the provider refuses a file that isn't a Surge patch");
+        fs::remove(bogus);
+    }
+    provider->destroy(provider);
+
+    // preset-load against loading the same patch as state
+    int compared = 0;
+    auto patches = factoryPatches(dir);
+    std::vector<Event> notes{noteEvent(0, CLAP_EVENT_NOTE_ON, 1, 60, 0.8),
+                             noteEvent(24000, CLAP_EVENT_NOTE_OFF, 1, 60, 0)};
+    for (size_t i = 0; i < patches.size(); i += 8)
+    {
+        auto &path = patches[i];
+        presetHost = {};
+        Instance a(48000, &presetClapHost), b;
+        auto presetLoad = static_cast<const clap_plugin_preset_load_t *>(
+            a.plugin->get_extension(a.plugin, CLAP_EXT_PRESET_LOAD));
+        check(presetLoad && a.plugin->get_extension(a.plugin, CLAP_EXT_PRESET_LOAD_COMPAT) ==
+                                presetLoad,
+              "the plugin offers preset-load");
+        if (!presetLoad)
+            return;
+        auto before = a.save();
+        bool ok = presetLoad->from_location(a.plugin, CLAP_PRESET_DISCOVERY_LOCATION_FILE,
+                                            path.c_str(), nullptr);
+        bool stateOk = b.load(patchFromFxp(path));
+        check(ok == stateOk, "preset-load accepts what a state load accepts: " + path);
+        if (!ok)
+        {
+            check(presetHost.errors.size() == 1 && presetHost.loaded.empty() &&
+                      a.save() == before,
+                  "a refused preset is reported and keeps the patch: " + path);
+            continue;
+        }
+        check(presetHost.loaded == std::vector<std::string>{path} && presetHost.errors.empty() &&
+                  presetHost.rescans == 1,
+              "the host is told the preset loaded and to rescan values: " + path);
+        check(a.save() == b.save(), "preset-load gives the state a state load gives: " + path);
+        check(a.render(48000, 512, notes, false) == b.render(48000, 512, notes, false),
+              "preset-load plays as a state load: " + path);
+        ++compared;
+    }
+    check(compared > 50, "presets compared: " + std::to_string(compared));
+
+    // what it refuses
+    presetHost = {};
+    Instance a(48000, &presetClapHost);
+    auto presetLoad = static_cast<const clap_plugin_preset_load_t *>(
+        a.plugin->get_extension(a.plugin, CLAP_EXT_PRESET_LOAD));
+    auto before = a.save();
+    auto missing = (fs::path(dir) / "no such patch.fxp").u8string();
+    check(!presetLoad->from_location(a.plugin, CLAP_PRESET_DISCOVERY_LOCATION_FILE,
+                                     missing.c_str(), nullptr) &&
+              !presetLoad->from_location(a.plugin, CLAP_PRESET_DISCOVERY_LOCATION_FILE,
+                                         patches[0].c_str(), "key") &&
+              !presetLoad->from_location(a.plugin, CLAP_PRESET_DISCOVERY_LOCATION_PLUGIN,
+                                         nullptr, "Init Saw") &&
+              presetHost.errors.size() == 3 && presetHost.loaded.empty() && a.save() == before,
+          "preset-load refuses a missing file, a load key and a plugin location");
+    std::printf("  presets: %d factory patches listed, %d loaded and compared\n", listed,
+                compared);
+}
+
 int main(int argc, char **argv)
 {
     std::string dir = argc > 1 ? argv[1] : SURGE_FACTORY_PATCHES;
@@ -1936,6 +2167,7 @@ int main(int argc, char **argv)
         run("formula refused", [] { testFormulaRefused(); });
         run("concurrent state", [] { testConcurrentState(); });
         run("plain patches match stock Surge", [&] { testPlainPatchesMatchStock(patches); });
+        run("presets", [&] { testPresets(dir); });
         run("first block after a load", [] { testFirstBlockAfterLoad(); });
         run("unison against the reference", [] { testUnisonAgainstReference(); });
         run("drift against the reference", [] { testDriftAgainstReference(); });
