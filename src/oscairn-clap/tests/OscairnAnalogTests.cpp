@@ -1734,7 +1734,21 @@ static void testFittedTables(bool cutoffTables = true)
     checkTable(
         "amp EG decay", T::ampDecay, T::ampDecayChecks, T::ampDecayTolerance,
         [&](float v) { return F::decayTime(renderMono(envSpec("a_env1_decay", v)), rate, w); },
-        pctFloor(0.005), shortEnough(T::ampDecay));
+        pctFloor(0.005),
+        [&](const T::Check &c) { return c.index >= 100 && shortEnough(T::ampDecay)(c); });
+    // Below index 100 the references are means of 3-8 repeats at note 96, measured with
+    // one-period windows at that note and the scene highpass off (its step response lengthens
+    // short envelopes); these averaged checks have a 2 ms floor (Jacob's decision, twelfth
+    // session). Attack and release don't pass below 100 and 112 (see the plan).
+    checkTable(
+        "amp EG decay, averaged", T::ampDecay, T::ampDecayChecks, T::ampDecayTolerance,
+        [&](float v) {
+            auto s = envSpec("a_env1_decay", v);
+            s.note = 96;
+            s.params.push_back({"a_lowcut.off", 1});
+            return F::decayTime(renderMono(s), rate, 0.956);
+        },
+        pctFloor(0.002), [](const T::Check &c) { return c.index < 100; });
     checkTable(
         "amp EG release", T::ampRelease, T::ampReleaseChecks, T::ampReleaseTolerance,
         [&](float v) {
