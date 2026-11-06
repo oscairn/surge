@@ -28,7 +28,7 @@
  *   helper): each prepared sound is a Surge synthesizer of its own; MIDI channels select a
  *   sound for new notes, and a held note stays on the sound it started on. The CLAP state is
  *   the default sound's patch; the sound-context snapshot holds every sound, and a snapshot's
- *   sounds can be prepared beside the playing ones (oscairn.sound-snapshots/draft-2), the
+ *   sounds can be prepared beside the playing ones (oscairn.sound-snapshots/draft-3), the
  *   outgoing ones ringing out into the host's ring-out buffer.
  */
 
@@ -190,6 +190,8 @@ struct Slot
     bool silent{false};  // audio: quiet after its last block (see renderBlock)
     uint32_t quietBlocks{0}; // audio: blocks in a row without voices, under -120 dB
     bool fresh{false};   // audio: rendered the current block, which pins it
+    bool choking{false}; // audio: choked by chokeRetiring: fading out, then silent until unpinned
+    uint32_t fadeLeft{0}; // audio: frames of that fade left
 };
 
 struct Plugin : oscairn::contexts::Engine<Plugin, Voice, Patch, contextCapacity, voiceCapacity>
@@ -672,6 +674,7 @@ struct Plugin : oscairn::contexts::Engine<Plugin, Voice, Patch, contextCapacity,
                              [&](const Voice &v) { return v.active && v.context == i; }))
             {
                 sl.ringing = false;
+                sl.choking = false;
                 contexts[i].users.fetch_sub(1, std::memory_order_release);
             }
             // A block pins what it renders until the next boundary: a selection can unpin a
@@ -711,6 +714,12 @@ struct Plugin : oscairn::contexts::Engine<Plugin, Voice, Patch, contextCapacity,
                 peak = std::max({peak, std::fabs(sy.output[0][k]), std::fabs(sy.output[1][k])});
             sl.quietBlocks = voiceless && peak < 1e-6f ? sl.quietBlocks + 1 : 0;
             sl.silent = voiceless && (peak == 0 || sl.quietBlocks * BLOCK_SIZE >= sampleRate);
+            if (sl.choking && !sl.fadeLeft)
+            {
+                // faded out: its voices end and its tail (the scene's filters) is cut
+                sy.allSoundOff();
+                sl.silent = true;
+            }
             // Released notes whose voices are all gone end, if the synthesizer didn't say so.
             if (voiceless)
                 for (auto &v : voices)
@@ -739,21 +748,43 @@ struct Plugin : oscairn::contexts::Engine<Plugin, Voice, Patch, contextCapacity,
                 blockPos = 0;
             }
             // A retiring sound (selected by no channel, still sounding) goes to the ring-out
-            // buffer when the host gives one (oscairn.sound-snapshots draft 2).
+            // channels retiring() gives when the host gives a buffer (oscairn.sound-snapshots
+            // draft 3); one chokeRetiring choked fades out there over the choke time, tail and
+            // all, and then stays silent.
             float l = 0, r = 0;
             for (uint32_t i = 0; i < contextCapacity; ++i)
             {
                 auto &sl = slots[i];
                 if (!sl.fresh)
                     continue;
-                if (retiring(i))
+                if (sl.choking && contexts[i].selected.load(std::memory_order_relaxed))
+                    sl.choking = false; // selected again
+                auto *ro = retiring(i);
+                if (ro && ro == ringOut + 2 && !sl.choking)
                 {
-                    ringOut[0][s] += sl.synth->output[0][blockPos];
-                    ringOut[1][s] += sl.synth->output[1][blockPos];
+                    sl.choking = true;
+                    sl.fadeLeft = chokeFrames;
+                }
+                float g = 1;
+                if (sl.choking)
+                {
+                    // the helper's fading flag ends with the last voice; the tail stays on the
+                    // fading channels until it is cut
+                    ro = ringOut ? ringOut + 2 : nullptr;
+                    g = (float)sl.fadeLeft / (float)chokeFrames;
+                    if (sl.fadeLeft)
+                        --sl.fadeLeft;
+                }
+                const float x = g * sl.synth->output[0][blockPos],
+                            y = g * sl.synth->output[1][blockPos];
+                if (ro)
+                {
+                    ro[0][s] += x;
+                    ro[1][s] += y;
                     continue;
                 }
-                l += sl.synth->output[0][blockPos];
-                r += sl.synth->output[1][blockPos];
+                l += x;
+                r += y;
             }
             outL[s] = l;
             outR[s] = r;
@@ -1137,7 +1168,7 @@ struct Plugin : oscairn::contexts::Engine<Plugin, Voice, Patch, contextCapacity,
         {
             auto &c = contexts[i];
             auto &sl = slots[i];
-            sl.ringing = sl.silent = sl.fresh = false;
+            sl.ringing = sl.silent = sl.fresh = sl.choking = false;
             if (!c.prepared)
             {
                 sl.synth = nullptr;
@@ -1338,7 +1369,7 @@ const clap_plugin_preset_load_t presetLoadExt{presetLoadFromLocation};
 
 const clap_plugin_state_t snapshotExt{Plugin::saveSnapshot, Plugin::loadSnapshot};
 const oscairn_plugin_sound_snapshots_t soundSnapshotsExt{Plugin::prepareSnapshot,
-                                                        Plugin::setRingOut};
+                                                        Plugin::setRingOut, Plugin::chokeRetiring};
 const oscairn_plugin_sound_contexts_t soundContextsExt{
     Plugin::capacity, Plugin::get,     Plugin::prepare,      Plugin::select,
     Plugin::discard,  &snapshotExt,    Plugin::preparePreset};
@@ -1469,12 +1500,15 @@ void silence(Plugin &s)
     s.resetVoices();
     s.quiet = false;
     for (uint32_t i = 0; i < contextCapacity; ++i)
+    {
+        s.slots[i].choking = false;
         for (bool *pin : {&s.slots[i].ringing, &s.slots[i].fresh})
             if (*pin)
             {
                 *pin = false;
                 s.contexts[i].users.fetch_sub(1, std::memory_order_release);
             }
+    }
     s.blockPos = BLOCK_SIZE;
 }
 bool pluginActivate(const clap_plugin_t *p, double rate, uint32_t, uint32_t)
