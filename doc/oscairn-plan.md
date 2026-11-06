@@ -2698,6 +2698,115 @@ s, `d4fc698` 1249 s, `b66bf6c` 1690 s, `d15a237` 1513 s, `53a885f` 1699 s; ASan/
 commits made and remade while the snapshots, the block pin and the memory comment were fixed)
 were never gated and don't exist on the branch. The measurement repository was not changed.
 
+**Voice budget (2026-11-06, after the thirteenth session).** `oscairn.voice-budget/draft-1`
+(Oscairn RFC 0018, step 4), asked by Jacob: the host shares one CPU budget among every plugin
+and tells a plugin with this extension how many voices it may keep; the plugin chooses which of
+its own voices to give up. Commits: `346e6e4` vendored headers, `eb474bd` the voice budget,
+then version 0.3.0 with this entry.
+
+*Headers.* The vendored Oscairn SDK headers are at oscairn/oscairn `0d6a3e1` (unchanged, the
+commit in `upstream.json`), which adds `voice-budget.h` and the SDK's MIT helper
+`voice-budget-plugin.hpp` (the order, `voices::Limits`, `voices::Candidate`, `voices::victim()`,
+`voices::Report`), now included by `sound-contexts-plugin.hpp`. One change comes with them
+whatever the host does: the sound-contexts helper's pool of notes (256 notes held or sounding,
+every sound together), when full, gives up a note in that header's order (released before held,
+the quietest by velocity, then the oldest) instead of the oldest. The helper's own limits are
+never set (the plugin keeps its own `Limits`, below), so they stay off.
+
+*What a voice is.* One Surge voice, so each unison copy of a note is a voice, in any sound the
+audio thread may touch (selected, holding a note, ringing, or in the block being rendered). The
+helper's own voices are notes, so its Engine's built-in budget (which gives up whole notes) is
+not used; the plugin uses the SDK's `Limits`, `Candidate`, `victim()` and `Report` directly. Each
+Surge voice is a `Candidate`: its sound's context ID and whether a channel selects it; held while
+its note's key is down (the helper's note, so a key held only by the pedal counts as released);
+in a sound whose play mode is any but Poly (the Mono modes and Latch), held
+while its gate is on and marked mono, so a held or sustained mono or legato note is never given
+up (the host sends no MONO or LEGATO flags yet; Surge's play mode stands in for them); ending
+while it fades or is in Surge's uber-release; loudness its amp's gain this block (the Amp gain
+parameter, velocity, the amp EG and the fade) times its note's volume expression; age from
+`SurgeVoice::age` (blocks since it started).
+
+*Giving voices up.* `set_limits` (audio thread, between blocks) copies the limits. At the start
+of each `process()` call, after the selections, each sound past its own entry's limit and then
+the instance past its limit gives up voices in `victim()`'s order. Before a note starts in a
+sound, the voices it will add (its unison count; none for a mono sound already sounding, or a
+Poly key that reuses its voice) make room the same way, with the note's sound as the new voice's
+context. A voice given up fades: `SurgeVoice::fadeOut` scales its amp gain down linearly to zero
+over the choke time (3 ms) rounded up to whole 32-sample blocks (5 blocks, 3.33 ms at 48 kHz;
+3.63 ms at 44.1 kHz; 3.0 ms at 192 kHz), starting at the next block boundary, and the voice then
+ends. Surge reports a note's end only when no other voice holds its ID, so `NOTE_END` comes after
+a note's last voice. A voice that a mono mode or a repeated Poly key reclaims for a new note stops
+fading (`reclaimVoiceFor` clears the fade, as it clears Surge's uber-release).
+
+*Surge's Polyphony Limit under a budget.* Once the host has set a limit or an entry, the voice a
+sound's full Polyphony Limit releases for a new note is chosen in the same order within that sound
+(`SurgeSynthesizer::VoiceChooser`, asked by `softkillVoice`); it is still released with Surge's
+uber-release. With no limit and no entry (never set, or set back to 0 with no entries), the
+chooser answers nothing and Surge chooses as stock (register entry 19).
+
+*Reports.* `active_voices`: every Surge voice of those sounds, fading ones included; no cost
+estimate (0). `notes`: each of the helper's notes by the host's ID, port 0, channel and key, with
+its voices and its loudest voice's gain. `honors_volume`: true (every voice multiplies its amp by
+its note's volume expression).
+
+*Upstream files.* `SurgeVoice.h` (`fadeOut`, the fade counters, `ampGain`), `SurgeVoice.cpp` (the
+fade in `SetQFB`, the end in `process_block`), `SurgeSynthesizer.h` (`VoiceChooser`) and
+`SurgeSynthesizer.cpp` (the chooser in `softkillVoice`, the cleared fade in `reclaimVoiceFor`):
+33 lines. Nothing changes without a budget: the fade counters stay 0 and the chooser is null in
+Surge itself.
+
+*Known limits* (not tested). A note waiting for its key-on delay gets room when it is played,
+not when it starts; voices it starts later count from the next `process()` call. A fading voice
+still counts toward Surge's Polyphony Limit (Surge counts every voice not in uber-release), so
+under a budget a new note can release one voice more than it needs while others fade. Surge's
+pool of 64 voices a sound is unchanged (a voice past it isn't started, as stock); the porting
+guide's "cut only when the pool has no free slot" has no counterpart. The worker protocol
+doesn't carry the extension yet, so it was tested in-process only.
+
+Tests (`voice budget`): every voice follows the volume expression (a note at expression 0 is
+silent); four held notes (a sine, velocity -24 dB at 0) with the limit lowered from none to 2: the
+removed signal (the render without the limit minus the render with it) starts within a block
+(sample 0 here, the change landing on a block boundary), the two quietest notes' `NOTE_END` come
+2 to 5 ms later (by 144 samples at 48 kHz, reported at the start of the fade's last block), their
+fading voices are still counted and reported a block in, the largest second difference of the
+removed signal during the fade is 0.3 % of its level (the check: 2 %; by its curvature a sine of
+these keys stays under 0.5 % and the 3.33 ms ramp's corners add about 0.6 %; a cut shows the
+signal's value then: 7.2 % with the fade undone), and the two
+loudest notes sound on; across two sounds (the default on channel 0, a prepared one on channel 1)
+with the limit at 4: nothing is given up at the limit; a new note on channel 1 takes the default
+sound's released note, though it is louder than a held note of its own sound (in the same
+`process()` call: the room is made at the note); the next new note takes its own sound's quietest
+held voice, not the quieter held voice of the default sound; unison 3: six voices, two notes of
+three voices each by the host's address, a note's loudness its amp's gain (velocity 64 against
+127 at -24 dB: within 2 %); two of a note's three voices given up leave it sounding without
+`NOTE_END`, and its last one given up ends it only after the fade; a Polyphony Limit of 4 with a
+fifth note: without a limit the plugin renders exactly as stock Surge (the oldest note goes),
+under a budget with no limit the quietest note goes, and with the budget removed it renders as
+stock again. `set_limits`, `active_voices` and `notes` run under the allocation guard, as every
+`process()` call does. Each check failed with its part undone (seen): no fading at a block's start
+(the lowered-limit and unison checks fail); no gain fade, the voice cut after the fade time
+(the start and the click checks fail); a one-block fade (the 2 to 5 ms, counting and NOTE_END
+checks fail); no room made at a note (both two-sound checks fail); every voice held (both);
+every sound one context (own sound first fails); no loudness (quietest fails throughout); fading
+voices not counted; one voice a note in `notes`; the voice ending at the fade's start (counting,
+duration, click and NOTE_END checks fail); no Polyphony Limit chooser (the budget check fails);
+the chooser without a budget (the stock comparison fails); an allocation in the limit path (the
+guard aborts). The existing plugin checks pass unchanged, the stock comparison of plain patches
+included.
+
+The plugin is 0.3.0 (with this entry): a new extension, and the stealing order changes under a
+budget. Without a budget it sounds as 0.2.0. The converter still writes 0.1.0 for the plugin's
+nodes (not changed here).
+
+**Tests run for the voice budget.** GitHub Actions stayed down (local substitutes). macOS arm64,
+each commit's tree exported (submodules at their gitlinks) and built from a fresh directory:
+`346e6e4` and `eb474bd`: `surge-testrunner` built with Lua and run from the source tree, 212
+passed and 1 skipped, `[reference]` "Compared 635 patches, skipped 6", all passed;
+`oscairn-analog-tests` all passed (858 s each); `oscairn-plugin-check` (Oscairn `0d6a3e1`, built
+for this) passed in the engine (not in a worker). Docker Linux (standard; exit 0, "all passed", no
+sanitizer reports): `346e6e4` 1013 s, `eb474bd` 1022 s of tests. The commit with this entry (the
+version) was gated after it was written: its results are not recorded here.
+
 **Where this stopped** (thirteenth session). HPF24 stays on the state-variable HP 24 dB: Clean
 passes everything but index 560 (at every rate), Driven fails above 48 kHz; a decision for Jacob
 again (register entry 1). The amp EG decay table holds from index 72; attack and release below
@@ -2938,3 +3047,13 @@ only moves where a glide starts, below).
     192 kHz every envelope table passes. Deliberate (Jacob, twelfth session: 64 kHz needn't be
     covered). Reproduce: the plugin
     tests' fitted tables at 64000 Hz.
+19. **Voice stealing under a voice budget.** Once the host sets a voice budget
+    (`oscairn.voice-budget`: a limit or an entry), voices go in the Oscairn SDK's order instead of
+    Surge's: a sound's full Polyphony Limit releases the voice that order gives within that sound
+    (released before held, the quietest, then the oldest), where Surge releases the voice released
+    longest ago, else the oldest held; and a voice given up past the host's limits fades linearly
+    over 3 ms rounded up to whole 32-sample blocks rather than by Surge's uber-release. Without a
+    budget Surge's stealing is unchanged (checked against stock Surge in the plugin test).
+    Deliberate (Jacob: use the SDK's order). Reproduce: plugin test "voice budget". Code: the
+    voice budget section of `OscairnAnalog.cpp`, `SurgeSynthesizer::softkillVoice`,
+    `SurgeVoice::fadeOut`.
