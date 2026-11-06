@@ -2875,7 +2875,8 @@ upstream line, which modulators run, the output gain, the scene data, the song p
 shown by a test and kept as activation did: the host position (`ppqPos`) at 0.
 
 The plugin is 0.3.1 (with this entry): a fix; patches sound as in 0.3.0 except after a reset or a
-reactivation. The converter still writes 0.1.0 for the plugin's nodes (not changed here).
+reactivation. The converter writes the plugin's own version for its nodes (0.3.1 in the rebuilt
+library).
 
 **Where this stopped** (thirteenth session). HPF24 stays on the state-variable HP 24 dB: Clean
 passes everything but index 560 (at every rate), Driven fails above 48 kHz; a decision for Jacob
