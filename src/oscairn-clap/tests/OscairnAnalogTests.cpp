@@ -2686,6 +2686,39 @@ static void testSoundContexts(const std::vector<std::string> &patches)
         audio.join();
         check(ids.empty(), "every sound prepared while playing is discarded once unused");
     }
+    // A wildcard note-off (every key on every channel) releases the keys each sound holds, not
+    // every key of every channel (16384 releases over eight sounds, 5 ms in a 64-frame block).
+    // Standard build only: a timing check, the best of five.
+    if (!sanitizerBuild)
+    {
+        Instance a;
+        Sounds s(a);
+        for (int ch = 1; ch < 8; ++ch)
+            check(s.x->select(a.plugin, s.preset(path), (int16_t)ch),
+                  "a sound on channel " + std::to_string(ch));
+        double best = 1e9;
+        for (int round = 0; round < 5; ++round)
+        {
+            std::vector<Event> on;
+            for (int ch = 0; ch < 8; ++ch)
+            {
+                on.push_back(noteEvent(a.position, CLAP_EVENT_NOTE_ON, 100 + ch, 60 + ch, 0.7));
+                on.back().note.channel = (int16_t)ch;
+            }
+            a.render(4096, 4096, on);
+            auto off = noteEvent(a.position, CLAP_EVENT_NOTE_OFF, -1, -1, 0);
+            off.note.channel = -1;
+            auto t0 = std::chrono::steady_clock::now();
+            a.render(64, 64, {off});
+            best = std::min(best, std::chrono::duration<double, std::milli>(
+                                      std::chrono::steady_clock::now() - t0)
+                                      .count());
+        }
+        std::printf("  sound contexts: a wildcard note-off over eight sounds, best of five: "
+                    "%.3f ms\n",
+                    best);
+        check(best < 2, "a wildcard note-off over eight sounds takes under 2 ms");
+    }
     // oscairn.memory: what a sound is declared to take covers what preparing one allocates.
     for (double rate : {44100.0, 96000.0, 192000.0})
     {

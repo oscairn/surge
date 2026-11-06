@@ -513,13 +513,15 @@ struct Plugin : oscairn::contexts::Engine<Plugin, Voice, Patch, contextCapacity,
                 slots[slot].synth->releaseNote(n.channel, n.key, releaseVelocity, -1);
             return;
         }
-        // Wildcard key or channel: every matching key in every pinned sound, as Surge's own.
+        // Wildcard key or channel: every matching key still down in every pinned sound, as
+        // Surge's own (releasing every key was 2048 calls a sound, 5 ms for eight).
         const auto m = live();
         for (uint32_t i = 0; i < contextCapacity; ++i)
             if (m >> i & 1)
                 for (int c = 0; c < 16; ++c)
                     for (int k = 0; k < 128; ++k)
-                        if ((n.channel < 0 || n.channel == c) && (n.key < 0 || n.key == k))
+                        if ((n.channel < 0 || n.channel == c) && (n.key < 0 || n.key == k) &&
+                            slots[i].synth->channelState[c].keyState[k].keyIsDown)
                             slots[i].synth->releaseNote(c, k, releaseVelocity, -1);
     }
     void applyExpression(const clap_event_note_expression_t &x)
