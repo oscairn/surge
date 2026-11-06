@@ -961,7 +961,7 @@ fitted from):
 | Cutoff, LPF18 / LPF12 / LPF6 | Legacy Ladder 18 / 12 / 6 dB | 384-992 / 384-992 / 384-944 | LPF24 shape plus a smooth difference from a step-32 sweep; 19 of 19 / 24 of 24 (fourth session, with probes at 936-960; before: 18 of 19, 944 143 cents off) / 18 of 19 (976: 50.4 cents) | yes, the valid spans |
 | Cutoff, HPF18 / HPF12 / HPF6 | Xpander HP3 / OB-Xd 12 dB HP / Xpander HP1 | 384-992 | 19 of 19 each (largest 34, 25, 25 cents) | yes |
 | Cutoff, BPF12 / BPF6 | BP 24 dB / BP 12 dB | 416-992 / 384-992 | 18 of 18 / 19 of 19 | yes |
-| Cutoff, HPF24 | HP 24 dB, resonance 0.05 | 384-992 | 24 of 24 (fourth session, with probes at 936-960; before: 16 of 16 up to 912, 944 129 cents off). At resonance 0 (the first choice): 14 of 17 | yes |
+| Cutoff, HPF24 | HP 24 dB Clean, resonance 0.05 (fourteenth session; before: HP 24 dB Standard) | 352-992 | 33 of 33, with probes every 4 between 528 and 592 (fourteenth session). Standard, before: 24 of 24 (fourth session, with probes at 936-960; before: 16 of 16 up to 912, 944 129 cents off); at resonance 0 (the first choice): 14 of 17 | yes |
 | Oscillator 1 level | `a_level_o1` at `a_vca_level` = amp level table [431] | 80-511 | 14 of 14 within 0.1 dB (largest 0.022) | yes (fourth session) |
 
 Outside the valid spans, and why:
@@ -2878,6 +2878,101 @@ The plugin is 0.3.1 (with this entry): a fix; patches sound as in 0.3.0 except a
 reactivation. The converter writes the plugin's own version for its nodes (0.3.1 in the rebuilt
 library).
 
+**Fourteenth session (2026-11-06): HPF24 on HP 24 dB Clean, refitted with probes between 528
+and 592.**
+
+Jacob's decision (after the thirteenth session): record reference probes between index 528 and
+592 so that Clean (type 5, subtype 2) can be refitted. Two reference batches, the same probe as
+the HPF24 sweeps (`cutall`, `kinks`: a saw at note 36, velocity 100, held 1 s with a 0.1 s tail,
+filter 2 thru, resonance 0, voltage drift 0): `hp24gap`, every 4 from 532 to 588 but 544, 560
+and 576 (12 renders), and `hp24rep`, 528, 544, 560, 576 and 592 again (5). The repeats give the
+same best Clean match as the first recordings to 0.001 semitone, so the reference is repeatable
+here and 560 was not a bad recording. Best Clean match (the `cut5c` sweep), semitones: 548
+-8.33, 552 -7.69, 556 -7.17, 560 -6.65, 564 -7.34, 568 -6.81, 572 -6.28, 576 -5.85: it falls
+by 0.7 semitone between 560 and 564, where the shape measure's harmonic 2 leaves its 40 dB range
+(560: -38.6 dB below the largest harmonic, 564: -40.7; first harmonic used 2 up to 560, 3 from
+564), as the fundamental does at the twelfth session's break at 475. The state-variable filter's
+best match rises smoothly through the same probes. So the fit gets a second break at 562.
+
+Fit (measurement side, the thirteenth session's `type5c3` with the new probes): fitted from the
+earlier set plus 536, 552, 568 and 584 (every 8th index in the gap), breaks at 475 and 562,
+non-decreasing; checked at every earlier check plus 532, 540, 548, 556, 564, 572, 580 and 588:
+33 of 33 within 50 cents (560 -37, 564 +33, engine minus reference; the rest within 29). Without
+the break at 562 (same points) 560 fails (-58), as before. The table changes only at indices 513-607 (by up
+to 0.49 semitone); index 0 is unchanged, so the saturator offset stays -44.02 dB (thirteenth
+session's rule). The rate match is the thirteenth session's Clean fit (regenerated at 96 kHz with
+`oscairn-analog-rate-match fit HPF24 96000`: the same knots), with one fix: the trial's header held Clean's clamp, 75, twice
+at the end of the grid, so the lookup's last slope was 0/0 and gave NaN above 75 (Surge's
+`[signalpath]` "Filter Cutoff Rate Match" failed, seen); the tool now writes each cutoff once and
+a knot at the clamp plus one when the clamp is the last, which changes only HPF24's last knot, to
+76 at the same value). The plugin test checks HPF24 at
+every index at every rate (the exclusion above 937 is removed); the new checks add the 8 gap
+indices (their reference responses in `FittedTables.h`).
+
+Best match from the table, cents (the plugin's checks, tolerance 50), state-variable filter
+(before, with the gap indices added as checks; 938 and up at rates above 44.1 kHz were
+printed, not checked) / Clean (now); "-": not a check of that table:
+
+| Index | 44.1 kHz | 48 kHz | 88.2 kHz | 96 kHz | 176.4 kHz | 192 kHz |
+|---|---|---|---|---|---|---|
+| 368 | - / +15 | - / +18 | - / +25 | - / +23 | - / -25 | - / -25 |
+| 400 | +0 / +6 | +0 / +7 | +0 / +5 | +0 / +4 | +0 / +26 | +0 / +25 |
+| 432 | +0 / +2 | +0 / +2 | +0 / +10 | +0 / +6 | +0 / +0 | +0 / +1 |
+| 464 | +20 / -14 | +20 / -12 | +21 / -11 | +20 / -12 | +21 / -20 | +20 / -9 |
+| 496 | +2 / +8 | +2 / +10 | +2 / +19 | +2 / +22 | +3 / +33 | +3 / +42 |
+| 528 | +1 / +8 | +1 / +9 | +1 / +9 | +1 / +9 | +1 / +9 | +1 / +14 |
+| 532 | +2 / +5 | +2 / +6 | +2 / +6 | +2 / +6 | +2 / +8 | +2 / +11 |
+| 536 | +3 / - | +3 / - | +4 / - | +4 / - | +4 / - | +4 / - |
+| 540 | +1 / +1 | +1 / +3 | +2 / +3 | +1 / +2 | +2 / +5 | +1 / +6 |
+| 548 | +1 / +0 | +1 / +1 | +1 / +1 | +1 / +1 | +1 / +4 | +1 / +0 |
+| 552 | +3 / - | +4 / - | +4 / - | +4 / - | +4 / - | +4 / - |
+| 556 | +4 / -3 | +5 / -2 | +5 / -2 | +5 / -2 | +5 / -1 | +5 / +0 |
+| 560 | +7 / +40 | +7 / +42 | +7 / +42 | +7 / +42 | +7 / +42 | +7 / +38 |
+| 564 | -8 / -35 | -7 / -33 | -6 / -31 | -7 / -30 | -6 / -23 | -6 / -26 |
+| 568 | -4 / - | -4 / - | -3 / - | -3 / - | -3 / - | -3 / - |
+| 572 | +0 / +2 | +0 / +3 | +1 / +5 | +1 / +5 | +2 / +11 | +2 / +11 |
+| 580 | +1 / +3 | +1 / +4 | +2 / +6 | +2 / +7 | +2 / +11 | +2 / +12 |
+| 584 | -2 / - | -2 / - | -1 / - | -1 / - | -1 / - | -1 / - |
+| 588 | +1 / -1 | +1 / +0 | +2 / +2 | +2 / +2 | +2 / +7 | +2 / +8 |
+| 592 | +0 / -8 | +0 / -6 | +0 / -4 | +0 / -4 | +0 / +2 | +0 / +1 |
+| 624 | -5 / -34 | -4 / -32 | -4 / -31 | -4 / -31 | -4 / -28 | -4 / -28 |
+| 656 | +1 / +23 | +1 / +24 | +2 / +25 | +1 / +25 | +2 / +26 | +1 / +25 |
+| 688 | +2 / +25 | +2 / +26 | +3 / +26 | +2 / +26 | +2 / +26 | +2 / +27 |
+| 720 | +0 / -9 | +0 / -8 | +1 / -7 | +1 / -7 | +1 / -6 | +1 / -6 |
+| 752 | +0 / +8 | +0 / +10 | +1 / +10 | +1 / +10 | +1 / +10 | +0 / +10 |
+| 784 | +4 / +16 | +4 / +18 | +5 / +18 | +4 / +18 | +5 / +18 | +4 / +18 |
+| 816 | +6 / +4 | +7 / +6 | +9 / +7 | +8 / +7 | +9 / +7 | +8 / +7 |
+| 848 | +10 / -5 | +10 / -4 | +12 / -2 | +10 / -3 | +11 / -2 | +10 / -2 |
+| 880 | +1 / +2 | +1 / +4 | +5 / +6 | +4 / +5 | +6 / +6 | +6 / +5 |
+| 912 | +2 / +8 | +4 / +9 | +18 / +12 | +21 / +10 | +26 / +10 | +25 / +9 |
+| 938 | -25 / -16 | -12 / -13 | +117 / -11 | +140 / -15 | +152 / -14 | +151 / -15 |
+| 942 | +18 / +3 | +2 / +4 | +444 / +6 | +454 / +3 | +422 / +3 | +416 / +2 |
+| 944 | +3 / +0 | -6 / +3 | +126 / +4 | +45 / +1 | +36 / +2 | +35 / +1 |
+| 946 | -7 / +4 | -1 / +6 | +1174 / +8 | +251 / +4 | +125 / +4 | +108 / +3 |
+| 950 | -15 / +0 | -27 / +2 | +500 / +4 | +25 / +0 | +25 / +1 | +25 / +0 |
+| 956 | -18 / +2 | -49 / +4 | +284 / +6 | no min / +1 | no min / +2 | no min / +1 |
+| 976 | -25 / +6 | -109 / +8 | +1066 / +14 | no min / +6 | no min / +8 | no min / +5 |
+
+Shape error at the table's cutoff over the 32 indices both check, dB: 44.1 kHz mean 0.387
+(state-variable) / 0.387 (Clean), RMS 0.65 / 0.42, largest 2.52 / 0.68; 48 kHz mean 0.346 /
+0.388, RMS 0.57 / 0.42; over all six rates mean 0.452 / 0.383, RMS 0.80 / 0.42, largest 3.61 /
+0.68. Below index 848 Clean is worse (mean 0.45 against 0.15 at every rate, largest 0.68 against
+0.73); from 880 it is better (0.13-0.31 at every rate against 0.25-3.61). Clean passes everywhere
+and its shape error is not worse overall, so HPF24 is now Clean (register entry 1 holds what
+differs). Kept locally, not in the measurement repository: the `fit.py` break and non-decreasing
+options (the thirteenth session's patch) and the fit script.
+
+*Converter* (not this repository): HPF24 is type 5, subtype 2 (HP 24 dB Clean) at resonance
+0.05, with the new `cutoffHp24` table (its checked span 352-992); filter saturator offset -44.02
+dB, for when the filter saturator drive is converted (the converter drops it for now).
+The rate match is looked up by type and subtype, so with the option on a patch still on HP 24 dB
+Standard (subtype 0) is no longer rate matched at other rates; a stock patch is unchanged (the
+option is off by default).
+
+The plugin is 0.3.2 (with this entry): HPF24 Parts sound different (converted with the new
+mapping). The commits with this entry were gated after it was written: their results are not
+recorded here.
+
 **Where this stopped** (thirteenth session). HPF24 stays on the state-variable HP 24 dB: Clean
 passes everything but index 560 (at every rate), Driven fails above 48 kHz; a decision for Jacob
 again (register entry 1). The amp EG decay table holds from index 72; attack and release below
@@ -2989,38 +3084,29 @@ has one; any such reference limit found is recorded here as a deliberate differe
 been measured so far, and the fork adds no output pitch clamp (the portamento octave limit
 only moves where a glide starts, below).
 
-1. **HPF24 cutoff at the top, above 44.1 kHz.** Best shape match off the table (tolerance 50
-   cents), index: 938 / 942 / 944 / 946 / 950 / 956 / 976: 48 kHz -12 / +1 / -6 / -1 / -27 / -49
-   / **-109**; 88.2 kHz **+117 / +444 / +126 / +1174 / +500 / +284 / +1066**; 96 kHz **+140 /
-   +454** / +45 / **+251** / +25 / no minimum / no minimum; 176.4 kHz **+151 / +422** / +36 /
-   **+125** / +25 / no minimum / no minimum; 192 kHz **+151 / +416** / +35 /
-   **+108** / +25 / no minimum / no minimum (64 kHz, not a checked rate: +9 / +76 / +460 / +175 /
-   +314 / +163 / +409). Index 937 and below at every rate, and every index at 44.1 kHz, pass.
-   Cause: the state-variable highpass's damping cap gives the 44.1 kHz filter a resonance near the
-   top that a higher rate doesn't; no cutoff, and no cutoff and resonance together, reproduce it
-   (eleventh session: matching Q1 through the resonance made 96 kHz worse; a search over
-   resonance 0-0.6 and cutoff found its best at resonance 0, 1.4 / 2.5 / 4.0 dB shape error at
-   cutoffs 55 / 58 / 61 against 1.9 / 3.1 / 4.1 at 0.05). HP 24 dB Driven matches the
-   reference's HPF24 better at the top at 44.1 kHz (0.08-0.28 dB from index 880 against the
-   state-variable filter's 0.32-2.52 dB); twelfth session: switched on Jacob's decision, refitted
-   (25 of 25 checks with a break at 475) and rate matched, it fails at 88.2-192 kHz (4, 1, 16
-   and 17 checks at 88.2, 96, 176.4 and 192 kHz, from index 496) because it saturates inside its loop, so its shape depends on
-   the level and the rate; not applied. HP 24 dB Clean (thirteenth session, on Jacob's decision):
-   refitted (sweep `surge/cut5c`, `scripts/gate_type5c.py type5c3`, with the break at 475),
-   saturator offset -44.02 dB and rate match refitted; it passes every check from index 592 up
-   at every rate (938-976 within 16 cents) but fails index 560 at every rate (+61 / +64 / +67 /
-   +64 / +95 / +74 cents at 44.1 / 48 / 88.2 / 96 / 176.4 / 192 kHz), so per Jacob's rule it was
-   not applied (numbers in section 10, thirteenth session). Unresolved (decision for Jacob: the
-   state-variable filter as now, Driven with failures at 88.2-192 kHz, or Clean with index 560
-   failing, or reference probes between 528 and 592 to refit Clean). Reproduce: plugin tests
-   (`oscairn-analog-tests`, "fitted tables" at the other rates print these lines);
-   `oscairn-analog-rate-match fit HPF24 96000`; the driven refit: `scripts/gate.py type5d`
-   (local) with the sweep `surge/cut5d`. Code: `src/common/dsp/FilterCutoffRateMatch.h`,
-   `FilterCutoffRateMatchTables.h`; the exclusion in `testFittedTables` (`lastElsewhere`).
+1. **HPF24 shape at low cutoffs, and near index 562.** HPF24 is HP 24 dB Clean (type 5, subtype 2,
+   resonance 0.05) since the fourteenth session. Its shape error at the table's cutoff is larger
+   than the state-variable HP 24 dB's (Standard, before) from index 352 to 848: 0.09-0.68 dB
+   against 0.04-0.73 (mean 0.45 against 0.15 at 44.1 kHz); from 880 it is smaller, 0.13-0.31 dB at
+   every rate against 0.32-2.52 at 44.1 kHz and up to 3.61 at 192 kHz. Its best match sits close
+   to the tolerance on both sides of index 562: +38 to +42 cents at 560 and -23 to -35 at 564 over
+   the six rates (tolerance 50). Cause: Clean's damping is capped at Q 0.5, so its knee is softer
+   than the reference's and its shape matches less well where the knee is inside the measured
+   harmonics; at 562 the shape measure's harmonic 2 leaves the 40 dB range (560: -38.6 dB below the
+   largest, 564: -40.7), and the best Clean match falls by 0.7 semitone there (560 -6.65, 564
+   -7.34), which a non-decreasing table can't follow, so the table sits between the two. Unresolved
+   (no filter has been found that matches the whole range at every rate: the state-variable filter
+   failed above index 937 at 48-192 kHz, by up to 1174 cents, because its damping cap gives the
+   44.1 kHz filter a resonance near the top that higher rates don't; Driven failed at 88.2-192
+   kHz because it saturates inside its loop; sessions eleven to thirteen). Reproduce: plugin tests
+   (`oscairn-analog-tests`, "fitted tables" at each rate); measurement side, the fit with
+   `fit.py`'s break and non-decreasing options (section 10, fourteenth session). Code:
+   `FilterCutoffRateMatchTables.h` (HPF24's tables), `tests/FittedTables.h` (`cutoffHp24`),
+   `testFittedTables`.
 2. **Cutoff between and outside the fitted rates.** The rate match is fitted at 48, 96 and 192
    kHz and interpolated linearly in log rate between them (and between 44.1 kHz, unchanged, and
    48); above 192 kHz the 192 kHz table is used; below 44.1 kHz the cutoff is unchanged. Checked
-   at the interpolated 88.2 and 176.4 kHz (pass but HPF24, entry 1). At 64 kHz (not a checked
+   at the interpolated 88.2 and 176.4 kHz (all pass). At 64 kHz (not a checked
    rate) LPF24 fails at index 948 (+58 cents) and 956 (+130): the interpolation between 48 and 96
    kHz is too coarse near the state-variable filter's clamp. Below 44.1 kHz the filters clamp
    lower than at 44.1 kHz, so the top can't match. 64 kHz: **deliberate** (Jacob, twelfth session:
