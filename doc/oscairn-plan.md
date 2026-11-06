@@ -2807,6 +2807,76 @@ for this) passed in the engine (not in a worker). Docker Linux (standard; exit 0
 sanitizer reports): `346e6e4` 1013 s, `eb474bd` 1022 s of tests. The commit with this entry (the
 version) was gated after it was written: its results are not recorded here.
 
+**Reset at once (2026-11-06, after the thirteenth session).** Oscairn main `11ca03a` resets an
+instance it takes over at a Performance change (CLAP `reset`, on the audio thread), then gives it
+the incoming state; its porting guide now says a reset must take effect at once. The plugin's reset
+called Surge's `allSoundOff()`, which only starts a fade of 8 blocks; at its end `stopSound()` ran
+and ended every note struck meanwhile, so the notes played at a change were cut (in the converted
+library, "Goofing" opened after "For the First Time" and "fpt 2", with silence before each change,
+played a chord for 2 s at 0.0008 RMS, against 0.047 opened alone). Commits:
+`c77e48c` the fix and its tests, then version 0.3.1 with this entry.
+
+*What a reset does now.* Reset and activation clear each synthesizer at once (`clear()` in
+`OscairnAnalog.cpp`), so that it then renders as a fresh one given its state, sample for sample:
+`stopSound()` (voices, waiting notes, keys, pedals, hold buffers, the scene's filters) with no
+fade left pending (also one MIDI's all sound off started); the MIDI channel state as constructed
+(bend, pressure, RPN selection); MPE off (only RPN turns it on here); poly aftertouch; the held-key
+order behind the lowest, highest and latest key sources; where portamento glides from (key 60);
+the controller sources (bend, wheel, breath, expression, sustain, aftertouch, the key sources) at
+0; the alternating sources' phase; the scene LFOs set up again as the constructor does (they run
+every block, voices or not, and kept their phase into the next note); which modulators run (worked
+out at each block; a voice started before the first block reads it as constructed); the output
+gain's glide in from 0 over the first blocks; the scene data without the last block's modulation;
+the song position (a free-running LFO started before the first block reads it); the random seed.
+Reset clears at once the sounds the audio thread may touch (selected, holding a note, ringing,
+or in the block being rendered); the others, which the main thread may be using, are marked and
+cleared when next selected, at the start of a `process()` call before any event. Reset has no
+output events: notes it ends get no `NOTE_END`, then or later. Nothing allocates or locks.
+
+*What a reset keeps* (state, not processing): parameter values; the mod wheel's position, which a
+Surge patch saves (it glides there from 0, as after a load, so a reset leaves the saved state as it
+was); the prepared sounds and the channels' selections; the voice budget's limits; the host's tempo
+and transport (given with each `process()` call).
+
+*Upstream files.* `LFOModulationSource::assign` also clears the LFO's outputs and its first-attack
+flag (3 lines and an include), so assigning again starts it afresh. Surge assigns each LFO once
+(scene LFOs at construction, voice LFOs on a constructed voice), so Surge itself is unchanged.
+
+*Without the reset* (a taken-over instance deactivated, loaded and activated, as before
+`11ca03a`), activation left voices releasing (it called `allNotesOff()`), the scene LFOs' phase,
+the controllers and the rest above; activation now clears the same way.
+
+*Found, not changed.* (1) A patch loaded before activation can render differently from the same
+patch loaded after it (factory "Asymmetry" and "Japanese Unison": 8.3 and 3.3 dB of residual
+between the two orders on fresh instances; reloading or reactivating doesn't change either
+order's result). The takeover (reset, deactivate, load, activate) renders exactly as a fresh
+instance loaded before activation. Cause not looked for. (2) A sound that `chokeRetiring` fades out
+ends with `allSoundOff()`, which then waits, unprocessed, until the sound is next rendered; if it is
+selected again, notes in its first 8 blocks would be cut the same way. Not tested; a reset clears
+it.
+
+Tests (`reset`): notes struck in the block after a reset (after held notes, both pedals, bend,
+pressure, controllers, MPE turned on by RPN and MIDI's all sound off just before it) sound at full
+level, and no `NOTE_END` follows for the notes it ended; after a reset the instance renders
+bit-identically to a fresh one with the same state, for every 8th factory patch and a patch that
+routes every cleared controller, key and alternating source and a free-running tempo-synced voice
+LFO to pitch (played on channel 1, where MPE left on would change the bend): with the same state
+loaded again, with another state played before, with no load (the saved state unchanged, against
+a fresh instance given it), and deactivated, loaded and activated (against a fresh instance loaded
+before activation); with two prepared sounds, one taken off its channel while its notes ring, every
+sound plays as in an instance that never played; a sound idle and unpinned at the reset, selected
+again, plays as one that never played. Every reset runs under the allocation guard. Each failed
+with its part undone (seen): the old reset (full level, and every comparison but the deactivated
+one, as activation now clears); no pending fade cleared
+(full level); no marking of idle sounds (idle sound); the channel state, MPE, poly aftertouch, the
+key order, the portamento key, the controllers, the alternating sources, the LFO setup, either
+upstream line, which modulators run, the output gain, the scene data, the song position, the seed
+(comparisons); the wheel zeroed (the state check); an allocation in reset (the guard aborts). Not
+shown by a test and kept as activation did: the host position (`ppqPos`) at 0.
+
+The plugin is 0.3.1 (with this entry): a fix; patches sound as in 0.3.0 except after a reset or a
+reactivation. The converter still writes 0.1.0 for the plugin's nodes (not changed here).
+
 **Where this stopped** (thirteenth session). HPF24 stays on the state-variable HP 24 dB: Clean
 passes everything but index 560 (at every rate), Driven fails above 48 kHz; a decision for Jacob
 again (register entry 1). The amp EG decay table holds from index 72; attack and release below
