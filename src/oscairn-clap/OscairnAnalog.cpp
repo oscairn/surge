@@ -8,7 +8,8 @@
  * Surge XT. See the LICENSE file in the root of this repository.
  *
  * What differs from the Surge XT plugin (doc/oscairn-plan.md, section 4):
- * - Written against CLAP directly, no JUCE: one stereo output, no input, one note port.
+ * - Written against CLAP directly, no JUCE: a stereo main output and eight stereo sound buses,
+ *   no input, one note port.
  * - One scene (scene A), no effects. Only scene A and a few global parameters are
  *   exposed; the effect slots are disabled.
  * - Parameters carry Surge's own values and ranges, real defaults and stepped flags.
@@ -30,7 +31,8 @@
  *   the default sound's patch; the sound-context snapshot holds every sound, and a snapshot's
  *   sounds can be prepared beside the playing ones (oscairn.sound-snapshots/draft-4), the
  *   outgoing ones ringing out into the host's ring-out buffer; a sound can be saved on its own
- *   and its values read.
+ *   and its values read. Each sound plays on the output its Output Bus parameter names, so
+ *   several Oscairn parts can share one instance.
  * - Oscairn's voice budget (oscairn.voice-budget/draft-1): past the host's limits, Surge
  *   voices of every sound are given up in the SDK's order and fade out over 3 ms. With no
  *   limit set, Surge steals voices as it always has.
@@ -93,6 +95,7 @@ struct ParamInfo
     clap_id id{0};
     bool normalized{false}; // exposed as Surge's 0..1 value instead of its own units
     bool deactivation{false}; // the parameter's off switch (1 = off), not its value
+    bool bus{false};          // the Output Bus: the sound's output port, not a Surge parameter
     double min{0}, max{1}, def{0};
     uint32_t flags{0};
     uint32_t role{OSCAIRN_ROLE_NONE}; // oscairn.ui
@@ -165,6 +168,7 @@ bool readFxp(const char *path, std::vector<uint8_t> *data)
 // mostly its patch (3.3 MiB), its oscillators' wavetables and the synthesizer object without its
 // voices: 13-14 MiB (see synthBytes). 16 sounds with the default fit where 8 did (288 MiB).
 constexpr uint32_t contextCapacity = 16;
+constexpr uint32_t soundBuses = 8; // output ports beside Main, as Oscairn's Basic Synth has
 constexpr size_t voiceCapacity = 256; // notes held or sounding, every sound together
 
 // A note in a sound: it goes to that sound's synthesizer under an ID of its own, and ends when
@@ -180,13 +184,14 @@ struct Voice : oscairn::contexts::VoiceBase
 struct Patch
 {
     std::vector<uint8_t> state;
+    uint32_t bus{0}; // its Output Bus
     // A snapshot's sound, built while reading it (main thread, beside whatever plays), installed
     // when the sound is published or the snapshot loaded.
     std::unique_ptr<SurgeSynthesizer> built;
     Patch() = default;
     Patch(Patch &&) = default;
     Patch &operator=(Patch &&) = default;
-    Patch(const Patch &o) : state(o.state) {} // a copy (draft 4's saveSound): the patch data
+    Patch(const Patch &o) : state(o.state), bus(o.bus) {} // a copy (draft 4's saveSound)
 };
 
 // The synthesizer of a sound context slot. The audio thread touches it only while the slot is
@@ -202,6 +207,12 @@ struct Slot
     bool fresh{false};   // audio: rendered the current block, which pins it
     bool choking{false}; // audio: choked by chokeRetiring: fading out, then silent until unpinned
     uint32_t fadeLeft{0}; // audio: frames of that fade left
+    // The Output Bus as last set (parameter events on the audio thread; the main thread while
+    // the sound isn't published, or with processing excluded), and where its output goes: a
+    // change crossfades from the old port to the new one over the choke time.
+    std::atomic<uint32_t> bus{0};
+    uint32_t outBus{0}, fromBus{0}, busFade{0}; // audio
+    bool sounded{false}; // audio: its last block's output wasn't all zero
 };
 
 void clear(SurgeSynthesizer &s);
@@ -219,7 +230,7 @@ struct Plugin : SharedVoices,
                 SurgeSynthesizer::VoiceChooser
 {
     using Base = oscairn::contexts::Engine<Plugin, Voice, Patch, contextCapacity, voiceCapacity>;
-    static constexpr const char *stateVersion = "oscairn-analog-sounds-1";
+    static constexpr const char *stateVersion = "oscairn-analog-sounds-2";
     static constexpr size_t maxStateBytes = size_t(64) << 20;
 
     const clap_host_t *host{nullptr};
@@ -383,6 +394,16 @@ struct Plugin : SharedVoices,
                 params.push_back(std::move(off));
             }
         }
+        ParamInfo bus;
+        bus.bus = true;
+        bus.id = fnv1a("oscairn_output_bus");
+        bus.name = "Output Bus";
+        bus.module = "Global";
+        bus.max = soundBuses;
+        bus.flags = CLAP_PARAM_IS_AUTOMATABLE | CLAP_PARAM_IS_STEPPED;
+        bus.role = OSCAIRN_ROLE_OUTPUT_BUS;
+        indexById[bus.id] = (uint32_t)params.size();
+        params.push_back(std::move(bus));
         values.reset(new std::atomic<double>[params.size()]);
         refreshValues();
     }
@@ -420,10 +441,16 @@ struct Plugin : SharedVoices,
         }
     }
 
+    // A parameter's value in a sound's slot.
+    double valueIn(uint32_t slot, const ParamInfo &pi) const
+    {
+        return pi.bus ? slots[slot].bus.load(std::memory_order_relaxed)
+                      : currentValue(pi, paramIn(*slots[slot].synth, pi));
+    }
     void refreshValues()
     {
         for (size_t i = 0; i < params.size(); ++i)
-            values[i].store(currentValue(params[i]), std::memory_order_relaxed);
+            values[i].store(valueIn(0, params[i]), std::memory_order_relaxed);
     }
 
     const ParamInfo *find(clap_id id, void *cookie) const
@@ -831,12 +858,23 @@ struct Plugin : SharedVoices,
             if (!pi || !std::isfinite(v->value))
                 return;
             paramEpoch.fetch_add(1);
-            forTargets(v->channel < 16 ? v->channel : -1, [&](SurgeSynthesizer &s, uint32_t i) {
-                setParamIn(s, *pi, v->value);
-                if (i == selected[0])
-                    values[pi - params.data()].store(currentValue(*pi, paramIn(s, *pi)),
-                                                     std::memory_order_relaxed);
-            });
+            if (pi->bus)
+            {
+                // the sounds the event's channel selects (the host sets it on a part's channel)
+                const auto b = (uint32_t)std::lround(std::clamp(v->value, pi->min, pi->max));
+                for (int ch = 0; ch < 16; ++ch)
+                    if (v->channel < 0 || v->channel >= 16 || v->channel == ch)
+                        slots[selected[ch]].bus.store(b, std::memory_order_relaxed);
+                values[pi - params.data()].store(valueIn(selected[0], *pi),
+                                                 std::memory_order_relaxed);
+            }
+            else
+                forTargets(v->channel < 16 ? v->channel : -1, [&](SurgeSynthesizer &s, uint32_t i) {
+                    setParamIn(s, *pi, v->value);
+                    if (i == selected[0])
+                        values[pi - params.data()].store(currentValue(*pi, paramIn(s, *pi)),
+                                                         std::memory_order_relaxed);
+                });
             paramEpoch.fetch_add(1);
         }
         else if (e->type == CLAP_EVENT_PARAM_MOD)
@@ -866,10 +904,10 @@ struct Plugin : SharedVoices,
     // After a selection for every channel: the parameters show the selected sound's values.
     void selectedGlobally(Context &next, const clap_output_events_t *out)
     {
-        auto &s = *slots[&next - contexts.data()].synth;
+        const auto slot = uint32_t(&next - contexts.data());
         for (size_t i = 0; i < params.size(); ++i)
         {
-            auto v = currentValue(params[i], paramIn(s, params[i]));
+            auto v = valueIn(slot, params[i]);
             if (v == values[i].load(std::memory_order_relaxed))
                 continue;
             values[i].store(v, std::memory_order_relaxed);
@@ -904,6 +942,13 @@ struct Plugin : SharedVoices,
                 sl.choking = false;
                 contexts[i].users.fetch_sub(1, std::memory_order_release);
             }
+            // An Output Bus change: a sound whose last block sounded crossfades to the new port
+            if (const auto b = sl.bus.load(std::memory_order_relaxed); b != sl.outBus)
+            {
+                sl.fromBus = sl.outBus;
+                sl.outBus = b;
+                sl.busFade = sl.fresh && sl.sounded ? chokeFrames : 0;
+            }
             // A block pins what it renders until the next boundary: a selection can unpin a
             // sound mid-block, while this block still reads its output.
             const bool use = live(false) >> i & 1;
@@ -915,6 +960,7 @@ struct Plugin : SharedVoices,
                     contexts[i].users.fetch_sub(1, std::memory_order_release);
                 sl.fresh = use;
             }
+            sl.sounded = false;
             if (!sl.fresh)
                 continue;
             auto &sy = *sl.synth;
@@ -939,6 +985,7 @@ struct Plugin : SharedVoices,
             float peak = 0;
             for (int k = 0; k < BLOCK_SIZE; ++k)
                 peak = std::max({peak, std::fabs(sy.output[0][k]), std::fabs(sy.output[1][k])});
+            sl.sounded = peak > 0;
             sl.quietBlocks = voiceless && peak < 1e-6f ? sl.quietBlocks + 1 : 0;
             sl.silent = voiceless && (peak == 0 || sl.quietBlocks * BLOCK_SIZE >= sampleRate);
             if (sl.choking && !sl.fadeLeft)
@@ -967,7 +1014,7 @@ struct Plugin : SharedVoices,
                 v.choked = true;
                 slots[v.context].synth->chokeNote(v.channel, v.key, 0, v.surgeId);
             }
-        float *outL = pr->audio_outputs[0].data32[0], *outR = pr->audio_outputs[0].data32[1];
+        const uint32_t ports = std::min(pr->audio_outputs_count, soundBuses + 1);
         for (uint32_t s = from; s < to; ++s)
         {
             if (blockPos == BLOCK_SIZE)
@@ -975,11 +1022,12 @@ struct Plugin : SharedVoices,
                 renderBlock(s);
                 blockPos = 0;
             }
-            // A retiring sound (selected by no channel, still sounding) goes to the ring-out
-            // channels retiring() gives when the host gives a buffer (oscairn.sound-snapshots
-            // draft 3); one chokeRetiring choked fades out there over the choke time, tail and
-            // all, and then stays silent.
-            float l = 0, r = 0;
+            // A retiring sound (selected by no channel, still sounding) on the main output goes
+            // to the ring-out channels retiring() gives when the host gives a buffer
+            // (oscairn.sound-snapshots); one chokeRetiring choked fades out there over the choke
+            // time, tail and all, and then stays silent. Only the main output rings out: a sound
+            // on a sound bus plays on there.
+            float out[soundBuses + 1][2] = {};
             for (uint32_t i = 0; i < contextCapacity; ++i)
             {
                 auto &sl = slots[i];
@@ -987,7 +1035,7 @@ struct Plugin : SharedVoices,
                     continue;
                 if (sl.choking && contexts[i].selected.load(std::memory_order_relaxed))
                     sl.choking = false; // selected again
-                auto *ro = retiring(i);
+                auto *ro = sl.outBus || sl.busFade ? nullptr : retiring(i);
                 if (ro && ro == ringOut + 2 && !sl.choking)
                 {
                     sl.choking = true;
@@ -1011,28 +1059,46 @@ struct Plugin : SharedVoices,
                     ro[1][s] += y;
                     continue;
                 }
-                l += x;
-                r += y;
+                if (sl.busFade)
+                {
+                    const float h = (float)sl.busFade-- / (float)chokeFrames;
+                    out[sl.fromBus][0] += h * x;
+                    out[sl.fromBus][1] += h * y;
+                    out[sl.outBus][0] += (1 - h) * x;
+                    out[sl.outBus][1] += (1 - h) * y;
+                    continue;
+                }
+                out[sl.outBus][0] += x;
+                out[sl.outBus][1] += y;
             }
-            outL[s] = l;
-            outR[s] = r;
+            for (uint32_t b = 0; b < ports; ++b)
+            {
+                auto &o = pr->audio_outputs[b];
+                if (o.channel_count >= 2 && o.data32)
+                {
+                    o.data32[0][s] = out[b][0];
+                    o.data32[1][s] = out[b][1];
+                }
+            }
             ++blockPos;
         }
     }
 
     clap_process_status process(const clap_process_t *pr)
     {
-        if (pr->audio_outputs_count != 1 || pr->audio_outputs[0].channel_count != 2)
+        if (pr->audio_outputs_count < 1 || pr->audio_outputs[0].channel_count != 2)
             return CLAP_PROCESS_ERROR;
-        float *outL = pr->audio_outputs[0].data32[0], *outR = pr->audio_outputs[0].data32[1];
 
         inProcess.store(true);
         if (loading.load())
         {
             backedOut.store(true);
             inProcess.store(false);
-            std::fill(outL, outL + pr->frames_count, 0.f);
-            std::fill(outR, outR + pr->frames_count, 0.f);
+            for (uint32_t b = 0; b < pr->audio_outputs_count; ++b)
+                for (uint32_t k = 0; k < pr->audio_outputs[b].channel_count; ++k)
+                    if (pr->audio_outputs[b].data32)
+                        std::fill(pr->audio_outputs[b].data32[k],
+                                  pr->audio_outputs[b].data32[k] + pr->frames_count, 0.f);
             return CLAP_PROCESS_CONTINUE;
         }
         if (pr->transport && (pr->transport->flags & CLAP_TRANSPORT_HAS_TEMPO) &&
@@ -1256,12 +1322,14 @@ struct Plugin : SharedVoices,
         // (its audio flags are the audio thread's; unpinned, it leaves them unset)
         sl.owned = std::move(s);
         sl.synth = sl.owned.get();
+        sl.bus.store(c.patch.bus, std::memory_order_relaxed);
     }
     void discarded(Context &c)
     {
         auto &sl = slots[&c - contexts.data()];
         sl.synth = nullptr;
         sl.owned.reset();
+        sl.bus.store(0, std::memory_order_relaxed);
         c.patch = {};
     }
 
@@ -1299,8 +1367,12 @@ struct Plugin : SharedVoices,
             set.push_back({pi, v});
         }
         auto synth = s.makeSynth();
+        c->patch.bus = 0;
         for (auto &[pi, v] : set)
-            setParamIn(*synth, *pi, v);
+            if (pi->bus)
+                c->patch.bus = (uint32_t)std::lround(v);
+            else
+                setParamIn(*synth, *pi, v);
         refreshSceneData(*synth);
         s.install(*c, std::move(synth));
         return s.publish(*c, name);
@@ -1347,7 +1419,10 @@ struct Plugin : SharedVoices,
         auto &s = self(p);
         for (uint32_t i = 0; i < contextCapacity; ++i)
             if (s.contexts[i].prepared)
+            {
                 s.contexts[i].patch.state = patchOf(*s.slots[i].synth);
+                s.contexts[i].patch.bus = s.slots[i].bus.load(std::memory_order_relaxed);
+            }
         bool ok = Base::saveSnapshot(p, stream);
         for (auto &c : s.contexts)
             c.patch.state = {};
@@ -1360,13 +1435,16 @@ struct Plugin : SharedVoices,
         auto &s = self(p);
         for (uint32_t i = 0; i < contextCapacity; ++i)
             if (s.contexts[i].prepared && s.contexts[i].id == id)
+            {
                 s.contexts[i].patch.state = patchOf(*s.slots[i].synth);
+                s.contexts[i].patch.bus = s.slots[i].bus.load(std::memory_order_relaxed);
+            }
         bool ok = Base::saveSound(p, id, stream);
         for (auto &c : s.contexts)
             c.patch.state = {};
         return ok;
     }
-    void alone(Patch &) {} // one output: every sound plays on the main output
+    void alone(Patch &patch) { patch.bus = 0; } // on the main output
     // Draft 4: a sound's values, read from its synthesizer, which no channel selects, so the
     // audio thread doesn't touch it. Main thread.
     uint32_t patchValues(const Patch &patch, oscairn_sound_parameter_t *out, uint32_t capacity)
@@ -1376,7 +1454,7 @@ struct Plugin : SharedVoices,
             {
                 auto &sy = *slots[i].synth;
                 for (uint32_t k = 0; k < params.size() && k < capacity; ++k)
-                    out[k] = {params[k].id, currentValue(params[k], paramIn(sy, params[k]))};
+                    out[k] = {params[k].id, valueIn(i, params[k])};
                 return (uint32_t)params.size();
             }
         return 0;
@@ -1390,7 +1468,7 @@ struct Plugin : SharedVoices,
             line[1 + 2 * i] = hex[patch.state[i] >> 4];
             line[2 + 2 * i] = hex[patch.state[i] & 15];
         }
-        out << line;
+        out << ' ' << patch.bus << line; // its Output Bus, then its patch data
         return !patch.state.empty();
     }
     // Reading a sound builds its synthesizer, so a patch that would be refused refuses the
@@ -1400,7 +1478,7 @@ struct Plugin : SharedVoices,
     bool readPatch(std::istream &in, Patch &patch)
     {
         std::string text;
-        if (!(in >> text) || text.size() % 2)
+        if (!(in >> patch.bus) || patch.bus > soundBuses || !(in >> text) || text.size() % 2)
             return false;
         auto nibble = [](char c) {
             return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1;
@@ -1426,6 +1504,9 @@ struct Plugin : SharedVoices,
             auto &c = contexts[i];
             auto &sl = slots[i];
             sl.ringing = sl.silent = sl.fresh = sl.choking = false;
+            sl.bus.store(c.patch.bus, std::memory_order_relaxed);
+            sl.outBus = c.patch.bus;
+            sl.busFade = 0;
             if (!c.prepared)
             {
                 sl.synth = nullptr;
@@ -1447,8 +1528,7 @@ struct Plugin : SharedVoices,
             c.patch = {};
         }
         for (size_t i = 0; i < params.size(); ++i)
-            values[i].store(currentValue(params[i], paramIn(*slots[selected[0]].synth, params[i])),
-                            std::memory_order_relaxed);
+            values[i].store(valueIn(selected[0], params[i]), std::memory_order_relaxed);
     }
 
     // oscairn.memory: what one synthesizer holds without its voices, a sound each (15 MiB:
@@ -1468,14 +1548,18 @@ Plugin &self(const clap_plugin_t *p) { return *static_cast<Plugin *>(p->plugin_d
 
 // --- extensions -------------------------------------------------------------------------
 
-uint32_t portsCount(const clap_plugin_t *, bool isInput) { return isInput ? 0 : 1; }
+// Main, then a sound bus per Output Bus value (Oscairn gives each part sharing the instance one).
+uint32_t portsCount(const clap_plugin_t *, bool isInput) { return isInput ? 0 : soundBuses + 1; }
 bool portsGet(const clap_plugin_t *, uint32_t index, bool isInput, clap_audio_port_info_t *info)
 {
-    if (isInput || index != 0)
+    if (isInput || index > soundBuses)
         return false;
-    info->id = 0;
-    std::snprintf(info->name, sizeof(info->name), "Main");
-    info->flags = CLAP_AUDIO_PORT_IS_MAIN;
+    info->id = index;
+    if (index == 0)
+        std::snprintf(info->name, sizeof(info->name), "Main");
+    else
+        std::snprintf(info->name, sizeof(info->name), "Sound bus %u", index);
+    info->flags = index == 0 ? CLAP_AUDIO_PORT_IS_MAIN : 0;
     info->channel_count = 2;
     info->port_type = CLAP_PORT_STEREO;
     info->in_place_pair = CLAP_INVALID_ID;
@@ -1530,8 +1614,10 @@ bool paramsValueToText(const clap_plugin_t *p, clap_id id, double value, char *o
         return false;
     // shortcut: reads the parameter's current control type, which the audio thread can
     // change for oscillator controls; give these a snapshot once sound contexts exist.
-    auto text = pi->deactivation ? std::string(value > 0.5 ? "Off" : "On")
-                                 : pi->p->get_display(true, Plugin::to01(*pi, value));
+    const auto bus = (unsigned)std::lround(std::clamp(value, pi->min, pi->max));
+    auto text = pi->bus           ? (bus ? "Sound bus " + std::to_string(bus) : std::string("Main"))
+                : pi->deactivation ? std::string(value > 0.5 ? "Off" : "On")
+                                   : pi->p->get_display(true, Plugin::to01(*pi, value));
     std::snprintf(out, size, "%s", text.c_str());
     return true;
 }
@@ -1539,6 +1625,18 @@ bool paramsTextToValue(const clap_plugin_t *p, clap_id id, const char *text, dou
 {
     auto &s = self(p);
     auto pi = s.find(id, nullptr);
+    if (pi && pi->bus)
+    {
+        unsigned b = 0;
+        std::string t(text);
+        if (t == "Main")
+            *value = 0;
+        else if (std::sscanf(text, "Sound bus %u", &b) == 1 && b >= 1 && b <= soundBuses)
+            *value = b;
+        else
+            return false;
+        return true;
+    }
     if (pi && pi->deactivation)
     {
         std::string t(text);
@@ -1590,14 +1688,21 @@ bool uiParamHint(const clap_plugin_t *p, clap_id id, oscairn_param_hint_t *hint)
     auto pi = self(p).find(id, nullptr);
     if (!pi || pi->role == OSCAIRN_ROLE_NONE)
         return false;
-    *hint = {OSCAIRN_WIDGET_AUTO, 0, CLAP_INVALID_ID, 0, pi->role};
+    *hint = {pi->bus ? (uint32_t)OSCAIRN_WIDGET_LIST : (uint32_t)OSCAIRN_WIDGET_AUTO, 0,
+             CLAP_INVALID_ID, 0, pi->role};
     return true;
 }
 const oscairn_plugin_ui_t uiExt{uiParamHint};
 
+// The CLAP state: a line naming the format and the default sound's Output Bus, then its patch.
+constexpr const char *stateHeader = "oscairn-analog-state-1";
 bool stateSave(const clap_plugin_t *p, const clap_ostream_t *stream)
 {
-    auto bytes = self(p).saveStateBytes();
+    auto &s = self(p);
+    auto head = std::string(stateHeader) + " " +
+                std::to_string(s.slots[0].bus.load(std::memory_order_relaxed)) + "\n";
+    auto bytes = s.saveStateBytes();
+    bytes.insert(bytes.begin(), head.begin(), head.end());
     size_t done = 0;
     while (done < bytes.size())
     {
@@ -1621,10 +1726,31 @@ bool stateLoad(const clap_plugin_t *p, const clap_istream_t *stream)
             break;
         bytes.insert(bytes.end(), buf, buf + n);
     }
-    // A state starts with Surge's "sub3" patch header.
-    if (bytes.size() < 8 || std::memcmp(bytes.data(), "sub3", 4) != 0)
+    // The header line, then Surge's "sub3" patch data. Patch data alone (a converted Part's
+    // state) plays on the main output.
+    uint32_t bus = 0;
+    size_t at = 0;
+    const auto n = std::strlen(stateHeader);
+    if (bytes.size() > n && !std::memcmp(bytes.data(), stateHeader, n))
+    {
+        auto end = std::find(bytes.begin(), bytes.end(), (uint8_t)'\n');
+        unsigned b = 0;
+        if (end == bytes.end() ||
+            std::sscanf(std::string(bytes.begin() + n, end).c_str(), " %u", &b) != 1 ||
+            b > soundBuses)
+            return false;
+        bus = b;
+        at = size_t(end - bytes.begin()) + 1;
+    }
+    if (bytes.size() < at + 8 || std::memcmp(bytes.data() + at, "sub3", 4) != 0)
         return false;
-    return self(p).loadStateBytes(bytes.data(), bytes.size());
+    auto &s = self(p);
+    if (!s.loadStateBytes(bytes.data() + at, bytes.size() - at))
+        return false;
+    s.slots[0].bus.store(bus, std::memory_order_relaxed);
+    s.values[s.indexById[fnv1a("oscairn_output_bus")]].store(s.valueIn(0, s.params.back()),
+                                                            std::memory_order_relaxed);
+    return true;
 }
 const clap_plugin_state_t stateExt{stateSave, stateLoad};
 
@@ -1793,6 +1919,8 @@ void silence(Plugin &s)
     for (uint32_t i = 0; i < contextCapacity; ++i)
     {
         s.slots[i].choking = false;
+        s.slots[i].outBus = s.slots[i].bus.load(std::memory_order_relaxed);
+        s.slots[i].busFade = 0;
         for (bool *pin : {&s.slots[i].ringing, &s.slots[i].fresh})
             if (*pin)
             {

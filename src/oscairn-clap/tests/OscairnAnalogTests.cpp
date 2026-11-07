@@ -252,6 +252,11 @@ struct Instance
     uint64_t position{0}; // samples rendered since activation
     std::function<void(uint32_t)> beforeProcess; // called with each process() call's frames
     OutEvents out;
+    // Output ports given to process() (Main and the sound buses after it), and what render()
+    // last rendered on each, interleaved; each is filled with 1 before a call, so a port the
+    // plugin doesn't write shows.
+    uint32_t outputs{1};
+    std::vector<std::vector<float>> port;
 
     explicit Instance(double rate = 48000, const clap_host_t *h = &host)
     {
@@ -292,6 +297,8 @@ struct Instance
                          [](const Event &a, const Event &b) { return a.time < b.time; });
         std::vector<float> left(block), right(block), result;
         result.reserve(frames * 2);
+        std::vector<std::vector<float>> bufs(2 * outputs, std::vector<float>(block));
+        port.assign(outputs, {});
         InEvents in;
         in.list.reserve(events.size());
         size_t next = 0;
@@ -305,15 +312,22 @@ struct Instance
                 e.header.time = (uint32_t)(std::max<uint64_t>(e.time, position) - position);
                 in.list.push_back(&e.header);
             }
-            float *channels[2] = {left.data(), right.data()};
-            clap_audio_buffer_t buffer{};
-            buffer.data32 = channels;
-            buffer.channel_count = 2;
+            std::vector<float *> channels(2 * outputs);
+            std::vector<clap_audio_buffer_t> buffer(outputs);
+            for (uint32_t k = 0; k < outputs; ++k)
+            {
+                channels[2 * k] = k ? bufs[2 * k].data() : left.data();
+                channels[2 * k + 1] = k ? bufs[2 * k + 1].data() : right.data();
+                std::fill(channels[2 * k], channels[2 * k] + n, 1.f);
+                std::fill(channels[2 * k + 1], channels[2 * k + 1] + n, 1.f);
+                buffer[k].data32 = &channels[2 * k];
+                buffer[k].channel_count = 2;
+            }
             clap_process_t pr{};
             pr.steady_time = (int64_t)position;
             pr.frames_count = n;
-            pr.audio_outputs = &buffer;
-            pr.audio_outputs_count = 1;
+            pr.audio_outputs = buffer.data();
+            pr.audio_outputs_count = outputs;
             pr.in_events = &in.in;
             pr.out_events = &out.out;
             if (beforeProcess)
@@ -328,6 +342,12 @@ struct Instance
                 result.push_back(left[i]);
                 result.push_back(right[i]);
             }
+            for (uint32_t k = 0; k < outputs; ++k)
+                for (uint32_t i = 0; i < n; ++i)
+                {
+                    port[k].push_back(channels[2 * k][i]);
+                    port[k].push_back(channels[2 * k + 1][i]);
+                }
             position += n;
             done += n;
         }
@@ -389,6 +409,13 @@ static std::vector<uint8_t> patchFromFxp(const std::string &path)
     return {};
 }
 
+// The patch data of a plugin state: after its first line ("oscairn-analog-state-1 <bus>").
+static std::vector<uint8_t> patchOfState(const std::vector<uint8_t> &state)
+{
+    auto end = std::find(state.begin(), state.end(), (uint8_t)'\n');
+    return end == state.end() ? std::vector<uint8_t>{} : std::vector<uint8_t>(end + 1, state.end());
+}
+
 static std::vector<std::string> factoryPatches(const std::string &dir)
 {
     std::vector<std::string> r;
@@ -420,9 +447,12 @@ static void testPortsAndParams(const std::vector<std::string> &patches)
     Instance a;
     check(a.ports && a.ports->count(a.plugin, true) == 0, "no audio input port");
     clap_audio_port_info_t port{};
-    check(a.ports->count(a.plugin, false) == 1 && a.ports->get(a.plugin, 0, false, &port) &&
-              port.channel_count == 2,
-          "one stereo output port");
+    bool buses = a.ports->count(a.plugin, false) == 9;
+    for (uint32_t k = 0; buses && k < 9; ++k)
+        buses = a.ports->get(a.plugin, k, false, &port) && port.channel_count == 2 &&
+                port.id == k && (port.flags & CLAP_AUDIO_PORT_IS_MAIN) == (k ? 0u : 1u) &&
+                std::string(port.name) == (k ? "Sound bus " + std::to_string(k) : "Main");
+    check(buses, "a stereo main output and eight stereo sound buses");
     clap_note_port_info_t np{};
     check(a.notePorts->count(a.plugin, true) == 1 && a.notePorts->get(a.plugin, 0, true, &np) &&
               np.preferred_dialect == CLAP_NOTE_DIALECT_CLAP,
@@ -446,7 +476,8 @@ static void testPortsAndParams(const std::vector<std::string> &patches)
             {"Filter Envelope/Attack", OSCAIRN_ROLE_FILTER_ATTACK},
             {"Filter Envelope/Decay", OSCAIRN_ROLE_FILTER_DECAY},
             {"Filter Envelope/Sustain", OSCAIRN_ROLE_FILTER_SUSTAIN},
-            {"Filter Envelope/Release", OSCAIRN_ROLE_FILTER_RELEASE}};
+            {"Filter Envelope/Release", OSCAIRN_ROLE_FILTER_RELEASE},
+            {"Global/Output Bus", OSCAIRN_ROLE_OUTPUT_BUS}};
         std::map<std::string, uint32_t> got;
         for (auto &[name, info] : a.paramsByName())
         {
@@ -455,6 +486,18 @@ static void testPortsAndParams(const std::vector<std::string> &patches)
                 got[name] = h.role;
         }
         check(got == want, "the parameters' roles: " + std::to_string(got.size()) + " hints");
+        auto bus = a.paramsByName()["Global/Output Bus"];
+        oscairn_param_hint_t h{};
+        char text[64] = "";
+        double v = -1;
+        check(ui && ui->param_hint(a.plugin, bus.id, &h) && h.widget == OSCAIRN_WIDGET_LIST &&
+                  (bus.flags & CLAP_PARAM_IS_STEPPED) && bus.min_value == 0 &&
+                  bus.max_value == 8 && bus.default_value == 0 &&
+                  a.params->value_to_text(a.plugin, bus.id, 3, text, sizeof(text)) &&
+                  std::string(text) == "Sound bus 3" &&
+                  a.params->text_to_value(a.plugin, bus.id, "Main", &v) && v == 0 &&
+                  !a.params->text_to_value(a.plugin, bus.id, "Sound bus 9", &v),
+              "the Output Bus: stepped 0-8, a list, Main and Sound bus 1-8");
     }
 
     const uint32_t count = a.params->count(a.plugin);
@@ -596,7 +639,7 @@ static void testPortsAndParams(const std::vector<std::string> &patches)
         check(b.params->value_to_text(b.plugin, id, 1, text, sizeof(text)) &&
                   std::string(text) == "Off",
               "off switch text");
-        auto st = b.save();
+        auto st = patchOfState(b.save());
         reference.loadRaw(st.data(), (int)st.size(), false);
         check(!reference.storage.getPatch().scene[0].amp_drive.deactivated,
               "the state carries the switched-on amp drive");
@@ -3553,6 +3596,206 @@ static void testPartBudgets()
           "with no reserves the lower priority part's note goes, not the oldest:" + list(ended));
 }
 
+// Oscairn parts sharing one instance (RFC 0021): each sound plays on the output port its Output
+// Bus names, set on its channel; two parts on one instance render what two instances render; the
+// buses are saved; a bus change crossfades; only the main output rings out.
+static void testSharing(const std::vector<std::string> &patches)
+{
+    std::string path;
+    for (auto &p : patches)
+        if (p.find("Polysynth") != std::string::npos)
+            path = p;
+    const clap_id busId = fnv1a("oscairn_output_bus");
+    auto busEvent = [&](uint32_t t, int16_t ch, double v) {
+        auto e = paramEvent(t, busId, v);
+        e.value.channel = ch;
+        return e;
+    };
+    auto on = [](uint32_t t, int32_t id, int16_t ch, int16_t key) {
+        auto e = noteEvent(t, CLAP_EVENT_NOTE_ON, id, key, 0.8);
+        e.note.channel = ch;
+        return e;
+    };
+    auto off = [](uint32_t t, int32_t id, int16_t ch, int16_t key) {
+        auto e = noteEvent(t, CLAP_EVENT_NOTE_OFF, id, key, 0);
+        e.note.channel = ch;
+        return e;
+    };
+    auto silent = [](const std::vector<float> &v) {
+        return std::all_of(v.begin(), v.end(), [](float x) { return x == 0; });
+    };
+    const uint32_t frames = 48000;
+    // part 1: the default sound (a factory patch) on channel 0; part 2: a preset on channel 1,
+    // with a pitch bend on its channel only
+    const std::vector<Event> part1{on(0, 1, 0, 60), on(4800, 2, 0, 67), off(24000, 1, 0, 60),
+                                   off(26000, 2, 0, 67)};
+    const std::vector<Event> part2{on(100, 11, 1, 64), midiEvent(9600, 0xE1, 0, 0x60),
+                                   off(25000, 11, 1, 64)};
+    auto both = [&](uint32_t bus1, uint32_t bus2) {
+        auto ev = part1;
+        ev.insert(ev.end(), part2.begin(), part2.end());
+        ev.push_back(busEvent(0, 0, bus1));
+        ev.push_back(busEvent(0, 1, bus2));
+        return ev;
+    };
+    std::vector<float> alone1, alone2;
+    {
+        Instance b, c;
+        b.load(patchFromFxp(patches[0]));
+        c.load(patchFromFxp(path));
+        alone1 = b.render(frames, 512, part1, false);
+        alone2 = c.render(frames, 512, part2, false);
+    }
+    check(!silent(alone1) && !silent(alone2), "both parts sound alone");
+    std::vector<uint8_t> snap;
+    {
+        Instance a;
+        a.outputs = 9;
+        Sounds s(a);
+        a.load(patchFromFxp(patches[0]));
+        s.x->select(a.plugin, s.preset(path), 1);
+        auto x = a.render(frames, 512, both(1, 2), false);
+        bool rest = silent(a.port[0]);
+        for (int k = 3; k < 9; ++k)
+            rest = rest && silent(a.port[k]);
+        check(a.port[1] == alone1 && a.port[2] == alone2 && rest,
+              "two parts on one instance, each its sound, channel and bus, render as two "
+              "instances; Main and the other buses are silent");
+        double v = -1;
+        a.params->get_value(a.plugin, busId, &v);
+        check(v == 1, "get_value shows channel 1's sound's bus");
+        snap = s.snapshot();
+        // the state carries the default sound's bus
+        auto state = a.save();
+        Instance d;
+        d.outputs = 9;
+        check(d.load(state), "the state with its bus loads");
+        d.params->get_value(d.plugin, busId, &v);
+        auto y = d.render(frames, 512, part1, false);
+        check(v == 1 && d.port[1] == alone1 && silent(d.port[0]),
+              "the state's sound plays on its saved bus");
+    }
+    {
+        Instance a;
+        a.outputs = 9;
+        Sounds s(a);
+        check(s.restore(snap), "the snapshot with buses loads");
+        auto ev = part1;
+        ev.insert(ev.end(), part2.begin(), part2.end());
+        a.render(frames, 512, ev, false);
+        check(a.port[1] == alone1 && a.port[2] == alone2 && silent(a.port[0]) &&
+                  s.snapshot() == snap,
+              "restored, each sound plays on its bus, and saves the same snapshot");
+        Instance b;
+        b.outputs = 9;
+        Sounds t(b);
+        uint32_t ids[16];
+        check(t.prepareSnapshot(snap, ids), "the snapshot prepared beside");
+        for (int16_t ch = 0; ch < 16; ++ch)
+            t.x->select(b.plugin, ids[ch], ch);
+        b.render(frames, 512, ev, false);
+        check(b.port[1] == alone1 && b.port[2] == alone2 && silent(b.port[0]),
+              "prepared beside, its sounds play on their buses");
+    }
+    // a sound saved on its own plays on the main output
+    {
+        Instance a;
+        Sounds s(a);
+        auto id = s.preset(path);
+        s.x->select(a.plugin, id, 1);
+        a.render(512, 512, {busEvent(0, 1, 4)}, false);
+        auto snaps = static_cast<const oscairn_plugin_sound_snapshots_t *>(
+            a.plugin->get_extension(a.plugin, OSCAIRN_EXT_SOUND_SNAPSHOTS));
+        oscairn_sound_parameter_t values[1024];
+        s.x->select(a.plugin, 0, 1);
+        a.render(512, 512, {}, false);
+        const auto n = snaps->sound_values(a.plugin, id, values, 1024);
+        check(n > 0 && values[n - 1].id == busId && values[n - 1].value == 4,
+              "a sound's values include its bus");
+        std::vector<uint8_t> alone;
+        clap_ostream_t os{&alone, [](const clap_ostream_t *st, const void *b, uint64_t k) {
+                              auto v = static_cast<std::vector<uint8_t> *>(st->ctx);
+                              v->insert(v->end(), (const uint8_t *)b, (const uint8_t *)b + k);
+                              return (int64_t)k;
+                          }};
+        snaps->save_sound(a.plugin, id, &os);
+        Instance b;
+        Sounds t(b);
+        t.restore(alone);
+        check(b.render(frames, 512, part2, false) == alone2,
+              "a sound on bus 4 saved on its own plays on the main output");
+    }
+    // A bus change while a note is held: the sound crossfades to the new bus over 3 ms, no step
+    // larger than the plain render's, and the two buses add up to it.
+    {
+        auto run = [&](bool change) {
+            Instance a;
+            a.outputs = 9;
+            a.load(patchFromFxp(patches[0]));
+            std::vector<Event> ev{on(0, 1, 0, 60), busEvent(0, 0, 1)};
+            if (change)
+                ev.push_back(busEvent(12000, 0, 2));
+            a.render(24000, 512, ev, false);
+            return std::pair{a.port[1], a.port[2]};
+        };
+        auto plain = run(false), moved = run(true);
+        auto step = [](const std::vector<float> &v) {
+            float m = 0;
+            for (size_t i = 2; i < v.size(); ++i)
+                m = std::max(m, std::fabs(v[i] - v[i - 2]));
+            return m;
+        };
+        float sum = 0;
+        for (size_t i = 0; i < plain.first.size(); ++i)
+            sum = std::max(sum, std::fabs(moved.first[i] + moved.second[i] - plain.first[i]));
+        const bool before = std::equal(moved.first.begin(), moved.first.begin() + 2 * 12000,
+                                       plain.first.begin()) &&
+                            silent({moved.second.begin(), moved.second.begin() + 2 * 12000});
+        const bool after = silent({moved.first.begin() + 2 * (12032 + 160), moved.first.end()});
+        check(before && after && sum < 1e-6 && step(moved.first) <= step(plain.first) &&
+                  step(moved.second) <= step(plain.first),
+              "a bus change crossfades without a click: sum within " + std::to_string(sum) +
+                  ", steps " + std::to_string(step(moved.first)) + " and " +
+                  std::to_string(step(moved.second)) + " against " +
+                  std::to_string(step(plain.first)));
+    }
+    // Only the main output rings out: a retiring sound on bus 3 plays on there.
+    {
+        Instance a;
+        a.outputs = 9;
+        Sounds s(a);
+        auto snaps = static_cast<const oscairn_plugin_sound_snapshots_t *>(
+            a.plugin->get_extension(a.plugin, OSCAIRN_EXT_SOUND_SNAPSHOTS));
+        std::vector<float> rb[4];
+        float *ch[4];
+        for (int k = 0; k < 4; ++k)
+        {
+            rb[k].assign(512, 0.f);
+            ch[k] = rb[k].data();
+        }
+        clap_audio_buffer_t b{};
+        b.data32 = ch;
+        b.channel_count = 4;
+        float ring = 0;
+        a.beforeProcess = [&](uint32_t n) {
+            for (auto &v : rb)
+            {
+                for (uint32_t k = 0; k < n; ++k)
+                    ring = std::max(ring, std::fabs(v[k]));
+                std::fill(v.begin(), v.end(), 0.f);
+            }
+            snaps->ring_out(a.plugin, &b);
+        };
+        a.render(9600, 480, {on(0, 1, 0, 60), busEvent(0, 0, 3)}, false);
+        uint32_t ids[16];
+        s.prepareSnapshot(snap, ids);
+        for (int16_t c = 0; c < 16; ++c)
+            s.x->select(a.plugin, ids[c], c);
+        a.render(4800, 480, {}, false);
+        check(ring == 0 && !silent(a.port[3]), "a retiring sound on bus 3 plays on there");
+    }
+}
+
 int main(int argc, char **argv)
 {
     std::string dir = argc > 1 ? argv[1] : SURGE_FACTORY_PATCHES;
@@ -3576,6 +3819,7 @@ int main(int argc, char **argv)
         run("sound contexts", [&] { testSoundContexts(patches); });
         run("voice budget", [] { testVoiceBudget(); });
         run("per-part voice budgets", [] { testPartBudgets(); });
+        run("sharing", [&] { testSharing(patches); });
         run("reset", [&] { testReset(patches); });
         run("first block after a load", [] { testFirstBlockAfterLoad(); });
         run("unison against the reference", [] { testUnisonAgainstReference(); });
@@ -3614,3 +3858,4 @@ int main(int argc, char **argv)
     std::printf(failures ? "%d failures\n" : "all passed\n", failures);
     return failures ? 1 : 0;
 }
+
