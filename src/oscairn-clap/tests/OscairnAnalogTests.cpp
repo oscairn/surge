@@ -465,6 +465,9 @@ static void testPortsAndParams(const std::vector<std::string> &patches)
         auto ui = static_cast<const oscairn_plugin_ui_t *>(
             a.plugin->get_extension(a.plugin, OSCAIRN_EXT_UI));
         check(ui && ui->param_hint, "oscairn.ui");
+        check(a.plugin->get_extension(a.plugin, "oscairn.ui/draft-4") &&
+                  !a.plugin->get_extension(a.plugin, "oscairn.ui/draft-3"),
+              "oscairn.ui is draft 4, not draft 3");
         const std::map<std::string, uint32_t> want{
             {"Scene/Volume", OSCAIRN_ROLE_LEVEL},
             {"Scene/Pan", OSCAIRN_ROLE_PAN},
