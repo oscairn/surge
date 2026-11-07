@@ -28,8 +28,9 @@
  *   helper): each prepared sound is a Surge synthesizer of its own; MIDI channels select a
  *   sound for new notes, and a held note stays on the sound it started on. The CLAP state is
  *   the default sound's patch; the sound-context snapshot holds every sound, and a snapshot's
- *   sounds can be prepared beside the playing ones (oscairn.sound-snapshots/draft-3), the
- *   outgoing ones ringing out into the host's ring-out buffer.
+ *   sounds can be prepared beside the playing ones (oscairn.sound-snapshots/draft-4), the
+ *   outgoing ones ringing out into the host's ring-out buffer; a sound can be saved on its own
+ *   and its values read.
  * - Oscairn's voice budget (oscairn.voice-budget/draft-1): past the host's limits, Surge
  *   voices of every sound are given up in the SDK's order and fade out over 3 ms. With no
  *   limit set, Surge steals voices as it always has.
@@ -180,6 +181,10 @@ struct Patch
     // A snapshot's sound, built while reading it (main thread, beside whatever plays), installed
     // when the sound is published or the snapshot loaded.
     std::unique_ptr<SurgeSynthesizer> built;
+    Patch() = default;
+    Patch(Patch &&) = default;
+    Patch &operator=(Patch &&) = default;
+    Patch(const Patch &o) : state(o.state) {} // a copy (draft 4's saveSound): the patch data
 };
 
 // The synthesizer of a sound context slot. The audio thread touches it only while the slot is
@@ -1320,6 +1325,34 @@ struct Plugin : SharedVoices,
             c.patch.state = {};
         return ok;
     }
+    // oscairn.sound-snapshots draft 4: one sound saved as a snapshot of its own (the helper's
+    // saveSound, rendering excluded), from its synthesizer's patch.
+    static bool saveSound(const clap_plugin_t *p, uint32_t id, const clap_ostream_t *stream)
+    {
+        auto &s = self(p);
+        for (uint32_t i = 0; i < contextCapacity; ++i)
+            if (s.contexts[i].prepared && s.contexts[i].id == id)
+                s.contexts[i].patch.state = patchOf(*s.slots[i].synth);
+        bool ok = Base::saveSound(p, id, stream);
+        for (auto &c : s.contexts)
+            c.patch.state = {};
+        return ok;
+    }
+    void alone(Patch &) {} // one output: every sound plays on the main output
+    // Draft 4: a sound's values, read from its synthesizer, which no channel selects, so the
+    // audio thread doesn't touch it. Main thread.
+    uint32_t patchValues(const Patch &patch, oscairn_sound_parameter_t *out, uint32_t capacity)
+    {
+        for (uint32_t i = 0; i < contextCapacity; ++i)
+            if (&contexts[i].patch == &patch)
+            {
+                auto &sy = *slots[i].synth;
+                for (uint32_t k = 0; k < params.size() && k < capacity; ++k)
+                    out[k] = {params[k].id, currentValue(params[k], paramIn(sy, params[k]))};
+                return (uint32_t)params.size();
+            }
+        return 0;
+    }
     bool writePatch(std::ostream &out, const Patch &patch)
     {
         static const char hex[] = "0123456789abcdef";
@@ -1564,8 +1597,9 @@ bool presetLoadFromLocation(const clap_plugin_t *p, uint32_t kind, const char *l
 const clap_plugin_preset_load_t presetLoadExt{presetLoadFromLocation};
 
 const clap_plugin_state_t snapshotExt{Plugin::saveSnapshot, Plugin::loadSnapshot};
-const oscairn_plugin_sound_snapshots_t soundSnapshotsExt{Plugin::prepareSnapshot,
-                                                        Plugin::setRingOut, Plugin::chokeRetiring};
+const oscairn_plugin_sound_snapshots_t soundSnapshotsExt{
+    Plugin::prepareSnapshot, Plugin::setRingOut, Plugin::chokeRetiring, Plugin::saveSound,
+    Plugin::soundValues};
 const oscairn_plugin_sound_contexts_t soundContextsExt{
     Plugin::capacity, Plugin::get,     Plugin::prepare,      Plugin::select,
     Plugin::discard,  &snapshotExt,    Plugin::preparePreset};

@@ -2635,6 +2635,69 @@ static void testSoundContexts(const std::vector<std::string> &patches)
               "a sound choked out and selected again plays a note at full level: " +
                   std::to_string(x) + " against " + std::to_string(y));
     }
+    // Draft 4: one sound saved on its own is a snapshot holding only it, as its default on every
+    // channel, playing as an instance with its patch; a sound's values while no channel selects
+    // it are what an instance with its patch shows.
+    {
+        Instance a;
+        Sounds s(a);
+        auto snaps = static_cast<const oscairn_plugin_sound_snapshots_t *>(
+            a.plugin->get_extension(a.plugin, OSCAIRN_EXT_SOUND_SNAPSHOTS));
+        check(snaps && snaps->save_sound && snaps->sound_values, "draft 4's two calls");
+        if (!snaps || !snaps->save_sound || !snaps->sound_values)
+            return;
+        check(a.load(patchFromFxp(patches[0])), "a default patch loads");
+        auto id = s.preset(path);
+        auto unselected = s.preset(patches[64]);
+        s.x->select(a.plugin, id, 3);
+        a.render(512, 512, {}, false); // the selection applied
+        auto saveSound = [&](uint32_t sound, std::vector<uint8_t> &bytes) {
+            clap_ostream_t os{&bytes, [](const clap_ostream_t *st, const void *b, uint64_t n) {
+                                  auto v = static_cast<std::vector<uint8_t> *>(st->ctx);
+                                  v->insert(v->end(), (const uint8_t *)b, (const uint8_t *)b + n);
+                                  return (int64_t)n;
+                              }};
+            return snaps->save_sound(a.plugin, sound, &os);
+        };
+        std::vector<uint8_t> none;
+        check(!saveSound(12345, none), "an unknown sound isn't saved");
+        for (auto [sound, patch] : {std::pair{id, path}, std::pair{0u, patches[0]}})
+        {
+            std::vector<uint8_t> alone;
+            check(saveSound(sound, alone), "a sound saved on its own");
+            Instance b, c;
+            Sounds t(b);
+            check(t.restore(alone), "the sound saved on its own loads as a snapshot");
+            oscairn_sound_context_info_t info{};
+            check(t.prepared() == 1 && t.x->get(b.plugin, 0, &info) &&
+                      info.selected_channels == 0xffff,
+                  "it holds only that sound, selected on every channel");
+            c.load(patchFromFxp(patch));
+            auto x = b.render(frames, 512, notes, false), y = c.render(frames, 512, notes, false);
+            check(x == y && x != std::vector<float>(x.size(), 0.f),
+                  "it plays as an instance with the sound's patch");
+        }
+        // values: every parameter's, as an instance with that patch shows them
+        Instance d;
+        d.load(patchFromFxp(patches[64]));
+        const uint32_t n = d.params->count(d.plugin);
+        std::vector<oscairn_sound_parameter_t> v(n + 8);
+        const auto got = snaps->sound_values(a.plugin, unselected, v.data(), (uint32_t)v.size());
+        bool same = got == n;
+        for (uint32_t i = 0; same && i < n; ++i)
+        {
+            clap_param_info_t info;
+            double want = 0;
+            d.params->get_info(d.plugin, i, &info);
+            d.params->get_value(d.plugin, info.id, &want);
+            same = v[i].id == info.id && v[i].value == want;
+        }
+        check(same, "an unselected sound's values are its patch's: " + std::to_string(got) +
+                        " of " + std::to_string(n));
+        check(snaps->sound_values(a.plugin, id, v.data(), (uint32_t)v.size()) == 0 &&
+                  snaps->sound_values(a.plugin, 12345, v.data(), (uint32_t)v.size()) == 0,
+              "no values for a selected or an unknown sound");
+    }
     // Too few free contexts: refused, nothing added.
     {
         Instance a;
