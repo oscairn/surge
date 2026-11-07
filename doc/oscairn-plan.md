@@ -3064,6 +3064,119 @@ The plugin is 0.3.4 (with this entry): Oscairn's instant Performance changes wor
 current Oscairn. Nothing changes for the converter. The commits with this entry were gated after
 it was written: their results are not recorded here.
 
+**Parts sharing one instance (2026-11-06).** Oscairn puts several parts on one instance of a
+plugin that can share (RFC 0021, slice 3, and "Formed on their own"): native sound contexts and
+their snapshot with draft 4's calls, no audio input and no note output, more than one output port,
+and a stepped parameter tagged `OSCAIRN_ROLE_OUTPUT_BUS` (oscairn.ui), which the host sets on each
+part's sound with a parameter event on the part's channel. Commits: `11fd5d5` the parameters' roles,
+`755cf12` a test of per-part voice budget entries, `714705c` the output buses, then version 0.4.0
+with this entry.
+
+*Roles.* Declaring any oscairn.ui role turns Oscairn's guessing from parameter names off for the
+plugin, so the plugin declares the roles the guessing gave: the scene's Volume (level) and Pan, filter
+1's Cutoff and Resonance, the amp envelope's and the filter envelope's four stages. Not Hold: the
+guessing gave the amp envelope bank's hold knob to Voice LFO 1's Hold (the first parameter named
+"Hold"), which is not an amp envelope stage, so that knob is now blank. `ui.h` is vendored unchanged
+from Oscairn `733baca`.
+
+*Buses.* A stereo main output and eight stereo sound buses ("Sound bus 1" to "8"), the Basic Synth's
+count: an instance holds as many parts as it has free sounds, ports and channels, so up to nine,
+with seven sounds left for a Performance change's incoming sounds beside them.
+The Output Bus parameter ("Global/Output Bus", stepped 0-8: Main, then a bus; a list, the role) is
+per sound. A parameter event for it sets the bus of the sounds its channel selects (all sounds a
+channel selects for channel -1), not of sounds that only hold the channel's notes, so an outgoing
+sound's bus stays. The host's ports beyond Main are optional to the plugin: it writes as many as it
+is given, and every port it is given each sample (unused ones silent).
+
+*A bus change moves the whole sound.* Surge renders a sound's voices together and then through the
+scene's stages (hardclip, the oversampling filter, the low cut, the scene's level), which keep
+state, so a voice can't keep its own port without a second scene chain per bus. A bus change takes
+effect at the block boundary its event lands on; a sound whose last block sounded crossfades from
+the old port to the new one over the choke time (3 ms, linear), one that was silent moves at once.
+Notes held across the change move with it (register entry 21). Oscairn sets a part's bus when the
+part is made and at a Performance change's cue, before the part plays, so its parts don't hear this.
+
+*Ring-out.* Only the main output rings out (RFC 0005's limit): a retiring sound on a bus keeps
+playing on its port, and `choke_retiring` doesn't fade it (its voices are choked by the helper as
+before). `save_sound` writes the sound on Main (the SDK's `alone()`), and `sound_values` includes its
+bus.
+
+*Formats.* The snapshot is `oscairn-analog-sounds-2`: each sound's bus, then its patch data in hex.
+The CLAP state is a line `oscairn-analog-state-1 <bus>` (the default sound's bus) followed by the
+default sound's patch data; patch data alone still loads, on Main (the converter's states, and
+Surge's own). No reader of the old snapshot format is kept.
+
+*Voice budget per part.* With a shared instance Oscairn sends an entry per part (its sound's context,
+reserve and priority, limit 0) and the instance's limit. The voice budget (0.3.0) handled that
+already; the test shows it.
+
+Tests (`ports and parameters`, `per-part voice budgets`, `sharing`): exactly the twelve roles above
+and the bus's; a main output and eight buses with their IDs, names and flags; the bus parameter's
+info (stepped 0-8, default 0), hint (list) and texts ("Main", "Sound bus 3"; "Sound bus 9" refused);
+two parts on one instance (the default sound, a factory patch, on channel 0 and bus 1; a preset on
+channel 1 and bus 2, set with events on their channels), notes on both and a bend on channel 1 only,
+render on their buses sample for sample what two instances render on Main, with Main and buses 3-8
+silent (every port filled with 1 before each call, so an unwritten port shows); `get_value` shows
+channel 1's sound's bus; the state carries the default sound's bus and a fresh instance given it
+plays there; the snapshot restored plays each sound on its bus and saves the same text; prepared
+beside in another instance, the sounds play on their buses; a sound on bus 4 saved alone plays on
+Main in a fresh instance, and its values end with its bus; a bus change while a note is held: before
+the change the old bus is the plain render exactly and the new one silent, from the fade's end the
+old one is silent, the two add up to the plain render within 1e-6, and no step on either is larger
+than the plain render's largest; a retiring sound on bus 3 plays on there and the ring-out buffer
+stays empty; per part, a limit of 3 over four held notes on two parts: a part within its reserve
+(2) keeps its notes and the other (reserve 0) gives up its oldest though its priority is the higher,
+and with no reserves the lower-priority part's note goes, not the oldest. Seen failing (one at a
+time): the sound's output always on Main (six checks), the snapshot's bus not written (restored,
+prepared beside), the state's bus not written (the state check), no crossfade (the step check:
+0.2201 against 0.2040), every retiring sound ringing out (the ring-out check), every voice's context
+taken as 0 (the second budget check); the roles test without the extension.
+
+*Oscairn host side* (Oscairn `733baca`, built from a `git archive` export outside both
+repositories; the plugin a Release build of `714705c` from an export with its submodules).
+`oscairn-plugin-check` passes in the engine and in a worker. Oscairn's own `control-shared-parts`
+is written for the Basic Synth, so a copy adapted outside the repositories ran: this plugin's
+parameter IDs (filter 1's cutoff and resonance and oscillator 1's pitch as the three parts'
+values), fifteen sounds to fill an instance where the Basic Synth needs seven, its nine-part spill
+and protocol cases left out (they count the Basic Synth's eight sounds), and two changes for this
+plugin: every play starts after a second of silence, since a Surge synthesizer's output gain
+glides in from 0 over its first blocks (rendered after 1, 30 and 40 idle blocks, a note differs
+by 0.064 between 1 and 30 and not at all between 30 and 40); and in the worker run the separate
+layout is made in the engine (below). Three Analog parts saved with an instance each open on one
+instance and render what the three instances rendered, largest difference 0; the second part shows
+its own sound's values; saved, the shared layout keeps one engine with three `sound`s and reopens
+on one instance the same; three added one by one share one instance with a channel and bus each and
+sound as three instances; a sharing part saved as a Sound joins a playing instance where it is
+loaded, and alone keeps one of its own; changes from the separate layout to the shared one and back
+load nothing and sound as each opened fresh. In-process and with every plugin in a worker, the same
+three checks fail: "redone, as before" and twice "and sounds as before", each comparing a second
+play on the same instance with the first, which Surge doesn't repeat (a note played again in one
+instance after its release differs from the first by 0.37: its random sources and voice state move
+on), not anything sharing does. With the plugin as at `755cf12` (no buses) the three parts open on
+three instances and the sharing checks fail.
+
+*Found, not changed (Oscairn).* In a worker, Oscairn sets the worker's memory limit from the
+plugin's declaration when it activates (declared plus half and 64 MiB) and doesn't refit it when
+sounds are prepared later (`prepareSound`, `prepareSnapshot`): filling one instance with fifteen
+sounds stopped the worker at the ninth (its physical footprint past the limit; with the limit
+measured on a wrapper process instead, the whole test ran). A shared instance that grows by many
+sounds after it activates would be stopped the same way. Reported, not worked around here.
+
+The plugin is 0.4.0 (with this entry): a sharing instance's ports and parameter, and new state and
+snapshot formats. The converter keeps working; what it would need is below. The commits with this entry were gated after
+it was written: their results are not recorded here.
+
+*Converter* (not this repository; not changed). It writes this plugin's nodes as a plain state
+(`state 1`, `state.clap` the patch data, `perfconv/surge.py` `Patch.state`) and no native snapshot.
+(1) Those states still load, on Main, so nothing is needed for them; to write the current format it
+would prefix the line `oscairn-analog-state-1 0` and a newline to the patch data. (2) Its
+`parse_state` (tests and checks) refuses a state that doesn't start with "sub3", so it must skip
+that first line to read a state the plugin saved (in a library re-saved by Oscairn). (3) Should it
+ever write the plugin's sound snapshot, each slot's line is `1 "<name>" <bus> <hex patch data>` in
+`oscairn-analog-sounds-2`. (4) The plugin's version for its nodes is 0.4.0. (5) Shared nodes:
+Oscairn now forms them itself when it opens a Performance saved with an instance per part, so the
+converter needn't write them.
+
 **Where this stopped** (thirteenth session). HPF24 stays on the state-variable HP 24 dB: Clean
 passes everything but index 560 (at every rate), Driven fails above 48 kHz; a decision for Jacob
 again (register entry 1). The amp EG decay table holds from index 72; attack and release below
@@ -3312,3 +3425,11 @@ only moves where a glide starts, below).
     voices before the store does). Reproduce: plugin test "sound contexts" (the stock comparison
     beside another sound's 64 voices). Code: `SurgeSynthesizer::getUnusedVoice`, `SharedVoices` in
     `OscairnAnalog.cpp`.
+21. **A bus change moves a sound's held notes.** Oscairn's porting guide says voices keep the output
+    port they started on. Here a sound's Output Bus change moves the whole sound, notes held across
+    it included, crossfading over 3 ms from the old port to the new; notes struck after it play on
+    the new port as the guide says. Cause: Surge renders a sound's voices together through the
+    scene's stateful stages, so a voice can't keep a port of its own without a scene chain per bus.
+    Oscairn sets a part's bus before the part plays (when the part is made, and at a Performance
+    change's cue), so its parts don't hear it. Deliberate. Reproduce: plugin test "sharing" (the
+    bus change check). Code: the Output Bus in `renderBlock` and `render`, `OscairnAnalog.cpp`.
