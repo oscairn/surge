@@ -2287,6 +2287,9 @@ static void testSoundContexts(const std::vector<std::string> &patches)
         Instance a;
         Sounds s(a);
         check(s.x->capacity(a.plugin) == 16, "sixteen sound contexts");
+        check(a.plugin->get_extension(a.plugin, "oscairn.sound-snapshots/draft-4") &&
+                  !a.plugin->get_extension(a.plugin, "oscairn.sound-snapshots/draft-3"),
+              "oscairn.sound-snapshots is draft 4, not draft 3");
         oscairn_sound_context_info_t info{};
         check(s.x->get(a.plugin, 0, &info) && info.id == 0 && info.selected_channels == 0xffff &&
                   std::string(info.name) == "Default",
