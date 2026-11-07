@@ -100,6 +100,7 @@ struct ParamInfo
     double min{0}, max{1}, def{0};
     uint32_t flags{0};
     uint32_t role{OSCAIRN_ROLE_NONE}; // oscairn.ui
+    uint32_t view{0}, field{OSCAIRN_FIELD_NONE}; // oscairn.ui: its rich view and place there
     std::string name, module;
 };
 
@@ -318,6 +319,28 @@ struct Plugin : SharedVoices,
         return OSCAIRN_ROLE_NONE;
     }
 
+    // oscairn.ui views: scene A's amp and filter envelopes, as their roles are, as views 1 and 2
+    // (their stages' shapes and the envelope's mode stay tiles); 0: in no view.
+    uint32_t viewOf(const Parameter &p, uint32_t &field) const
+    {
+        auto &sc = synth->storage.getPatch().scene[0];
+        for (uint32_t e = 0; e < 2; ++e)
+        {
+            const std::pair<const Parameter *, uint32_t> stages[] = {
+                {&sc.adsr[e].a, OSCAIRN_FIELD_ATTACK},
+                {&sc.adsr[e].d, OSCAIRN_FIELD_DECAY},
+                {&sc.adsr[e].s, OSCAIRN_FIELD_SUSTAIN},
+                {&sc.adsr[e].r, OSCAIRN_FIELD_RELEASE}};
+            for (auto &[q, f] : stages)
+                if (q == &p)
+                {
+                    field = f;
+                    return e + 1;
+                }
+        }
+        return 0;
+    }
+
     void buildParams()
     {
         auto &all = synth->storage.getPatch().param_ptr;
@@ -376,6 +399,7 @@ struct Plugin : SharedVoices,
             }
             pi.def = std::clamp(pi.def, pi.min, pi.max);
             pi.role = roleOf(*p);
+            pi.view = viewOf(*p, pi.field);
             indexById[pi.id] = (uint32_t)params.size();
             params.push_back(pi);
             if (p->can_deactivate())
@@ -1683,14 +1707,14 @@ void paramsFlush(const clap_plugin_t *p, const clap_input_events_t *in,
 const clap_plugin_params_t paramsExt{paramsCount,       paramsInfo,        paramsValue,
                                      paramsValueToText, paramsTextToValue, paramsFlush};
 
-// oscairn.ui: a role for the parameters that have one; the host decides the rest.
+// oscairn.ui: a role and a view for the parameters that have one; the host decides the rest.
 bool uiParamHint(const clap_plugin_t *p, clap_id id, oscairn_param_hint_t *hint)
 {
     auto pi = self(p).find(id, nullptr);
-    if (!pi || pi->role == OSCAIRN_ROLE_NONE)
+    if (!pi || (pi->role == OSCAIRN_ROLE_NONE && !pi->view))
         return false;
     *hint = {pi->bus ? (uint32_t)OSCAIRN_WIDGET_LIST : (uint32_t)OSCAIRN_WIDGET_AUTO, 0,
-             CLAP_INVALID_ID, 0, pi->role};
+             CLAP_INVALID_ID, 0, pi->role, pi->view, pi->field, 0};
     return true;
 }
 const oscairn_plugin_ui_t uiExt{uiParamHint};

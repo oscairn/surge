@@ -460,7 +460,8 @@ static void testPortsAndParams(const std::vector<std::string> &patches)
           "one CLAP note input port");
 
     // oscairn.ui: the roles Oscairn guessed from the names before (declaring any turns its
-    // guessing off), but the voice LFOs' Hold; no other parameter has a hint.
+    // guessing off), but the voice LFOs' Hold; scene A's amp and filter envelopes as views 1 and
+    // 2 (each stage its field, index 0); no other parameter has a hint.
     {
         auto ui = static_cast<const oscairn_plugin_ui_t *>(
             a.plugin->get_extension(a.plugin, OSCAIRN_EXT_UI));
@@ -468,28 +469,30 @@ static void testPortsAndParams(const std::vector<std::string> &patches)
         check(a.plugin->get_extension(a.plugin, "oscairn.ui/draft-4") &&
                   !a.plugin->get_extension(a.plugin, "oscairn.ui/draft-3"),
               "oscairn.ui is draft 4, not draft 3");
-        const std::map<std::string, uint32_t> want{
-            {"Scene/Volume", OSCAIRN_ROLE_LEVEL},
-            {"Scene/Pan", OSCAIRN_ROLE_PAN},
-            {"Filter 1/Cutoff", OSCAIRN_ROLE_CUTOFF},
-            {"Filter 1/Resonance", OSCAIRN_ROLE_RESONANCE},
-            {"Amp Envelope/Attack", OSCAIRN_ROLE_ATTACK},
-            {"Amp Envelope/Decay", OSCAIRN_ROLE_DECAY},
-            {"Amp Envelope/Sustain", OSCAIRN_ROLE_SUSTAIN},
-            {"Amp Envelope/Release", OSCAIRN_ROLE_RELEASE},
-            {"Filter Envelope/Attack", OSCAIRN_ROLE_FILTER_ATTACK},
-            {"Filter Envelope/Decay", OSCAIRN_ROLE_FILTER_DECAY},
-            {"Filter Envelope/Sustain", OSCAIRN_ROLE_FILTER_SUSTAIN},
-            {"Filter Envelope/Release", OSCAIRN_ROLE_FILTER_RELEASE},
-            {"Global/Output Bus", OSCAIRN_ROLE_OUTPUT_BUS}};
-        std::map<std::string, uint32_t> got;
+        check(ui && !ui->algorithm, "no FM operator view: no algorithm call");
+        // role, view, field, index
+        const std::map<std::string, std::vector<uint32_t>> want{
+            {"Scene/Volume", {OSCAIRN_ROLE_LEVEL, 0, 0, 0}},
+            {"Scene/Pan", {OSCAIRN_ROLE_PAN, 0, 0, 0}},
+            {"Filter 1/Cutoff", {OSCAIRN_ROLE_CUTOFF, 0, 0, 0}},
+            {"Filter 1/Resonance", {OSCAIRN_ROLE_RESONANCE, 0, 0, 0}},
+            {"Amp Envelope/Attack", {OSCAIRN_ROLE_ATTACK, 1, OSCAIRN_FIELD_ATTACK, 0}},
+            {"Amp Envelope/Decay", {OSCAIRN_ROLE_DECAY, 1, OSCAIRN_FIELD_DECAY, 0}},
+            {"Amp Envelope/Sustain", {OSCAIRN_ROLE_SUSTAIN, 1, OSCAIRN_FIELD_SUSTAIN, 0}},
+            {"Amp Envelope/Release", {OSCAIRN_ROLE_RELEASE, 1, OSCAIRN_FIELD_RELEASE, 0}},
+            {"Filter Envelope/Attack", {OSCAIRN_ROLE_FILTER_ATTACK, 2, OSCAIRN_FIELD_ATTACK, 0}},
+            {"Filter Envelope/Decay", {OSCAIRN_ROLE_FILTER_DECAY, 2, OSCAIRN_FIELD_DECAY, 0}},
+            {"Filter Envelope/Sustain", {OSCAIRN_ROLE_FILTER_SUSTAIN, 2, OSCAIRN_FIELD_SUSTAIN, 0}},
+            {"Filter Envelope/Release", {OSCAIRN_ROLE_FILTER_RELEASE, 2, OSCAIRN_FIELD_RELEASE, 0}},
+            {"Global/Output Bus", {OSCAIRN_ROLE_OUTPUT_BUS, 0, 0, 0}}};
+        std::map<std::string, std::vector<uint32_t>> got;
         for (auto &[name, info] : a.paramsByName())
         {
             oscairn_param_hint_t h{};
             if (ui && ui->param_hint(a.plugin, info.id, &h))
-                got[name] = h.role;
+                got[name] = {h.role, h.view, h.field, h.index};
         }
-        check(got == want, "the parameters' roles: " + std::to_string(got.size()) + " hints");
+        check(got == want, "the parameters' roles and views: " + std::to_string(got.size()) + " hints");
         auto bus = a.paramsByName()["Global/Output Bus"];
         oscairn_param_hint_t h{};
         char text[64] = "";
@@ -648,6 +651,53 @@ static void testPortsAndParams(const std::vector<std::string> &patches)
         check(!reference.storage.getPatch().scene[0].amp_drive.deactivated,
               "the state carries the switched-on amp drive");
     }
+}
+
+// oscairn.ui views: the values a host draws a view from (get_value of its parameters) follow a
+// drag (a main-thread flush), automation in process (under the allocation guard, with a note
+// playing through the envelopes) and a state load.
+static void testRichViews()
+{
+    Instance a;
+    auto ui = static_cast<const oscairn_plugin_ui_t *>(
+        a.plugin->get_extension(a.plugin, OSCAIRN_EXT_UI));
+    std::vector<clap_param_info_t> stages;
+    for (auto &[name, info] : a.paramsByName())
+    {
+        oscairn_param_hint_t h{};
+        if (ui && ui->param_hint(a.plugin, info.id, &h) && h.view)
+            stages.push_back(info);
+    }
+    check(stages.size() == 8, "two envelope views of four stages: " + std::to_string(stages.size()));
+    auto at = [](const clap_param_info_t &p, double f) {
+        return p.min_value + f * (p.max_value - p.min_value);
+    };
+    auto shows = [&](Instance &x, double f) {
+        bool ok = true;
+        for (auto &p : stages)
+        {
+            double v = -1e9;
+            ok = ok && x.params->get_value(x.plugin, p.id, &v) &&
+                 std::fabs(v - at(p, f)) <= 1e-5 * (p.max_value - p.min_value);
+        }
+        return ok;
+    };
+    std::vector<Event> drag;
+    for (auto &p : stages)
+        drag.push_back(paramEvent(0, p.id, at(p, 0.25)));
+    InEvents in;
+    for (auto &e : drag)
+        in.list.push_back(&e.header);
+    a.params->flush(a.plugin, &in.in, &a.out.out);
+    check(shows(a, 0.25), "a drag (flush) reaches the views' values");
+    std::vector<Event> ev{noteEvent(0, CLAP_EVENT_NOTE_ON, 1, 60, 0.8)};
+    for (auto &p : stages)
+        ev.push_back(paramEvent(256, p.id, at(p, 0.75)));
+    ev.push_back(noteEvent(1024, CLAP_EVENT_NOTE_OFF, 1, 60, 0));
+    a.render(4096, 256, ev);
+    check(shows(a, 0.75), "automation in process reaches the views' values, without allocating");
+    Instance b;
+    check(b.load(a.save()) && shows(b, 0.75), "a loaded state reaches the views' values");
 }
 
 static void testStateRoundTrip(const std::vector<std::string> &patches)
@@ -3907,6 +3957,7 @@ int main(int argc, char **argv)
             test();
         };
         run("ports and parameters", [&] { testPortsAndParams(patches); });
+        run("rich views", [] { testRichViews(); });
         run("state round trips", [&] { testStateRoundTrip(patches); });
         run("block sizes", [&] { testBlockSizes(patches); });
         run("notes", [] { testNotes(); });
