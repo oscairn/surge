@@ -3453,13 +3453,13 @@ only moves where a glide starts, below).
     longest ago, else the oldest held; and a voice given up past the host's limits fades linearly
     over 3 ms rounded up to whole 32-sample blocks rather than by Surge's uber-release. Without a
     budget Surge's stealing is unchanged (checked against stock Surge in the plugin test).
-    Deliberate (Jacob: use the SDK's order). Reproduce: plugin test "voice budget". Code: the
+    Deliberate (Jacob: use the SDK's order; accepted by Jacob 2026-11-07). Reproduce: plugin test "voice budget". Code: the
     voice budget section of `OscairnAnalog.cpp`, `SurgeSynthesizer::softkillVoice`,
     `SurgeVoice::fadeOut`.
 20. **Voices shared between sounds.** The sounds of one instance share one store of 128 Surge
     voices, each taking at most 64 at once (stock Surge: 64 for its one patch). Past 128 voices
     across the sounds a new voice isn't started, as stock Surge does past its 64; one sound alone
-    plays as stock. Deliberate (Jacob asked for more sounds per instance; the voice budget limits
+    plays as stock. Deliberate, accepted by Jacob 2026-11-07 (he asked for more sounds per instance; the voice budget limits
     voices before the store does). Reproduce: plugin test "sound contexts" (the stock comparison
     beside another sound's 64 voices). Code: `SurgeSynthesizer::getUnusedVoice`, `SharedVoices` in
     `OscairnAnalog.cpp`.
@@ -3469,5 +3469,5 @@ only moves where a glide starts, below).
     the new port as the guide says. Cause: Surge renders a sound's voices together through the
     scene's stateful stages, so a voice can't keep a port of its own without a scene chain per bus.
     Oscairn sets a part's bus before the part plays (when the part is made, and at a Performance
-    change's cue), so its parts don't hear it. Deliberate. Reproduce: plugin test "sharing" (the
+    change's cue), so its parts don't hear it. Deliberate, accepted by Jacob 2026-11-07. Reproduce: plugin test "sharing" (the
     bus change check). Code: the Output Bus in `renderBlock` and `render`, `OscairnAnalog.cpp`.
