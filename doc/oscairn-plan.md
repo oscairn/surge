@@ -3036,6 +3036,34 @@ The plugin is 0.3.3 (with this entry): sixteen sounds where there were eight; a 
 as in 0.3.2. The CLAP state and the snapshot are unchanged, so the converter needs nothing new. The
 commits with this entry were gated after it was written: their results are not recorded here.
 
+**Sound-snapshots draft 4 (2026-11-06).** Oscairn main replaced `oscairn.sound-snapshots/draft-3`
+with draft 4 (`33206e5`, `0a5c14f`; RFC 0005, "One sound on its own"), so a plugin offering draft 3
+no longer had instant Performance changes there. Commits: `b634e13` the vendored headers (Oscairn
+`733baca`: `sound-contexts.h` and `sound-contexts-plugin.hpp` changed, the others unchanged), `7f757db`
+the two new calls, then version 0.3.4 with this entry.
+
+*What draft 4 adds.* `save_sound(id)` writes a snapshot holding only that sound, as its Default
+selected on every channel and playing on the main output; Oscairn saves a sharing part as a Sound
+with it. `sound_values(id)` gives a sound's parameter values while no channel selects it, for a
+sharing part's view. The SDK's `saveSound` and `soundValues` implement them from two instrument
+hooks. Here `saveSound` fills the sound's patch data from its synthesizer around the helper's call
+(as the snapshot save does), `alone()` changes nothing (every sound plays on the main output; the
+output bus comes with sharing), and `patchValues` reads every parameter's value from the sound's
+synthesizer as the parameters show them (clamped as `get_value` is). The helper calls it only for a
+sound no channel has selected since it was prepared, which the audio thread doesn't touch. The
+snapshot and the CLAP state are unchanged.
+
+Tests (`sound contexts`): the extension is found as draft 4 and not as draft 3; a prepared sound
+and the default, each saved on its own, load into a fresh instance as its only sound, selected on
+every channel, and render exactly as an instance with that patch as its state; an unknown sound
+isn't saved; an unselected sound's values (all 447 parameters) equal what an instance with its
+patch shows through `get_value`; a selected or unknown sound gives none. Seen failing with the old
+headers (draft 3), with the two calls null, and with `save_sound` writing every sound.
+
+The plugin is 0.3.4 (with this entry): Oscairn's instant Performance changes work again with
+current Oscairn. Nothing changes for the converter. The commits with this entry were gated after
+it was written: their results are not recorded here.
+
 **Where this stopped** (thirteenth session). HPF24 stays on the state-variable HP 24 dB: Clean
 passes everything but index 560 (at every rate), Driven fails above 48 kHz; a decision for Jacob
 again (register entry 1). The amp EG decay table holds from index 72; attack and release below
