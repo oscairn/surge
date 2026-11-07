@@ -44,6 +44,7 @@
 
 #include <oscairn-clap/memory.h>
 #include <oscairn-clap/sound-contexts-plugin.hpp>
+#include <oscairn-clap/ui.h>
 
 #include <algorithm>
 #include <array>
@@ -94,6 +95,7 @@ struct ParamInfo
     bool deactivation{false}; // the parameter's off switch (1 = off), not its value
     double min{0}, max{1}, def{0};
     uint32_t flags{0};
+    uint32_t role{OSCAIRN_ROLE_NONE}; // oscairn.ui
     std::string name, module;
 };
 
@@ -279,6 +281,31 @@ struct Plugin : SharedVoices,
         return &p == &sc.filterunit[1].cutoff;
     }
 
+    // oscairn.ui roles: the ones Oscairn guessed from the parameters' names before any was
+    // declared (declaring one turns its guessing off), but the voice LFOs' Hold, which it took
+    // for the amp envelope's.
+    uint32_t roleOf(const Parameter &p) const
+    {
+        auto &sc = synth->storage.getPatch().scene[0];
+        const std::pair<const Parameter *, uint32_t> roles[] = {
+            {&sc.volume, OSCAIRN_ROLE_LEVEL},
+            {&sc.pan, OSCAIRN_ROLE_PAN},
+            {&sc.filterunit[0].cutoff, OSCAIRN_ROLE_CUTOFF},
+            {&sc.filterunit[0].resonance, OSCAIRN_ROLE_RESONANCE},
+            {&sc.adsr[0].a, OSCAIRN_ROLE_ATTACK},
+            {&sc.adsr[0].d, OSCAIRN_ROLE_DECAY},
+            {&sc.adsr[0].s, OSCAIRN_ROLE_SUSTAIN},
+            {&sc.adsr[0].r, OSCAIRN_ROLE_RELEASE},
+            {&sc.adsr[1].a, OSCAIRN_ROLE_FILTER_ATTACK},
+            {&sc.adsr[1].d, OSCAIRN_ROLE_FILTER_DECAY},
+            {&sc.adsr[1].s, OSCAIRN_ROLE_FILTER_SUSTAIN},
+            {&sc.adsr[1].r, OSCAIRN_ROLE_FILTER_RELEASE}};
+        for (auto &[q, role] : roles)
+            if (q == &p)
+                return role;
+        return OSCAIRN_ROLE_NONE;
+    }
+
     void buildParams()
     {
         auto &all = synth->storage.getPatch().param_ptr;
@@ -336,6 +363,7 @@ struct Plugin : SharedVoices,
                                 CLAP_PARAM_IS_MODULATABLE_PER_CHANNEL;
             }
             pi.def = std::clamp(pi.def, pi.min, pi.max);
+            pi.role = roleOf(*p);
             indexById[pi.id] = (uint32_t)params.size();
             params.push_back(pi);
             if (p->can_deactivate())
@@ -1556,6 +1584,17 @@ void paramsFlush(const clap_plugin_t *p, const clap_input_events_t *in,
 const clap_plugin_params_t paramsExt{paramsCount,       paramsInfo,        paramsValue,
                                      paramsValueToText, paramsTextToValue, paramsFlush};
 
+// oscairn.ui: a role for the parameters that have one; the host decides the rest.
+bool uiParamHint(const clap_plugin_t *p, clap_id id, oscairn_param_hint_t *hint)
+{
+    auto pi = self(p).find(id, nullptr);
+    if (!pi || pi->role == OSCAIRN_ROLE_NONE)
+        return false;
+    *hint = {OSCAIRN_WIDGET_AUTO, 0, CLAP_INVALID_ID, 0, pi->role};
+    return true;
+}
+const oscairn_plugin_ui_t uiExt{uiParamHint};
+
 bool stateSave(const clap_plugin_t *p, const clap_ostream_t *stream)
 {
     auto bytes = self(p).saveStateBytes();
@@ -1876,6 +1915,8 @@ const void *pluginGetExtension(const clap_plugin_t *, const char *id)
         return &memoryExt;
     if (!std::strcmp(id, OSCAIRN_EXT_VOICE_BUDGET))
         return &voiceBudgetExt;
+    if (!std::strcmp(id, OSCAIRN_EXT_UI))
+        return &uiExt;
     return nullptr;
 }
 void pluginOnMainThread(const clap_plugin_t *) {}

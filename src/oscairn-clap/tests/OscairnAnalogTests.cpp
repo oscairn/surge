@@ -59,6 +59,7 @@
 
 #include <oscairn-clap/memory.h>
 #include <oscairn-clap/sound-contexts.h>
+#include <oscairn-clap/ui.h>
 #include <oscairn-clap/voice-budget.h>
 
 // --- allocation guard -----------------------------------------------------------------
@@ -426,6 +427,35 @@ static void testPortsAndParams(const std::vector<std::string> &patches)
     check(a.notePorts->count(a.plugin, true) == 1 && a.notePorts->get(a.plugin, 0, true, &np) &&
               np.preferred_dialect == CLAP_NOTE_DIALECT_CLAP,
           "one CLAP note input port");
+
+    // oscairn.ui: the roles Oscairn guessed from the names before (declaring any turns its
+    // guessing off), but the voice LFOs' Hold; no other parameter has a hint.
+    {
+        auto ui = static_cast<const oscairn_plugin_ui_t *>(
+            a.plugin->get_extension(a.plugin, OSCAIRN_EXT_UI));
+        check(ui && ui->param_hint, "oscairn.ui");
+        const std::map<std::string, uint32_t> want{
+            {"Scene/Volume", OSCAIRN_ROLE_LEVEL},
+            {"Scene/Pan", OSCAIRN_ROLE_PAN},
+            {"Filter 1/Cutoff", OSCAIRN_ROLE_CUTOFF},
+            {"Filter 1/Resonance", OSCAIRN_ROLE_RESONANCE},
+            {"Amp Envelope/Attack", OSCAIRN_ROLE_ATTACK},
+            {"Amp Envelope/Decay", OSCAIRN_ROLE_DECAY},
+            {"Amp Envelope/Sustain", OSCAIRN_ROLE_SUSTAIN},
+            {"Amp Envelope/Release", OSCAIRN_ROLE_RELEASE},
+            {"Filter Envelope/Attack", OSCAIRN_ROLE_FILTER_ATTACK},
+            {"Filter Envelope/Decay", OSCAIRN_ROLE_FILTER_DECAY},
+            {"Filter Envelope/Sustain", OSCAIRN_ROLE_FILTER_SUSTAIN},
+            {"Filter Envelope/Release", OSCAIRN_ROLE_FILTER_RELEASE}};
+        std::map<std::string, uint32_t> got;
+        for (auto &[name, info] : a.paramsByName())
+        {
+            oscairn_param_hint_t h{};
+            if (ui && ui->param_hint(a.plugin, info.id, &h))
+                got[name] = h.role;
+        }
+        check(got == want, "the parameters' roles: " + std::to_string(got.size()) + " hints");
+    }
 
     const uint32_t count = a.params->count(a.plugin);
     std::printf("parameters: %u\n", count);
