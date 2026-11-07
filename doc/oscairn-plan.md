@@ -3215,6 +3215,46 @@ The plugin is 0.4.1 (with this entry): it needs `org.oscairn.analog-factory` 1.0
 factory presets. Nothing changes for the converter (its nodes carry patch data, not preset paths).
 The commits with this entry were gated after it was written: their results are not recorded here.
 
+**Rich views (2026-11-07).** Oscairn's `oscairn.ui` draft 4 (Oscairn `ed073e7` to `4961c35`) lets
+a plugin say which of its parameters make an envelope, a key or velocity map or an FM operator
+view, which Desktop and Panel draw above the parameters' tiles and edit by setting them. Commits:
+`e00f087` the vendored headers at Oscairn `2885698` (`ui.h` draft 4, `memory.h` comments only; the
+same headers as `4961c35`), `962d9cc` the views, then version 0.4.2 with this entry.
+
+*What is declared,* as Oscairn's porting guide gives for this plugin ("Rich views: what each engine
+should declare"): scene A's amp envelope as view 1 and its filter envelope as view 2, the
+parameters that already carry their roles, each stage its named field (Attack, Decay, Sustain,
+Release; index 0). The host draws each from zero: the attack to full, the decay to the sustain
+level, held, the release to zero, positions by each parameter's range (Surge's times are log2
+seconds, so the time axis is logarithmic). The stages' shapes and the envelope's mode (digital or
+analog) stay tiles. No FM operator view, so `algorithm` is null. The roles are unchanged.
+The plugin offers draft 4 only: a draft 3 host's hint is smaller than the one draft 4 fills.
+
+*Decisions for Jacob* (the guide leaves these open): (1) no `DELAY` field: the scene's key-on
+delay is a Part setting on the reference's screens, not an envelope stage, so it stays a tile;
+(2) the voice LFOs' envelopes (delay, attack, hold, decay, sustain, release) are in no view,
+though section 3 maps the reference's pitch EG to a voice LFO in envelope mode: no LFO is fixed
+as the pitch EG (the converter doesn't map it yet), so a view on one would draw an LFO's
+envelope as often as a pitch EG.
+
+Tests (`ports and parameters`, `rich views`): the thirteen hints' roles, views, fields and
+indexes; the views' parameter values follow a flush (a drag), automation in process (under the
+allocation guard, with a note playing) and a state load; the extension is found as draft 4 and
+not draft 3. Seen failing: with the old headers (draft 3), and without the views (no parameter in
+a view).
+
+*Oscairn side* (Oscairn `2885698`, built from a `git archive` export; the plugin a dev build of
+`962d9cc`'s tree): Oscairn's plugin host keeps the eight fields, in the engine and in a worker (a
+scratch program over `loadPlugin` and `loadPluginInWorker`), and a value set through the host
+reaches the view's parameter in both; `oscairn-worker-host-test` with the plugin (its parameters
+and hints, views included, cross the worker; identical audio and events); `oscairn-plugin-check`
+in the engine and with the plugin in a worker. Oscairn's own view test (`desktop-gaps`) runs only
+against its test plugin, so it wasn't run here.
+
+The plugin is 0.4.2 (with this entry): current Oscairn draws its two envelopes. Nothing changes
+for the converter. The commits with this entry were gated after it was written: their results are
+not recorded here.
+
 **Where this stopped** (thirteenth session). HPF24 stays on the state-variable HP 24 dB: Clean
 passes everything but index 560 (at every rate), Driven fails above 48 kHz; a decision for Jacob
 again (register entry 1). The amp EG decay table holds from index 72; attack and release below
