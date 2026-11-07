@@ -3177,6 +3177,44 @@ ever write the plugin's sound snapshot, each slot's line is `1 "<name>" <bus> <h
 Oscairn now forms them itself when it opens a Performance saved with an instance per part, so the
 converter needn't write them.
 
+**Factory patches from Oscairn's asset library (2026-11-07).** Jacob's decision: the plugin ships
+Surge's factory patches as an Oscairn asset library, `org.oscairn.analog-factory` 1.0.0, holding
+`patches_factory/` from upstream `5a4828a33` unmodified (with Surge's AUTHORS, LICENSE and a NOTICE),
+and finds it through `oscairn.assets/draft-2` (Oscairn `8a8fcc6`), whose `library_root(owner,
+library_id, min_version, path, capacity)` gives an installed library's read-only folder. Commits:
+`872bf4a` the lookup, its tests and the vendored `assets.h`, then version 0.4.1 with this entry.
+
+*Where the factory folder comes from* (the preset provider's `init`, which gets the indexer, not a
+host): Surge's data folder when an environment variable overrides it (`SURGE_DATA_HOME`,
+`PIPELINE_OVERRIDE_DATA_HOME`: Surge's own `datapathOverriden`), as before; else, when the indexer's
+`oscairn.assets` table has `library_root` and it answers true for `org.oscairn.analog-factory`
+at least 1.0.0, `<root>/patches_factory`; else Surge XT's own data folder, as before. The user patch
+folder is unchanged. The plugin only reads the library's folder (installed libraries are read-only
+hard links into Oscairn's hash store). At run time the plugin needs no factory folder: `preset-load`
+and `prepare_preset` get each patch's full path from the host (the location discovery declared),
+so nothing there calls `library_root`.
+
+Tests (`presets`): an indexer whose `oscairn.assets` (draft 2, `resolve` null, as Oscairn's) gives a
+temporary folder: the provider declares `<folder>/patches_factory` as its factory location, asking
+for `org.oscairn.analog-factory 1.0.0` with the indexer as owner; the same folder written but the
+answer false: it declares Surge XT's folder (as a storage built the same way finds it; none on this
+machine, which has no Surge XT installed); `SURGE_DATA_HOME` set: the overridden folder, though the
+library answers. Seen failing (one at a time): without the lookup (the first two), using the
+library's answer when it is false (the second), the library before the override (the third).
+
+*Oscairn side* (Oscairn `8a8fcc6`, built from a `git archive` export outside the repositories; the
+plugin a dev build of this commit's tree): the library's files packed with `oscairn-sign
+asset-package` (644 files: 641 patches and the three notices) and installed into a scratch data
+folder through `Session::installArchive` (a scratch program; the scan helper doesn't install), as
+`AssetLibraries/org.oscairn.analog-factory/1.0.0/` (read-only, hard links; every file's path,
+SHA-256 and size as the manifest given with the files). `oscairn-plugin-scan --presets` then lists
+641 factory patches, every one from the library's folder; with an empty data folder, none (no Surge
+XT here); with the plugin as at 0.4.0, none.
+
+The plugin is 0.4.1 (with this entry): it needs `org.oscairn.analog-factory` 1.0.0 or later for its
+factory presets. Nothing changes for the converter (its nodes carry patch data, not preset paths).
+The commits with this entry were gated after it was written: their results are not recorded here.
+
 **Where this stopped** (thirteenth session). HPF24 stays on the state-variable HP 24 dB: Clean
 passes everything but index 560 (at every rate), Driven fails above 48 kHz; a decision for Jacob
 again (register entry 1). The amp EG decay table holds from index 72; attack and release below
