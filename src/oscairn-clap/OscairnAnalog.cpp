@@ -44,6 +44,7 @@
 #include "PatchFileHeaderStructs.h"
 #include "sst/basic-blocks/mechanics/endian-ops.h"
 
+#include <oscairn-clap/assets.h>
 #include <oscairn-clap/memory.h>
 #include <oscairn-clap/sound-contexts-plugin.hpp>
 #include <oscairn-clap/ui.h>
@@ -1807,8 +1808,12 @@ uint32_t budgetNotes(const clap_plugin_t *p, oscairn_voice_budget_note_t *notes,
 const oscairn_plugin_voice_budget_t voiceBudgetExt{budgetHonorsVolume, budgetSetLimits,
                                                    budgetActiveVoices, budgetNotes};
 
-// Preset discovery: Surge's factory and user patch folders, found as Surge finds them, each
-// .fxp file in them one preset named after the file.
+// The asset library holding Surge's factory patches, unmodified, in patches_factory/.
+constexpr const char *factoryLibrary = "org.oscairn.analog-factory";
+constexpr const char *factoryLibraryVersion = "1.0.0";
+
+// Preset discovery: Surge's factory patches (from Oscairn's asset library when installed, see
+// providerInit) and user patch folder, each .fxp file in them one preset named after the file.
 const clap_preset_discovery_provider_descriptor_t providerDescriptor{
     CLAP_VERSION_INIT, "org.oscairn.analog.patches", "Oscairn Analog patches", "Oscairn"};
 
@@ -1829,7 +1834,16 @@ bool providerInit(const clap_preset_discovery_provider_t *p)
     clap_preset_discovery_filetype_t fxp{"Surge XT patch", nullptr, "fxp"};
     if (!indexer->declare_filetype(indexer, &fxp))
         return false;
+    // The factory patches: Surge's data folder when an environment variable overrides it; else
+    // the Oscairn asset library that ships them (read-only), when the host has it installed;
+    // else Surge XT's own data folder.
     auto factory = path_to_string(storage->datapath / "patches_factory");
+    auto assets = static_cast<const oscairn_host_assets_t *>(
+        indexer->get_extension ? indexer->get_extension(indexer, OSCAIRN_EXT_ASSETS) : nullptr);
+    char root[4096];
+    if (!storage->datapathOverriden && assets && assets->library_root &&
+        assets->library_root(indexer, factoryLibrary, factoryLibraryVersion, root, sizeof(root)))
+        factory = path_to_string(string_to_path(root) / "patches_factory");
     auto user = path_to_string(storage->userPatchesPath);
     clap_preset_discovery_location_t locations[] = {
         {CLAP_PRESET_DISCOVERY_IS_FACTORY_CONTENT, "Factory patches",

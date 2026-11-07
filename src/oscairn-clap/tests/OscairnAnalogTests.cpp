@@ -57,6 +57,7 @@
 #include <malloc.h>
 #endif
 
+#include <oscairn-clap/assets.h>
 #include <oscairn-clap/memory.h>
 #include <oscairn-clap/sound-contexts.h>
 #include <oscairn-clap/ui.h>
@@ -2115,6 +2116,100 @@ static void testPresets(const std::string &dir)
             factoryFolder = ix.paths[i];
     }
     check(!factoryFolder.empty(), "the provider declares the factory patch folder");
+
+    // The factory patches through Oscairn's asset library (oscairn.assets draft 2): an indexer
+    // whose library_root gives a folder (or nothing); the provider declares the folder's
+    // patches_factory, else Surge XT's own data folder; Surge's data override still wins.
+    {
+        struct Assets
+        {
+            std::string root;
+            bool installed{true}; // false: the root is written, but the answer is false
+            std::vector<std::string> asked;
+            std::vector<std::string> paths;
+            std::vector<uint32_t> flags;
+            oscairn_host_assets_t table{};
+            const void *owner{nullptr};
+            const void *indexer{nullptr};
+        } as;
+        as.table.resolve = nullptr; // as Oscairn's indexer gives it
+        as.table.library_root = [](const void *owner, const char *id, const char *min, char *path,
+                                   uint32_t capacity) {
+            auto *x = static_cast<const Assets *>(
+                static_cast<const clap_preset_discovery_indexer_t *>(owner)->indexer_data);
+            auto *a = const_cast<Assets *>(x);
+            a->owner = owner;
+            a->asked.push_back(std::string(id) + " " + (min ? min : ""));
+            if (a->root.size() + 1 > capacity)
+                return false;
+            std::snprintf(path, capacity, "%s", a->root.c_str());
+            return a->installed;
+        };
+        clap_preset_discovery_indexer_t ai{
+            CLAP_VERSION_INIT, "oscairn-analog-tests", "Oscairn", "", "0", &as,
+            [](const clap_preset_discovery_indexer_t *, const clap_preset_discovery_filetype_t *) {
+                return true;
+            },
+            [](const clap_preset_discovery_indexer_t *i,
+               const clap_preset_discovery_location_t *l) {
+                auto x = static_cast<Assets *>(i->indexer_data);
+                x->paths.push_back(l->location ? l->location : "");
+                x->flags.push_back(l->flags);
+                return true;
+            },
+            [](const clap_preset_discovery_indexer_t *, const clap_preset_discovery_soundpack_t *) {
+                return true;
+            },
+            [](const clap_preset_discovery_indexer_t *i, const char *id) -> const void * {
+                return !std::strcmp(id, OSCAIRN_EXT_ASSETS)
+                           ? &static_cast<Assets *>(i->indexer_data)->table
+                           : nullptr;
+            }};
+        // the factory folder the provider declares ("" for none)
+        auto declared = [&](const std::string &root, bool installed = true) {
+            as.root = root;
+            as.installed = installed;
+            as.asked.clear();
+            as.paths.clear();
+            as.flags.clear();
+            auto pr = factory->create(factory, &ai, factory->get_descriptor(factory, 0)->id);
+            bool ok = pr && pr->init(pr);
+            if (pr)
+                pr->destroy(pr);
+            std::string f;
+            for (size_t i = 0; ok && i < as.paths.size(); ++i)
+                if (as.flags[i] & CLAP_PRESET_DISCOVERY_IS_FACTORY_CONTENT)
+                    f = as.paths[i];
+            return ok ? f : std::string("(init failed)");
+        };
+        auto root =
+            fs::temp_directory_path() / ("oscairn-analog-library-" + std::to_string(getpid()));
+        fs::create_directories(root / "patches_factory");
+        auto installed = declared(root.u8string());
+        check(installed == (root / "patches_factory").u8string() && as.owner == &ai &&
+                  as.asked == std::vector<std::string>{"org.oscairn.analog-factory 1.0.0"},
+              "with the asset library installed the provider declares its patches_factory: " +
+                  installed);
+        // not installed: Surge XT's data folder, as a storage built the same way finds it
+        SurgeStorage::SurgeStorageConfig config;
+        config.suppliedDataPath = SurgeStorage::skipPatchLoadDataPathSentinel;
+        config.createUserDirectory = false;
+        config.scanWavetableAndPatches = false;
+        auto surgeXt = (SurgeStorage(config).datapath / "patches_factory").u8string();
+        std::error_code ec;
+        auto missing = declared(root.u8string(), false);
+        check(missing == (fs::is_directory(fs::path(surgeXt), ec) ? surgeXt : std::string()) &&
+                  as.asked.size() == 1,
+              "without the asset library the provider falls back to Surge XT's folder (" +
+                  surgeXt + "): " + missing);
+        // Surge's data override wins over the library
+        setenv("SURGE_DATA_HOME", data.c_str(), 1);
+        auto overridden = declared(root.u8string());
+        unsetenv("SURGE_DATA_HOME");
+        check(fs::equivalent(fs::path(overridden), fs::path(dir), ec),
+              "Surge's data override wins over the asset library: " + overridden);
+        fs::remove_all(root, ec);
+    }
 
     struct Receiver
     {
