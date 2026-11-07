@@ -2584,6 +2584,54 @@ static void testSoundContexts(const std::vector<std::string> &patches)
         check(ok && fadePeak > 1e-3f, "at a second change the first change's tail fades out in "
                                       "channels 2-3 and the second's takes channels 0-1");
     }
+    // A sound choke_retiring faded out is cut at once, its voices with it: selected again, a
+    // note struck in its first block sounds at full level (Surge's all sound off would wait for
+    // the sound's next blocks and cut that note).
+    {
+        auto play = [&](bool choked) {
+            Instance a;
+            Sounds s(a);
+            auto snaps = static_cast<const oscairn_plugin_sound_snapshots_t *>(
+                a.plugin->get_extension(a.plugin, OSCAIRN_EXT_SOUND_SNAPSHOTS));
+            std::vector<float> rb[4];
+            float *ch[4];
+            for (int k = 0; k < 4; ++k)
+            {
+                rb[k].assign(512, 0.f);
+                ch[k] = rb[k].data();
+            }
+            clap_audio_buffer_t b{};
+            b.data32 = ch;
+            b.channel_count = 4;
+            a.beforeProcess = [&](uint32_t) { snaps->ring_out(a.plugin, &b); };
+            auto change = [&] {
+                uint32_t ids[16];
+                s.prepareSnapshot(incoming, ids);
+                for (int16_t c = 0; c < 16; ++c)
+                    s.x->select(a.plugin, ids[c], c);
+            };
+            if (choked)
+            {
+                a.render(9600, 480, {noteEvent(0, CLAP_EVENT_NOTE_ON, 1, 60, 0.8)}, false);
+                change(); // the default sound, holding its note, rings out
+                a.render(9600, 480, {}, false);
+                check(snaps->choke_retiring(a.plugin), "choke_retiring is queued");
+                change(); // and is choked: faded out over 3 ms, then cut
+                a.render(9600, 480, {}, false);
+            }
+            s.x->select(a.plugin, 0, 0);
+            auto x = a.render(24000, 480, {noteEvent(a.position, CLAP_EVENT_NOTE_ON, 5, 64, 0.8)},
+                              false);
+            double e = 0;
+            for (size_t i = 2 * 4800; i < x.size(); ++i)
+                e += (double)x[i] * x[i];
+            return std::sqrt(e / (x.size() - 2 * 4800));
+        };
+        const double x = play(true), y = play(false);
+        check(y > 1e-3 && x >= 0.99 * y,
+              "a sound choked out and selected again plays a note at full level: " +
+                  std::to_string(x) + " against " + std::to_string(y));
+    }
     // Too few free contexts: refused, nothing added.
     {
         Instance a;

@@ -899,8 +899,9 @@ struct Plugin : oscairn::contexts::Engine<Plugin, Voice, Patch, contextCapacity,
             sl.silent = voiceless && (peak == 0 || sl.quietBlocks * BLOCK_SIZE >= sampleRate);
             if (sl.choking && !sl.fadeLeft)
             {
-                // faded out: its voices end and its tail (the scene's filters) is cut
-                sy.allSoundOff();
+                // faded out: its voices end and its tail (the scene's filters) is cut, at once
+                // (all sound off would wait for its next blocks, then cut the notes struck there)
+                sy.stopSound();
                 sl.silent = true;
             }
             // Released notes whose voices are all gone end, if the synthesizer didn't say so.
