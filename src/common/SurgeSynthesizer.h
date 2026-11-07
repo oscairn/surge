@@ -109,7 +109,10 @@ class alignas(16) SurgeSynthesizer
         virtual void surgeMacroUpdated(long macroNum, float) = 0;
     };
     SurgeSynthesizer(PluginLayer *parent, const std::string &suppliedDataPath = "");
-    SurgeSynthesizer(PluginLayer *parent, const SurgeStorage::SurgeStorageConfig &config);
+    struct VoiceStore;
+    // With a shared store, the voices come from it, shared with other synthesizers
+    SurgeSynthesizer(PluginLayer *parent, const SurgeStorage::SurgeStorageConfig &config,
+                     VoiceStore *shared = nullptr);
     virtual ~SurgeSynthesizer();
 
     // Also see setNoteExpression() which allows you to control all note parameters polyphonically
@@ -237,9 +240,18 @@ class alignas(16) SurgeSynthesizer
     template <typename F> int cancelDelayedNotes(F &&matches);
     void startDueDelayedNotes();
 
-    std::array<std::array<SurgeVoice, MAX_VOICES>, 2> voices_array;
-    // TODO: FIX SCENE ASSUMPTION!
-    unsigned int voices_usedby[2][MAX_VOICES]; // 0 indicates no user, 1 is scene A, 2 is scene B
+    // The voices and which are in use: the synthesizer's own, or a store it shares, from which it
+    // takes any free voice
+    struct VoiceStore
+    {
+        std::array<std::array<SurgeVoice, MAX_VOICES>, 2> voices;
+        // TODO: FIX SCENE ASSUMPTION!
+        unsigned int usedby[2][MAX_VOICES]{}; // 0 indicates no user, 1 is scene A, 2 is scene B
+    };
+    std::unique_ptr<VoiceStore> ownVoices;
+    bool sharedVoices{false};
+    std::array<SurgeVoice, MAX_VOICES> *voices_array{nullptr};
+    unsigned int (*voices_usedby)[MAX_VOICES]{nullptr};
 
     int64_t voiceCounter = 1L;
 

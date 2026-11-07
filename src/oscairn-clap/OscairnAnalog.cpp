@@ -157,11 +157,11 @@ bool readFxp(const char *path, std::vector<uint8_t> *data)
 
 // --- sound contexts -----------------------------------------------------------------------
 
-// Every prepared sound is a whole Surge synthesizer, about 32 MiB each at any rate (the median of
-// three preparations on macOS: 32.1-34.2 MiB at 44.1, 96 and 192 kHz; the SurgeSynthesizer
-// object alone is 19.6 MiB), so a few are sensible: 8 with the default sound, 288 MiB declared at
-// most.
-constexpr uint32_t contextCapacity = 8;
+// Every prepared sound is a whole Surge synthesizer, but they share one store of Surge's voices
+// (18.2 MiB, 128 voices), which made up most of each (32 MiB before). What stays a sound's own is
+// mostly its patch (3.3 MiB), its oscillators' wavetables and the synthesizer object without its
+// voices: 13-14 MiB (see synthBytes). 16 sounds with the default fit where 8 did (288 MiB).
+constexpr uint32_t contextCapacity = 16;
 constexpr size_t voiceCapacity = 256; // notes held or sounding, every sound together
 
 // A note in a sound: it goes to that sound's synthesizer under an ID of its own, and ends when
@@ -199,7 +199,16 @@ struct Slot
 
 void clear(SurgeSynthesizer &s);
 
-struct Plugin : oscairn::contexts::Engine<Plugin, Voice, Patch, contextCapacity, voiceCapacity>,
+// Surge's voices, shared by every sound's synthesizer: a base, so it outlives every synthesizer,
+// those in the helper's contexts too.
+struct SharedVoices
+{
+    std::unique_ptr<SurgeSynthesizer::VoiceStore> voiceStore{
+        std::make_unique<SurgeSynthesizer::VoiceStore>()};
+};
+
+struct Plugin : SharedVoices,
+                oscairn::contexts::Engine<Plugin, Voice, Patch, contextCapacity, voiceCapacity>,
                 SurgeSynthesizer::VoiceChooser
 {
     using Base = oscairn::contexts::Engine<Plugin, Voice, Patch, contextCapacity, voiceCapacity>;
@@ -479,11 +488,15 @@ struct Plugin : oscairn::contexts::Engine<Plugin, Voice, Patch, contextCapacity,
     // victim()) and fade out over 3 ms; with no limit set, nothing here runs and Surge steals as
     // it always has. Audio thread only.
     oscairn::voices::Limits budget; // as set_limits last gave it
-    static constexpr size_t surgeVoices = contextCapacity * MAX_VOICES;
+    static constexpr size_t surgeVoices = n_scenes * MAX_VOICES; // the shared store's
     std::array<oscairn::voices::Candidate, surgeVoices> candidates{};
     std::array<SurgeVoice *, surgeVoices> candidateVoice{}; // null: no voice there
 
     bool budgeted() const { return budget.limit || budget.count; }
+    size_t storeIndex(const SurgeVoice &v) const
+    {
+        return size_t(&v - voiceStore->voices[0].data());
+    }
     static bool monoSound(SurgeSynthesizer &s)
     {
         return s.storage.getPatch().scene[0].polymode.val.i != pm_poly;
@@ -519,7 +532,7 @@ struct Plugin : oscairn::contexts::Engine<Plugin, Voice, Patch, contextCapacity,
             const bool mono = monoSound(sy), selected = c.selected.load(std::memory_order_relaxed);
             for (auto *sv : sy.voices[0])
             {
-                const size_t i = slot * MAX_VOICES + size_t(sv - sy.voices_array[0].data());
+                const size_t i = storeIndex(*sv);
                 candidates[i] = {c.id,
                                  selected,
                                  mono && sv->state.gate,
@@ -531,9 +544,7 @@ struct Plugin : oscairn::contexts::Engine<Plugin, Voice, Patch, contextCapacity,
             }
         }
         forNoteVoices([&](Voice &n, SurgeVoice &sv) {
-            const size_t i = n.context * MAX_VOICES +
-                             size_t(&sv - slots[n.context].synth->voices_array[0].data());
-            candidates[i].held |= n.held;
+            candidates[storeIndex(sv)].held |= n.held;
         });
     }
     // Voices sounding and not on their way out, of context `id` or of all.
@@ -1153,7 +1164,7 @@ struct Plugin : oscairn::contexts::Engine<Plugin, Voice, Patch, contextCapacity,
         config.suppliedDataPath = SurgeStorage::skipPatchLoadDataPathSentinel;
         config.createUserDirectory = false;
         config.scanWavetableAndPatches = false;
-        auto s = std::make_unique<SurgeSynthesizer>(&layer, config);
+        auto s = std::make_unique<SurgeSynthesizer>(&layer, config, voiceStore.get());
         s->voiceChooser = this;
         s->storage.saveFixedTempo = true;
         auto &scene = s->storage.getPatch().scene[0];
@@ -1279,7 +1290,7 @@ struct Plugin : oscairn::contexts::Engine<Plugin, Voice, Patch, contextCapacity,
         return true;
     }
     // A preset's sound, or a snapshot's (oscairn.sound-snapshots), already built by readPatch.
-    // Nothing is shared between sounds: each synthesizer has its own tables.
+    // Each synthesizer has its own tables; only the store of voices is shared.
     bool buildPreset(Context &c, std::string &error)
     {
         if (c.patch.built)
@@ -1379,10 +1390,10 @@ struct Plugin : oscairn::contexts::Engine<Plugin, Voice, Patch, contextCapacity,
                             std::memory_order_relaxed);
     }
 
-    // oscairn.memory: what one synthesizer holds, a sound each (36 MiB: single preparations
-    // measured 28.7-34.3 MiB on macOS, 31.3 on Linux; the tests keep it at or above the median of
-    // three preparations and within 25 % of it).
-    static uint64_t synthBytes() { return uint64_t(36) << 20; }
+    // oscairn.memory: what one synthesizer holds without its voices, a sound each (15 MiB:
+    // medians of three preparations measured 12.8-14.1 MiB on macOS; the tests keep it at or above
+    // the median and within 25 % of it). The voices' store is the instance's.
+    static uint64_t synthBytes() { return uint64_t(15) << 20; }
     uint32_t sounds() const
     {
         uint32_t n = 0;
@@ -1560,11 +1571,12 @@ const oscairn_plugin_sound_contexts_t soundContextsExt{
     Plugin::discard,  &snapshotExt,    Plugin::preparePreset};
 
 // oscairn.memory: a synthesizer per prepared sound. The default sound is the context; the
-// state's other sounds count as shared.
+// state's other sounds and the voices' store count as shared.
 bool memoryEstimate(const clap_plugin_t *p, double, uint32_t, oscairn_memory_t *out)
 {
     auto &s = self(p);
-    out->shared_bytes = sizeof(Plugin) + Plugin::synthBytes() * (s.sounds() - 1);
+    out->shared_bytes = sizeof(Plugin) + sizeof(SurgeSynthesizer::VoiceStore) +
+                        Plugin::synthBytes() * (s.sounds() - 1);
     out->context_bytes = Plugin::synthBytes();
     out->asset_bytes = 0;
     return true;

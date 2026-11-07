@@ -59,11 +59,17 @@ SurgeSynthesizer::SurgeSynthesizer(PluginLayer *parent, const std::string &suppl
 }
 
 SurgeSynthesizer::SurgeSynthesizer(PluginLayer *parent,
-                                   const SurgeStorage::SurgeStorageConfig &config)
+                                   const SurgeStorage::SurgeStorageConfig &config,
+                                   VoiceStore *shared)
     : storage(config), hpA{cutl::make_array<BiquadFilter, n_hpBQ>(&storage)},
       hpB{cutl::make_array<BiquadFilter, n_hpBQ>(&storage)}, _parent(parent), halfbandA(6, true),
       halfbandB(6, true), halfbandIN(6, true), mpeEnabled(storage.mpeEnabled)
 {
+    if (!shared)
+        ownVoices = std::make_unique<VoiceStore>();
+    sharedVoices = shared;
+    voices_array = (shared ? shared : ownVoices.get())->voices.data();
+    voices_usedby = (shared ? shared : ownVoices.get())->usedby;
     switch_toggled_queued = false;
     audio_processing_active = false;
     halt_engine = false;
@@ -109,12 +115,6 @@ SurgeSynthesizer::SurgeSynthesizer(PluginLayer *parent,
     }
 
     stopSound();
-
-    for (int i = 0; i < MAX_VOICES; i++)
-    {
-        voices_usedby[0][i] = 0;
-        voices_usedby[1][i] = 0;
-    }
 
     for (int sc = 0; sc < n_scenes; sc++)
     {
@@ -683,14 +683,18 @@ int SurgeSynthesizer::getNonReleasedVoices(int s) const
 
 SurgeVoice *SurgeSynthesizer::getUnusedVoice(int scene)
 {
-    for (int i = 0; i < MAX_VOICES; i++)
-    {
-        if (!voices_usedby[scene][i])
+    // a shared store's voices of either scene serve any synthesizer's scene, as many as its own
+    if (sharedVoices && voices[scene].size() >= MAX_VOICES)
+        return 0;
+    for (int row = sharedVoices ? 0 : scene; row <= (sharedVoices ? 1 : scene); ++row)
+        for (int i = 0; i < MAX_VOICES; i++)
         {
-            voices_usedby[scene][i] = scene + 1;
-            return &voices_array[scene][i];
+            if (!voices_usedby[row][i])
+            {
+                voices_usedby[row][i] = scene + 1;
+                return &voices_array[row][i];
+            }
         }
-    }
     return 0;
 }
 

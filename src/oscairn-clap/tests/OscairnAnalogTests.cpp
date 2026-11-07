@@ -2286,7 +2286,7 @@ static void testSoundContexts(const std::vector<std::string> &patches)
     {
         Instance a;
         Sounds s(a);
-        check(s.x->capacity(a.plugin) == 8, "eight sound contexts");
+        check(s.x->capacity(a.plugin) == 16, "sixteen sound contexts");
         oscairn_sound_context_info_t info{};
         check(s.x->get(a.plugin, 0, &info) && info.id == 0 && info.selected_channels == 0xffff &&
                   std::string(info.name) == "Default",
@@ -2636,12 +2636,12 @@ static void testSoundContexts(const std::vector<std::string> &patches)
     {
         Instance a;
         Sounds s(a);
-        for (int i = 0; i < 6; ++i)
+        for (int i = 0; i < 14; ++i)
             s.preset(path);
         uint32_t ids[16];
         std::string why;
-        check(s.prepared() == 7 && !s.prepareSnapshot(incoming, ids, &why) && !why.empty() &&
-                  s.prepared() == 7,
+        check(s.prepared() == 15 && !s.prepareSnapshot(incoming, ids, &why) && !why.empty() &&
+                  s.prepared() == 15,
               "a snapshot needing more contexts than are free is refused, nothing added: " + why);
     }
     // Discard, capacity and refused presets.
@@ -2671,11 +2671,11 @@ static void testSoundContexts(const std::vector<std::string> &patches)
         check(hasNoteEnd(a, 40) && s.x->discard(a.plugin, tail),
               "once its note has ended the sound is discarded");
         uint32_t made = 0;
-        while (s.preset(path) != CLAP_INVALID_ID && made < 10)
+        while (s.preset(path) != CLAP_INVALID_ID && made < 20)
             ++made;
         std::string why;
-        check(made == 7 && s.preset(path, &why) == CLAP_INVALID_ID && !why.empty(),
-              "seven sounds beside the default, then a refusal saying why: " +
+        check(made == 15 && s.preset(path, &why) == CLAP_INVALID_ID && !why.empty(),
+              "fifteen sounds beside the default, then a refusal saying why: " +
                   std::to_string(made));
         std::string formula;
         for (auto &p : patches)
@@ -2716,7 +2716,7 @@ static void testSoundContexts(const std::vector<std::string> &patches)
                 ids.push_back(id);
             }
             oscairn_sound_context_info_t info;
-            for (uint32_t k = 0; k < 8; ++k)
+            for (uint32_t k = 0; k < 16; ++k)
                 s.x->get(a.plugin, k, &info);
             if (i % 6 == 5)
             {
@@ -2808,6 +2808,101 @@ static void testSoundContexts(const std::vector<std::string> &patches)
               "a sound's declared memory covers what it allocates, within 25 %");
         check(after.shared_bytes == before.shared_bytes + before.context_bytes,
               "a prepared sound adds a sound's memory");
+    }
+    // The sounds share one store of Surge's voices (128), and each takes as many from it as
+    // Surge's own pool holds (64): a sound with a Polyphony Limit of 64 and the most unison voices
+    // holds 64 notes, releases them and strikes 64 more, exactly as in stock Surge (which runs out
+    // of voices for them), with another sound holding 64 voices beside it.
+    {
+        HeadlessLayer layer;
+        SurgeStorage::SurgeStorageConfig config;
+        config.suppliedDataPath = SurgeStorage::skipPatchLoadDataPathSentinel;
+        config.createUserDirectory = false;
+        config.scanWavetableAndPatches = false;
+        std::vector<uint8_t> wide;
+        {
+            auto s = std::make_unique<SurgeSynthesizer>(&layer, config);
+            s->storage.getPatch().polylimit.val.i = 64;
+            auto &u = s->storage.getPatch().scene[0].unison_voices;
+            u.val.i = u.val_max.i;
+            void *data = nullptr;
+            auto size = s->saveRaw(&data);
+            wide.assign((uint8_t *)data, (uint8_t *)data + size);
+        }
+        auto notes = [](int16_t ch, int32_t id, bool again) {
+            std::vector<Event> ev;
+            for (int16_t k = 0; k < 64; ++k)
+            {
+                ev.push_back(noteEvent(0, CLAP_EVENT_NOTE_ON, id + k, 30 + k, 0.8));
+                ev.back().note.channel = ch;
+            }
+            if (again)
+            {
+                for (int16_t k = 0; k < 64; ++k)
+                {
+                    ev.push_back(noteEvent(9600, CLAP_EVENT_NOTE_OFF, id + k, 30 + k, 0));
+                    ev.back().note.channel = ch;
+                }
+                for (int16_t k = 0; k < 64; ++k)
+                {
+                    ev.push_back(noteEvent(9600, CLAP_EVENT_NOTE_ON, id + 100 + k, 30 + k, 0.8));
+                    ev.back().note.channel = 2;
+                }
+            }
+            return ev;
+        };
+        const uint32_t n = 19200;
+        Instance a, b; // b: the other sound alone
+        check(a.load(wide), "a patch with a Polyphony Limit of 64 loads");
+        Sounds s(a), t(b);
+        const oscairn_sound_parameter_t limit[] = {{fnv1a("polylimit"), 64}};
+        char message[128];
+        auto other = s.x->prepare(a.plugin, "other", limit, 1, nullptr, nullptr, message,
+                                  sizeof(message));
+        check(s.x->select(a.plugin, other, 1), "a second sound on channel 1");
+        t.x->select(b.plugin,
+                    t.x->prepare(b.plugin, "other", limit, 1, nullptr, nullptr, message,
+                                 sizeof(message)),
+                    1);
+        auto ev = notes(0, 1000, true), held = notes(1, 1, false);
+        ev.insert(ev.end(), held.begin(), held.end());
+        auto both = a.render(n, 512, ev, false);
+        auto beside = b.render(n, 512, held, false);
+
+        auto stock = std::make_unique<SurgeSynthesizer>(&layer, config);
+        stock->setSamplerate(48000.f);
+        stock->seedRandom(0x05CA1A4E); // the plugin's render seed
+        stock->loadRaw(wide.data(), (int)wide.size(), false);
+        auto &sp = stock->storage.getPatch();
+        sp.scenemode.val.i = sm_single;
+        sp.scene_active.val.i = 0;
+        sp.fx_disable.val.i = (1 << n_fx_slots) - 1;
+        sp.copy_globaldata(sp.globaldata);
+        sp.copy_scenedata(sp.scenedata[0], sp.scenedataOrig[0], 0);
+        stock->audio_processing_active = true;
+        bool same = both.size() == 2 * n && beside.size() == 2 * n;
+        for (uint32_t blk = 0; same && blk * BLOCK_SIZE < n; ++blk)
+        {
+            for (int k = 0; k < 64; ++k)
+            {
+                if (blk == 0)
+                    stock->playNote(0, 30 + k, 102, 0, 1000 + k);
+                if (blk * BLOCK_SIZE == 9600)
+                    stock->releaseNote(0, 30 + k, 0, 1000 + k);
+            }
+            if (blk * BLOCK_SIZE == 9600)
+                for (int k = 0; k < 64; ++k)
+                    stock->playNote(2, 30 + k, 102, 0, 1100 + k);
+            stock->process();
+            stock->time_data.ppqPos += (double)BLOCK_SIZE * stock->time_data.tempo / (60. * 48000);
+            for (int k = 0; same && k < BLOCK_SIZE; ++k)
+                for (int c = 0; c < 2; ++c)
+                {
+                    const size_t i = 2 * (blk * BLOCK_SIZE + k) + c;
+                    same = both[i] == 0.f + stock->output[c][k] + beside[i];
+                }
+        }
+        check(same, "beside another sound's 64 voices, a sound takes 64 voices as stock Surge");
     }
 }
 
