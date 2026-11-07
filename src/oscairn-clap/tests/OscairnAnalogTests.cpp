@@ -3500,6 +3500,59 @@ static void testReset(const std::vector<std::string> &patches)
     }
 }
 
+// Per-part voice budget entries, as Oscairn sends them for parts sharing an instance (RFC 0021):
+// an entry per part's sound with its reserve and priority and no limit of its own, and a limit for
+// the instance.
+static void testPartBudgets()
+{
+    auto on = [](uint32_t t, int32_t id, int16_t ch, int16_t key) {
+        auto e = noteEvent(t, CLAP_EVENT_NOTE_ON, id, key, 0.8);
+        e.note.channel = ch;
+        return e;
+    };
+    // Part 2 (channel 1) plays two notes, then part 1 (channel 0) two, all
+    // held; then the limits come, and one voice must go.
+    auto list = [](const std::vector<int32_t> &v) {
+        std::string t;
+        for (auto i : v)
+            t += " " + std::to_string(i);
+        return t;
+    };
+    auto budgetRun = [&](uint32_t reserve1, uint8_t priority1, uint8_t priority2) {
+        Instance a;
+        Sounds s(a);
+        char message[128];
+        auto second = s.x->prepare(a.plugin, "second", nullptr, 0, nullptr, nullptr, message,
+                                   sizeof(message));
+        s.x->select(a.plugin, second, 1);
+        auto x = static_cast<const oscairn_plugin_voice_budget_t *>(
+            a.plugin->get_extension(a.plugin, OSCAIRN_EXT_VOICE_BUDGET));
+        const oscairn_voice_budget_context_t entries[] = {{0, 0, reserve1, priority1, 0},
+                                                          {second, 0, 0, priority2, 0}};
+        a.render(9600, 512,
+                 {on(0, 21, 1, 48), on(512, 22, 1, 52), on(1024, 1, 0, 60), on(1536, 2, 0, 64)},
+                 false);
+        forbidAllocation = true;
+        x->set_limits(a.plugin, 3, entries, 2);
+        forbidAllocation = false;
+        a.render(9600, 512, {}, false);
+        std::vector<int32_t> ended;
+        for (auto &n : a.out.noteEnds)
+            ended.push_back(n.note_id);
+        return ended;
+    };
+    // within its reserve part 1 keeps its notes; part 2, over its reserve (none), gives up its
+    // older note although its priority is the higher
+    auto ended = budgetRun(2, 0, 10);
+    check(ended == std::vector<int32_t>{21},
+          "a part within its reserve keeps its notes; the other gives up its oldest:" +
+              list(ended));
+    // no reserves: the lower priority part's note goes, not the oldest
+    ended = budgetRun(0, 0, 10);
+    check(ended == std::vector<int32_t>{1},
+          "with no reserves the lower priority part's note goes, not the oldest:" + list(ended));
+}
+
 int main(int argc, char **argv)
 {
     std::string dir = argc > 1 ? argv[1] : SURGE_FACTORY_PATCHES;
@@ -3522,6 +3575,7 @@ int main(int argc, char **argv)
         run("presets", [&] { testPresets(dir); });
         run("sound contexts", [&] { testSoundContexts(patches); });
         run("voice budget", [] { testVoiceBudget(); });
+        run("per-part voice budgets", [] { testPartBudgets(); });
         run("reset", [&] { testReset(patches); });
         run("first block after a load", [] { testFirstBlockAfterLoad(); });
         run("unison against the reference", [] { testUnisonAgainstReference(); });
