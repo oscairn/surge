@@ -2973,6 +2973,69 @@ The plugin is 0.3.2 (with this entry): HPF24 Parts sound different (converted wi
 mapping). The commits with this entry were gated after it was written: their results are not
 recorded here.
 
+**Sixteen sounds: one store of voices (2026-11-06, after the fourteenth session).** Asked by
+Jacob: let one instance hold more than eight sounds by sharing what its synthesizers hold in
+common. Commits: `3d6ee04` a choked-out sound cut at once, `b5e8db8` the shared voices, then version
+0.3.3 with this entry.
+
+*What a sound held* (macOS arm64, measured with the plugin's own configuration: `sizeof` and the
+allocations of a second `SurgeSynthesizer` built beside a first). The `SurgeSynthesizer` object
+was 19.55 MiB, of which its voices (`voices_array`, 2 scenes x 64 `SurgeVoice` of 145.4 KiB, mostly
+each voice's three oscillator buffers) 18.17 MiB; its storage allocated 8.8 MiB more: the patch
+(`SurgePatch`, 3.33 MiB), ten wavetables of 205 KiB each (two scenes' three oscillators, three
+clipboard slots and the window oscillator's table; 2.0 MiB), the delay-line pool (0.5 MiB), the
+hold buffer pools and smaller allocations; the `SurgeStorage` object itself is 0.97 MiB. A
+prepared sound measured 32.1-34.2 MiB in all. The constant tables Surge builds per synthesizer
+are small: the dB, envelope-rate, glide, pitch and 2^x tables are arrays inside `SurgeStorage`
+(about 35 KiB together, and the pitch tables follow each synthesizer's tuning), the sinc tables
+41 KiB, the window oscillator's wavetable 205 KiB. Sharing them would save under 0.5 MiB a sound,
+so they stay each synthesizer's own; what is per synthesizer and not state is the voices, which
+only sounding notes use.
+
+*What changed.* The sounds' synthesizers share one store of Surge's voices (a `VoiceStore`: the
+same 2 x 64 voices and their in-use marks), made once per instance and handed to each synthesizer
+when it is built (`SurgeSynthesizer`'s new constructor argument; stock Surge builds its own store
+and behaves as before). A synthesizer sharing a store takes any free voice of it, of either scene's
+row, and at most 64 at once, as many as its own pool held (its filter state arrays hold 64 voices,
+so more would overrun them). So the sounds together have 128 voices; a sound alone plays exactly
+as before (it never reached past 64). A prepared sound now allocates 12.8-14.1 MiB (the median of
+three preparations, at 44.1, 96 and 192 kHz, macOS arm64; single preparations 12.1-14.2, the heap's
+in-use count moving between them), declared 15 MiB; the store, 18.2 MiB, is declared once in the
+shared bytes. The cap is 16 sounds with the default: 16 x 15 MiB plus the store is about 260 MiB,
+under the 288 MiB that 8 sounds declared before. The voice budget's candidates are now the store's 128
+voices, by their place in it.
+
+*A choked-out sound is cut at once.* A sound `choke_retiring` faded out ended with Surge's
+`allSoundOff()`, which only starts an 8-block fade and waits for the synthesizer's next blocks; its
+voices stayed allocated meanwhile (with a shared store they would be freed by whichever thread next
+touched the synthesizer, perhaps the main thread at a discard), and if the sound was selected again
+the notes in its first 8 blocks were cut (found, not changed, in the 0.3.1 entry). It now ends with
+`stopSound()`, on the audio thread, at the end of the fade.
+
+*Upstream files.* `SurgeSynthesizer.h` and `.cpp`: the store type, the constructor argument, the
+pointers that replace the two arrays (`voices_array`, `voices_usedby`, same indexing) and the
+shared branch of `getUnusedVoice`: 33 lines added, 17 removed. Without a store handed in, Surge is unchanged.
+
+*Known limits.* Past 128 voices across the sounds (each within its own 64) a new voice isn't
+started, as stock Surge does past its 64; the voice budget normally limits the sounds well before
+(register entry 20).
+
+Tests (`sound contexts`): sixteen sound contexts; fifteen sounds beside the default, then a
+refusal; a snapshot needing more contexts than are free (fifteen prepared) refused; the declared
+memory (15 MiB) covers what preparing a sound allocates, within 25 %, at 44.1, 96 and 192 kHz;
+beside another sound holding 64 voices, a sound with a Polyphony Limit of 64 and the most unison
+voices holds 64 notes, releases them and strikes 64 more, its output exactly stock Surge's (the
+sum with the other sound alone, sample for sample); a sound choked out by `choke_retiring` and
+selected again plays a note struck in its first block at full level (0.1012 RMS, as a fresh
+instance). Each failed with its part undone (seen): without the store (32 MiB a sound against 15
+declared; eight contexts); without the 64-voice limit of a shared synthesizer (the stock
+comparison); with `allSoundOff()` at the choke's end (0.0000 RMS). A first declaration of 16 MiB
+failed the memory check in the Release gate build at 96 kHz (median 12.8 MiB: 16 is 25.4 % over).
+
+The plugin is 0.3.3 (with this entry): sixteen sounds where there were eight; a sound alone sounds
+as in 0.3.2. The CLAP state and the snapshot are unchanged, so the converter needs nothing new. The
+commits with this entry were gated after it was written: their results are not recorded here.
+
 **Where this stopped** (thirteenth session). HPF24 stays on the state-variable HP 24 dB: Clean
 passes everything but index 560 (at every rate), Driven fails above 48 kHz; a decision for Jacob
 again (register entry 1). The amp EG decay table holds from index 72; attack and release below
@@ -3214,3 +3277,10 @@ only moves where a glide starts, below).
     Deliberate (Jacob: use the SDK's order). Reproduce: plugin test "voice budget". Code: the
     voice budget section of `OscairnAnalog.cpp`, `SurgeSynthesizer::softkillVoice`,
     `SurgeVoice::fadeOut`.
+20. **Voices shared between sounds.** The sounds of one instance share one store of 128 Surge
+    voices, each taking at most 64 at once (stock Surge: 64 for its one patch). Past 128 voices
+    across the sounds a new voice isn't started, as stock Surge does past its 64; one sound alone
+    plays as stock. Deliberate (Jacob asked for more sounds per instance; the voice budget limits
+    voices before the store does). Reproduce: plugin test "sound contexts" (the stock comparison
+    beside another sound's 64 voices). Code: `SurgeSynthesizer::getUnusedVoice`, `SharedVoices` in
+    `OscairnAnalog.cpp`.
