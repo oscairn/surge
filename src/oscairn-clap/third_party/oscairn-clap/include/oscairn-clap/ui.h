@@ -58,10 +58,13 @@ extern "C" {
  * and after a rescan of the parameters' info), so hints may change only with that info. Oscairn
  * ignores this extension when param_hint is null.
  *
- * Draft 4 added the view, field and index at the end of the hint, and algorithm(). Oscairn
- * still reads a draft 3 extension, without views.
+ * Draft 4 added the view, field and index at the end of the hint, and algorithm(); draft 5
+ * added seconds(). Oscairn still reads a draft 4 extension, without seconds() (an envelope's
+ * times then come from value texts with units, "31 ms" or "1.2 s", or are drawn by each
+ * parameter's range), and a draft 3 one, without views.
  */
-static const char OSCAIRN_EXT_UI[] = "oscairn.ui/draft-4";
+static const char OSCAIRN_EXT_UI[] = "oscairn.ui/draft-5";
+static const char OSCAIRN_EXT_UI_DRAFT_4[] = "oscairn.ui/draft-4";
 static const char OSCAIRN_EXT_UI_DRAFT_3[] = "oscairn.ui/draft-3";
 
 enum oscairn_widget
@@ -183,6 +186,13 @@ typedef struct oscairn_plugin_ui
      * parameter `param_id` (OSCAIRN_FIELD_ALGORITHM) has at the value `value`; false when it has
      * none. Asked with the hints, for every value of the parameter. */
     bool(CLAP_ABI* algorithm)(const clap_plugin_t* plugin, clap_id param_id, uint32_t value, oscairn_fm_algorithm_t* algorithm);
+    /* [main-thread] Draft 5, may be null: set `seconds` to how long the envelope stage of the
+     * time or rate parameter `param_id` (DELAY, ATTACK, HOLD, DECAY, RELEASE, TIME_n or RATE_n)
+     * takes at the value `value`, any value in its range; for a rate, the time a segment across
+     * the envelope's whole range takes; false when it has none. Asked with the hints, at each
+     * value of a stepped parameter of at most 128 values, else at 33 evenly spaced values, so the
+     * host draws stages by time; it drops them all if one is missing. Approximate is enough. */
+    bool(CLAP_ABI* seconds)(const clap_plugin_t* plugin, clap_id param_id, double value, double* seconds);
 } oscairn_plugin_ui_t;
 
 #ifdef __cplusplus

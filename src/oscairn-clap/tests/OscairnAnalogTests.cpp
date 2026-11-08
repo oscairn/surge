@@ -466,9 +466,9 @@ static void testPortsAndParams(const std::vector<std::string> &patches)
         auto ui = static_cast<const oscairn_plugin_ui_t *>(
             a.plugin->get_extension(a.plugin, OSCAIRN_EXT_UI));
         check(ui && ui->param_hint, "oscairn.ui");
-        check(a.plugin->get_extension(a.plugin, "oscairn.ui/draft-4") &&
+        check(a.plugin->get_extension(a.plugin, "oscairn.ui/draft-5") &&
                   !a.plugin->get_extension(a.plugin, "oscairn.ui/draft-3"),
-              "oscairn.ui is draft 4, not draft 3");
+              "oscairn.ui is draft 5, not draft 3");
         check(ui && !ui->algorithm, "no FM operator view: no algorithm call");
         // role, view, field, index
         const std::map<std::string, std::vector<uint32_t>> want{
