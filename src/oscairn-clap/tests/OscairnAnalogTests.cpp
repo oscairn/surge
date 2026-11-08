@@ -738,6 +738,87 @@ static void testRichViews()
     check(times == 6, "six stage times");
 }
 
+// Every step of every int Surge parameter (stepped, or exposed 0..1 as the oscillator controls
+// and filter subtypes are): its value text is the text Surge shows for that int value, and the
+// text reads back as a value with that text.
+static void testSteppedValueTexts()
+{
+    Instance a;
+    HeadlessLayer layer;
+    SurgeStorage::SurgeStorageConfig config;
+    config.suppliedDataPath = SurgeStorage::skipPatchLoadDataPathSentinel;
+    config.createUserDirectory = false;
+    config.scanWavetableAndPatches = false;
+    auto s = std::make_unique<SurgeSynthesizer>(&layer, config);
+    std::map<clap_id, clap_param_info_t> infos;
+    for (uint32_t i = 0; i < a.params->count(a.plugin); ++i)
+    {
+        clap_param_info_t info{};
+        a.params->get_info(a.plugin, i, &info);
+        infos[info.id] = info;
+    }
+    int steps = 0, wrong = 0, named = 0;
+    std::set<std::string> want{"a_env1_attack_shape", "a_env1_decay_shape",
+                               "a_env1_release_shape", "a_env1_mode", "a_filter1_type",
+                               "a_filter1_subtype", "a_osc1_type"};
+    for (auto *p : s->storage.getPatch().param_ptr)
+    {
+        if (p->valtype != vt_int || p->ctrltype == ct_none)
+            continue;
+        auto it = infos.find(fnv1a(p->get_storage_name()));
+        if (it == infos.end())
+            continue;
+        auto &info = it->second;
+        // stepped over Surge's ints (the bend ranges wider than stock's), or 0..1
+        const bool stepped = info.flags & CLAP_PARAM_IS_STEPPED;
+        check(stepped ? info.min_value <= p->val_min.i && info.max_value >= p->val_max.i
+                      : info.min_value == 0 && info.max_value == 1,
+              std::string(p->get_storage_name()) + ": stepped over its ints, or 0..1");
+        const int lo = stepped ? (int)info.min_value : p->val_min.i,
+                  hi = stepped ? (int)info.max_value : p->val_max.i;
+        int wrongHere = 0;
+        want.erase(p->get_storage_name());
+        ++named;
+        for (int k = lo; k <= hi && k <= lo + 512; ++k)
+        {
+            Parameter copy = *p;
+            copy.val.i = k;
+            const auto surge = copy.get_display();
+            char text[256] = "";
+            const double value =
+                stepped ? k : Parameter::intScaledToFloat(k, p->val_max.i, p->val_min.i);
+            a.params->value_to_text(a.plugin, info.id, value, text, sizeof text);
+            ++steps;
+            if (surge != text)
+            {
+                ++wrong;
+                if (++wrongHere <= 3)
+                    std::fprintf(stderr, "  %s at %d: \"%s\", Surge shows \"%s\"\n",
+                                 p->get_storage_name(), k, text, surge.c_str());
+                continue;
+            }
+            double v = -1;
+            const bool read = a.params->text_to_value(a.plugin, info.id, text, &v);
+            check(read || (!stepped && !p->can_setvalue_from_string()),
+                  std::string(p->get_storage_name()) + " at " + std::to_string(k) + ": \"" +
+                      text + "\" reads back");
+            if (read && v != value)
+            {
+                // two steps can share a text; then it reads back as one with that text
+                char back[256] = "";
+                a.params->value_to_text(a.plugin, info.id, v, back, sizeof back);
+                check(!std::strcmp(back, text), std::string(p->get_storage_name()) + " at " +
+                                                    std::to_string(k) + ": \"" + text +
+                                                    "\" reads back as " + std::to_string(v));
+            }
+        }
+    }
+    std::printf("  stepped value texts: %d parameters, %d steps, %d wrong\n", named, steps, wrong);
+    for (auto &w : want)
+        check(false, w + " is checked");
+    check(named > 50 && wrong == 0, "every step's value text is Surge's text for it");
+}
+
 static void testStateRoundTrip(const std::vector<std::string> &patches)
 {
     Instance a;
@@ -3996,6 +4077,7 @@ int main(int argc, char **argv)
         };
         run("ports and parameters", [&] { testPortsAndParams(patches); });
         run("rich views", [] { testRichViews(); });
+        run("stepped value texts", [] { testSteppedValueTexts(); });
         run("state round trips", [&] { testStateRoundTrip(patches); });
         run("block sizes", [&] { testBlockSizes(patches); });
         run("notes", [] { testNotes(); });

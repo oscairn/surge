@@ -1640,9 +1640,21 @@ bool paramsValueToText(const clap_plugin_t *p, clap_id id, double value, char *o
     // shortcut: reads the parameter's current control type, which the audio thread can
     // change for oscillator controls; give these a snapshot once sound contexts exist.
     const auto bus = (unsigned)std::lround(std::clamp(value, pi->min, pi->max));
-    auto text = pi->bus           ? (bus ? "Sound bus " + std::to_string(bus) : std::string("Main"))
-                : pi->deactivation ? std::string(value > 0.5 ? "Off" : "On")
-                                   : pi->p->get_display(true, Plugin::to01(*pi, value));
+    std::string text;
+    if (pi->bus || pi->deactivation)
+        text = pi->bus ? (bus ? "Sound bus " + std::to_string(bus) : std::string("Main"))
+                       : std::string(value > 0.5 ? "Off" : "On");
+    else if (pi->p->valtype == vt_int)
+    {
+        // An int's text from a copy holding it: get_display(true, ...) shows the current value
+        // for some types (the key names of Keytrack Root)
+        Parameter at = *pi->p;
+        at.val.i = Parameter::intUnscaledFromFloat(Plugin::to01(*pi, value), at.val_max.i,
+                                                   at.val_min.i);
+        text = at.get_display();
+    }
+    else
+        text = pi->p->get_display(true, Plugin::to01(*pi, value));
     std::snprintf(out, size, "%s", text.c_str());
     return true;
 }
@@ -1669,6 +1681,18 @@ bool paramsTextToValue(const clap_plugin_t *p, clap_id id, const char *text, dou
             return false;
         *value = t == "Off" ? 1 : 0;
         return true;
+    }
+    if (pi && !pi->normalized && pi->p->valtype == vt_int)
+    {
+        // A step's own text reads back as that step, where Surge's parse misses (it truncates
+        // the key names' pitch: "D-1" reads as C#-1)
+        char t[256];
+        for (int k = (int)pi->min; k <= (int)pi->max; ++k)
+            if (paramsValueToText(p, id, k, t, sizeof t) && !std::strcmp(t, text))
+            {
+                *value = k;
+                return true;
+            }
     }
     if (!pi || !pi->p->can_setvalue_from_string())
         return false;
