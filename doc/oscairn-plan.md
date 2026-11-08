@@ -3279,6 +3279,26 @@ draft 5 and not draft 3. Seen failing: with the draft 4 header, without `seconds
 The plugin is 0.4.3 (with this entry). Nothing changes for the converter or for native Surge. The
 commits with this entry were gated after it was written: their results are not recorded here.
 
+**Stepped value texts (2026-11-08).** Oscairn's Panel showed repeated choice labels (Attack Shape
+"Convex | Linear | Linear", Envelope Mode "Digital | Digital"). A test of every step of every int
+parameter against Surge's own display for that int found those texts already right: the envelope
+shapes and modes, filter types and subtypes and oscillator types gave Surge's text at every step,
+so the repeats come from the host side (by its code, not reproduced: an Oscairn editor that asks for each step's text in turn
+and shows the parameter's last text for a step whose reply has not come). Two plugin faults it did
+find, fixed in `db55981`: every step of Keytrack Root read as the current key, because
+`get_display(true, value)` shows the current value for key names (the text now comes from a copy
+of the parameter holding the int, as Surge's display has it); and `text_to_value` read nothing back
+for the choice parameters (Surge has no parse for them) and truncated key names ("D-1" as C#-1). A
+stepped int's own step texts now read back as those steps first, then Surge's parse.
+
+Tests (`stepped value texts`): 93 int parameters, 1223 steps, each with Surge's text and read back as
+a value with that text; the stepped ones cover Surge's ints, the others are 0..1. Seen failing
+without the change (127 wrong Keytrack Root texts, 569 steps reading nothing back) and with only
+the `value_to_text` half (some key names read back a semitone low).
+
+The plugin is 0.4.4 (with this entry). Nothing changes for the converter, the sound or native Surge.
+The commits with this entry were gated after it was written: their results are not recorded here.
+
 **Where this stopped** (thirteenth session). HPF24 stays on the state-variable HP 24 dB: Clean
 passes everything but index 560 (at every rate), Driven fails above 48 kHz; a decision for Jacob
 again (register entry 1). The amp EG decay table holds from index 72; attack and release below

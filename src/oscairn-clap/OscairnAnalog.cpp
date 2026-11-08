@@ -75,7 +75,7 @@ const clap_plugin_descriptor_t descriptor = {
     "https://github.com/oscairn/surge",
     "",
     "",
-    "0.4.3",
+    "0.4.4",
     "Analog-modelling instrument based on Surge XT",
     features,
 };
