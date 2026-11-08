@@ -3255,6 +3255,30 @@ The plugin is 0.4.2 (with this entry): current Oscairn draws its two envelopes. 
 for the converter. The commits with this entry were gated after it was written: their results are
 not recorded here.
 
+**Envelope times (2026-11-07).** Oscairn's `oscairn.ui` draft 5 (Oscairn `b1fcb88` to `cf63cd6`)
+draws an envelope's stages by time, from an optional `seconds()` call or, without it, from value
+texts ending in `ms` or `s`. The Oscairn session saw this plugin's tiles show raw values (Attack -8,
+Release -5) and its curve spaced by parameter position. The plugin's value texts already carry
+units through CLAP ("62.5 ms", "1.00 s", Surge's own `get_display`), and an Oscairn `cf63cd6` host
+reads all six stage times from them in the engine and in a worker with 0.4.2's plugin; the raw
+values and the spacing were the host's (drawing by time came with draft 5, and `cf63cd6` makes
+the tiles show value texts that arrive after the page is drawn). The texts are unchanged. Commits:
+`cebae97` the vendored headers at Oscairn `cf63cd6` (`ui.h` draft 5 only), `5a1ee2f` `seconds()`,
+then version 0.4.3 with this entry.
+
+*What it gives:* the amp and filter envelopes' attack, decay and release, 2^value seconds
+(`ct_envtime`), the shortest value 0 as Surge displays it (the digital attack skips the stage
+there; a decay or release at -8 runs about 3.9 ms, which the display also shows as 0). The sustains
+are levels and give none. A tempo-synced stage still gets its unsynced time (a code shortcut).
+
+Tests (`rich views`): at 33 values across each stage's range `seconds()` is the time its value
+text shows, within the text's rounding, and the sustains give none; the extension is found as
+draft 5 and not draft 3. Seen failing: with the draft 4 header, without `seconds()`, and with plain
+2^value (3.9 ms where Surge shows 0).
+
+The plugin is 0.4.3 (with this entry). Nothing changes for the converter or for native Surge. The
+commits with this entry were gated after it was written: their results are not recorded here.
+
 **Where this stopped** (thirteenth session). HPF24 stays on the state-variable HP 24 dB: Clean
 passes everything but index 560 (at every rate), Driven fails above 48 kHz; a decision for Jacob
 again (register entry 1). The amp EG decay table holds from index 72; attack and release below
