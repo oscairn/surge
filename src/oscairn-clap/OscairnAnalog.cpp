@@ -1717,7 +1717,18 @@ bool uiParamHint(const clap_plugin_t *p, clap_id id, oscairn_param_hint_t *hint)
              CLAP_INVALID_ID, 0, pi->role, pi->view, pi->field, 0};
     return true;
 }
-const oscairn_plugin_ui_t uiExt{uiParamHint};
+// oscairn.ui draft 5: an envelope stage's time as Surge shows it, 2^value seconds (ct_envtime),
+// its shortest value shown as 0 (the attack skips the stage there); the sustain is a level.
+// shortcut: a tempo-synced stage still gets its unsynced time; read the tempo if hosts need it.
+bool uiSeconds(const clap_plugin_t *p, clap_id id, double value, double *seconds)
+{
+    auto pi = self(p).find(id, nullptr);
+    if (!pi || !pi->view || pi->field == OSCAIRN_FIELD_SUSTAIN)
+        return false;
+    *seconds = value <= pi->p->val_min.f ? 0 : std::exp2(value);
+    return true;
+}
+const oscairn_plugin_ui_t uiExt{uiParamHint, nullptr, uiSeconds};
 
 // The CLAP state: a line naming the format and the default sound's Output Bus, then its patch.
 constexpr const char *stateHeader = "oscairn-analog-state-1";

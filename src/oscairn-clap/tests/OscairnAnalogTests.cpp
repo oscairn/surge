@@ -698,6 +698,44 @@ static void testRichViews()
     check(shows(a, 0.75), "automation in process reaches the views' values, without allocating");
     Instance b;
     check(b.load(a.save()) && shows(b, 0.75), "a loaded state reaches the views' values");
+
+    // seconds() (draft 5): each attack, decay and release at 33 values across its range is the
+    // time Surge displays for it (its value text, "62.5 ms" or "1.00 s"), within the text's
+    // rounding; the sustains have none
+    int times = 0;
+    for (auto &p : stages)
+    {
+        oscairn_param_hint_t h{};
+        ui->param_hint(b.plugin, p.id, &h);
+        double sec = -1;
+        if (h.field == OSCAIRN_FIELD_SUSTAIN)
+        {
+            check(!ui->seconds || !ui->seconds(b.plugin, p.id, p.default_value, &sec),
+                  "no seconds for a sustain");
+            continue;
+        }
+        ++times;
+        for (int k = 0; k <= 32; ++k)
+        {
+            const double v = at(p, k / 32.0);
+            char text[64] = "";
+            check(b.params->value_to_text(b.plugin, p.id, v, text, sizeof text),
+                  "a stage's value text");
+            char *end = nullptr;
+            double shown = std::strtod(text, &end);
+            while (*end == ' ')
+                ++end;
+            check(!std::strcmp(end, "ms") || !std::strcmp(end, "s"),
+                  std::string("a stage's value text has its unit: ") + text);
+            if (!std::strcmp(end, "ms"))
+                shown /= 1000;
+            check(ui->seconds && ui->seconds(b.plugin, p.id, v, &sec) &&
+                      std::fabs(sec - shown) <= 0.005 * shown + 5e-5,
+                  std::string(p.module) + "/" + p.name + " at " + std::to_string(v) + ": " +
+                      std::to_string(sec) + " s, shown as " + text);
+        }
+    }
+    check(times == 6, "six stage times");
 }
 
 static void testStateRoundTrip(const std::vector<std::string> &patches)
