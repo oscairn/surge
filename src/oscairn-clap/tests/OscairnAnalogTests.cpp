@@ -2289,7 +2289,7 @@ static void testPresets(const std::string &dir)
     }
     check(!factoryFolder.empty(), "the provider declares the factory patch folder");
 
-    // The factory patches through Oscairn's asset library (oscairn.assets draft 2): an indexer
+    // The factory patches through Oscairn's asset library (oscairn.assets draft 3): an indexer
     // whose library_root gives a folder (or nothing); the provider declares the folder's
     // patches_factory, else Surge XT's own data folder; Surge's data override still wins.
     {

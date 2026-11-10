@@ -3213,7 +3213,6 @@ XT here); with the plugin as at 0.4.0, none.
 
 The plugin is 0.4.1 (with this entry): it needs `org.oscairn.analog-factory` 1.0.0 or later for its
 factory presets. Nothing changes for the converter (its nodes carry patch data, not preset paths).
-The commits with this entry were gated after it was written: their results are not recorded here.
 
 **Rich views (2026-11-07).** Oscairn's `oscairn.ui` draft 4 (Oscairn `ed073e7` to `4961c35`) lets
 a plugin say which of its parameters make an envelope, a key or velocity map or an FM operator
@@ -3297,7 +3296,21 @@ without the change (127 wrong Keytrack Root texts, 569 steps reading nothing bac
 the `value_to_text` half (some key names read back a semitone low).
 
 The plugin is 0.4.4 (with this entry). Nothing changes for the converter, the sound or native Surge.
-The commits with this entry were gated after it was written: their results are not recorded here.
+
+**Assets draft 3 (2026-11-09).** Oscairn's `oscairn.assets` draft 3 (oscairn-clap `7b5c4e0`) adds
+`create()` to the host table: a plugin hands the host a finished file and gets back an asset
+reference (its library, path and SHA-256) to keep in its state. The vendored headers moved to
+`oscairn/oscairn-clap` at `7b5c4e0` (they left the Oscairn repository's `core/clap-ext`); `ui.h`
+draft 5, `sound-contexts.h` draft 5, `sound-snapshots` draft 4 and `voice-budget` draft 1 are
+unchanged in what they declare, so nothing else moves. The plugin asks the preset-discovery
+indexer for `OSCAIRN_EXT_ASSETS`, which is now draft 3: the table's `resolve` and `library_root`
+stay its first two members and current Oscairn answers drafts 1, 2 and 3, so the factory-patch
+lookup works as before and `create()` (recording, edited wavetables) is unused for now. A host
+answering only draft 2 returns nothing for the draft 3 ID and the provider falls back to Surge
+XT's own data folder, as it does when the library is not installed. Tests (`preset discovery`):
+the indexer's `library_root` still decides the declared factory folder.
+
+The plugin is 0.4.5 (with this entry). Nothing changes for the converter, the sound or native Surge.
 
 **Where this stopped** (thirteenth session). HPF24 stays on the state-variable HP 24 dB: Clean
 passes everything but index 560 (at every rate), Driven fails above 48 kHz; a decision for Jacob
