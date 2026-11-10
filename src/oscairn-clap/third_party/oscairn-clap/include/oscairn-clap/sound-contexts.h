@@ -10,7 +10,7 @@ extern "C" {
 /* Native prepared sound contexts. Context-management methods run on the main thread
  * concurrently with process(), without stopping voices; state callbacks are exclusive.
  * Capacity is constant for the instance lifetime; Oscairn refuses a plugin reporting more
- * than 256 or missing any function but state. Telemetry may change while read.
+ * than 256 or missing any function but state and prepare_preset. Telemetry may change while read.
  * prepare builds an independent patch from plugin defaults plus supplied values, or
  * from patch text when the plugin defines one (the Oscairn Legacy Sampler takes SFZ). Asset
  * paths in that text are relative to base, a library folder whose files the plugin
@@ -89,8 +89,9 @@ typedef struct oscairn_plugin_sound_contexts {
  * called only with rendering excluded, as state->save is. False for an unknown id.
  * sound_values (draft 4, optional): writes up to capacity of the sound id's parameter values, every
  * writable parameter's, into values and returns how many it has; 0 for an unknown id or one selected
- * on a MIDI channel. Main thread, concurrently with process(): the host calls it only for a sound it
- * has prepared and not selected since, whose values the audio thread does not change.
+ * on a MIDI channel. Main thread, concurrently with process(): the values of a sound no channel
+ * selects, which the audio thread does not change. The host may ask for a selected sound too; the
+ * plugin returns 0 for it, without reading its values.
  * A plugin offering both may share one instance between several parts (RFC 0021). */
 static const char OSCAIRN_EXT_SOUND_SNAPSHOTS[] = "oscairn.sound-snapshots/draft-4";
 typedef struct oscairn_plugin_sound_snapshots {

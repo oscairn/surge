@@ -9,16 +9,18 @@ extern "C" {
  * A plugin reports what activating would allocate, so a host near its memory limit can refuse
  * it before the allocation instead of after. The host still measures what the plugin holds and
  * counts the larger of the two, so a plugin found holding more than it declared is counted at
- * what it holds. (Oscairn: distrusting such a plugin's later declarations is planned. In a worker
- * process, a declaration sets the worker's memory limit: what it declares plus half again and
- * 64 MiB. A plugin offering one function without the other is refused.)
+ * what it holds. (Oscairn: distrusting such a plugin's later declarations is planned. An effect
+ * context made from another is counted at its declaration alone. In a worker process where every
+ * plugin declares, the declarations set the worker's memory limit: what they declare plus half
+ * again and 64 MiB. A plugin offering one function without the other is refused.)
  *
  * Bytes are the plugin's own storage, excluding host and allocator overhead:
  *   shared_bytes:  once per instance (or per engine shared by effect contexts): tables,
  *                  engine-wide buffers, audio shared between contexts;
  *   context_bytes: each context; an instance without contexts is one context, and with
  *                  oscairn.effect-contexts or oscairn.sound-contexts the originating
- *                  interface is one too. A new context on a running engine costs this alone;
+ *                  interface is one too. A new effect context on a running engine costs this
+ *                  and its asset_bytes, without shared_bytes;
  *   asset_bytes:   decoded assets (samples) the current state uses.
  * The total for an instance is shared_bytes + context_bytes + asset_bytes. An engine that also
  * offers oscairn.effect-contexts reports the same shared and context bytes through both. Every

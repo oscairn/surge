@@ -26,13 +26,25 @@ typedef struct oscairn_asset_ref {
  * is older, or the path does not fit. `owner` is what the table came from: the clap_host_t, or
  * the clap_preset_discovery_indexer_t, whose get_extension answers OSCAIRN_EXT_ASSETS too, so a
  * preset provider can declare the library's folder as a location in its init. From an indexer,
- * resolve is NULL. A host answers draft 1 with the same table (resolve only). */
-static const char OSCAIRN_EXT_ASSETS[] = "oscairn.assets/draft-2";
+ * resolve is NULL. A host answers draft 1 with the same table (resolve only). (Oscairn: from a
+ * plugin in a worker process, library_root returns false for now; from an indexer it works.)
+ *
+ * Draft 3 adds create: store a file the plugin produced (a recording, an edited wavetable, a
+ * converted waveform), given as a finished file at `file`, an absolute path. It fills ref with the
+ * file's library, path and SHA-256 and returns true: a file already in a registered or installed
+ * library is referenced where it is, and must stay there; any other is copied, and the plugin may
+ * delete it once create returns. The copy goes into the user library (`user`, `<first 16 hex
+ * digits of the SHA-256>/<name>`). The plugin then keeps ref in its state and lists it in oscairn.asset-dependencies. On failure it returns
+ * false with a NUL-terminated reason in message. From an indexer, create is NULL. A host answers
+ * drafts 1 and 2 with the same table. */
+static const char OSCAIRN_EXT_ASSETS[] = "oscairn.assets/draft-3";
+static const char OSCAIRN_EXT_ASSETS_DRAFT_2[] = "oscairn.assets/draft-2";
 static const char OSCAIRN_EXT_ASSETS_DRAFT_1[] = "oscairn.assets/draft-1";
 typedef struct oscairn_host_assets {
     bool (CLAP_ABI *resolve)(const clap_host_t*, oscairn_asset_ref_t* ref, char* path, uint32_t path_capacity,
                              char* message, uint32_t message_capacity);
     bool (CLAP_ABI *library_root)(const void* owner, const char* library_id, const char* min_version, char* path, uint32_t path_capacity); /* draft 2 */
+    bool (CLAP_ABI *create)(const clap_host_t*, const char* file, oscairn_asset_ref_t* ref, char* message, uint32_t message_capacity); /* draft 3 */
 } oscairn_host_assets_t;
 
 /* Plugin extension. Main thread. Lists every asset the plugin's current state uses, so a host

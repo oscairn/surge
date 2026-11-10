@@ -18,7 +18,8 @@ extern "C" {
  * A parameter may also name its role (cutoff, attack, an effect's mix): what it does in terms
  * every instrument shares, so a host can put it on the same physical knob whatever the plugin
  * (Oscairn's role banks, RFC 0011). Oscairn guesses roles from the parameters' names for a plugin
- * that names none, and only then; where no role fills a bank, knobs go by priority.
+ * that names none, and only then; where no role fills a bank and the part has no controls of its
+ * own, knobs go by priority.
  *
  * A parameter may also be part of a rich view, which a host draws over the parameters' values
  * and edits by setting them (an envelope's curve, a key map, an FM operator view): the

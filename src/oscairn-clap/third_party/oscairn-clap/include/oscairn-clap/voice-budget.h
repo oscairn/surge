@@ -19,7 +19,9 @@ extern "C" {
  * Per sound context (oscairn.sound-contexts), which is per part: a plugin playing several parts'
  * sounds from one pool of voices (one instance, several contexts) gets each context's limit,
  * reserve and priority, and whether its part plays mono or legato, and chooses among its voices
- * accordingly (the order below). A plugin without sound contexts reads context 0's settings.
+ * accordingly (the order below). A plugin without sound contexts reads the entry for
+ * OSCAIRN_VOICE_BUDGET_SELECTED: its one sound is the selected one (voice-budget-plugin.hpp's
+ * Limits::of(0, true)).
  * (Oscairn: parts sharing one instance, RFC 0021, get an entry each, for the sound their channel
  * selects, with the part's reserve and priority; an instance one part plays alone gets one entry,
  * for the selected contexts, which also covers a Performance change, the outgoing sounds ringing
