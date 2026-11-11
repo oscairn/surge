@@ -772,9 +772,13 @@ struct Plugin : SharedVoices,
         if (n.port_index > 0)
             return;
         releaseVelocity = vel127(n.velocity);
-        bool onKey = false;
+        // Whether this note-off releases one of our voices (now, or at the pedal's release),
+        // whose release lets the key go in its synthesizer. A voice already released doesn't
+        // count: in a mono mode it can live on under another key, and counting it kept this
+        // key down (a note struck again legato, its ID ended at once, stuck).
+        bool releases = false;
         for (auto &v : voices)
-            onKey |= v.active && v.channel == n.channel && v.key == n.key;
+            releases |= matches(v, n.note_id, n.key, n.channel) && v.held;
         Base::noteOff(n, choke, midi);
         if (choke)
             return;
@@ -783,7 +787,7 @@ struct Plugin : SharedVoices,
             // A key whose note its synthesizer already ended (a mono mode moved the voice to
             // another key) is still released there, or the mono modes would go back to it.
             auto slot = keySlot[n.channel][n.key];
-            if (!onKey && pinned(slot))
+            if (!releases && pinned(slot))
                 slots[slot].synth->releaseNote(n.channel, n.key, releaseVelocity, -1);
             return;
         }

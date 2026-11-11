@@ -3367,6 +3367,101 @@ static Event noteOn(uint32_t t, int32_t id, int16_t channel, int16_t key, double
     return e;
 }
 
+// Mono modes: a key struck again while another holds the mono voice. In Mono ST, H (70) taken
+// legato over K (63), K released, K struck again (legato: its ID ends at once), then H and K
+// released: the voice ends. Before the fix K stayed down in Surge, held there by K's first
+// note, which had been released but never ended (the voice had moved to H). The same in each
+// mono mode, with note IDs, as raw MIDI and under the pedal; and every kind of panic with keys down leaves
+// silence.
+static void testMonoKeyStruckAgain()
+{
+    auto peakFrom = [](const std::vector<float> &lr, size_t from) {
+        float p = 0;
+        for (size_t i = 2 * from; i < lr.size(); ++i)
+            p = std::max(p, std::fabs(lr[i]));
+        return p;
+    };
+    auto midiNote = [](uint32_t t, bool on, int16_t key) {
+        return midiEvent(t, on ? 0x90 : 0x80, (uint8_t)key, on ? 100 : 64);
+    };
+    const std::pair<int, const char *> modes[] = {
+        {pm_mono, "Mono"}, {pm_mono_st, "Mono ST"}, {pm_mono_fp, "Mono FP"},
+        {pm_mono_st_fp, "Mono ST+FP"}};
+    for (auto [mode, name] : modes)
+        for (int way = 0; way < 3; ++way) // note IDs, raw MIDI, note IDs under the pedal
+        {
+            const bool midi = way == 1, pedal = way == 2;
+            Instance a;
+            clap_id playMode = CLAP_INVALID_ID;
+            for (auto &[n, info] : a.paramsByName())
+                if (n.size() >= 10 && n.compare(n.size() - 10, 10, "/Play Mode") == 0)
+                    playMode = info.id;
+            check(playMode != CLAP_INVALID_ID, "a Play Mode parameter");
+            auto on = [&](uint32_t t, int32_t id, int16_t key) {
+                return midi ? midiNote(t, true, key) : noteEvent(t, CLAP_EVENT_NOTE_ON, id, key, 0.8);
+            };
+            auto off = [&](uint32_t t, int32_t id, int16_t key) {
+                return midi ? midiNote(t, false, key) : noteEvent(t, CLAP_EVENT_NOTE_OFF, id, key, 0.5);
+            };
+            std::vector<Event> ev{paramEvent(0, playMode, mode), on(100, 1, 63), on(4800, 3, 70),
+                                  off(9600, 1, 63),  on(14400, 5, 63), off(19200, 3, 70),
+                                  off(24000, 5, 63)};
+            uint32_t end = 24000; // the last release
+            if (pedal)
+            {
+                ev.push_back(midiEvent(50, 0xB0, 64, 127));
+                ev.push_back(midiEvent(end = 36000, 0xB0, 64, 0));
+            }
+            auto lr = a.render(end + 96000, 256, ev);
+            const float after = peakFrom(lr, end + 48000);
+            check(peakFrom(lr, 14400) > 0.01f && after < 1e-5f,
+                  std::string(name) + (midi ? " (MIDI)" : pedal ? " (pedal)" : "") +
+                      ": a key struck again under another ends when both are released: peak " +
+                      std::to_string(after));
+        }
+    // Panic in Mono ST after the six events (the note stuck before the fix): a reset, MIDI's
+    // all sound off, and wildcard note-offs and chokes each leave silence, and the next note
+    // plays and ends.
+    for (int panic = 0; panic < 4; ++panic)
+    {
+        Instance a;
+        clap_id playMode = CLAP_INVALID_ID;
+        for (auto &[n, info] : a.paramsByName())
+            if (n.size() >= 10 && n.compare(n.size() - 10, 10, "/Play Mode") == 0)
+                playMode = info.id;
+        a.render(26000, 256,
+                 {paramEvent(0, playMode, pm_mono_st),
+                  noteEvent(100, CLAP_EVENT_NOTE_ON, 1, 63, 0.8),
+                  noteEvent(4800, CLAP_EVENT_NOTE_ON, 3, 70, 0.8),
+                  noteEvent(9600, CLAP_EVENT_NOTE_OFF, 1, 63, 0.5),
+                  noteEvent(14400, CLAP_EVENT_NOTE_ON, 5, 63, 0.8),
+                  noteEvent(19200, CLAP_EVENT_NOTE_OFF, 3, 70, 0.5),
+                  noteEvent(23900, CLAP_EVENT_NOTE_OFF, 5, 63, 0.5)});
+        std::vector<Event> ev;
+        const char *what[] = {"a reset", "all sound off", "a wildcard note-off",
+                              "a wildcard choke"};
+        if (panic == 0)
+            a.plugin->reset(a.plugin);
+        else if (panic == 1)
+            ev.push_back(midiEvent(a.position, 0xB0, 120, 0));
+        else
+            ev.push_back(noteEvent(a.position,
+                                   panic == 2 ? CLAP_EVENT_NOTE_OFF : CLAP_EVENT_NOTE_CHOKE, -1,
+                                   -1, 0));
+        if (panic >= 2)
+            ev.back().note.channel = -1;
+        auto quiet = a.render(48000, 256, ev);
+        auto lr = a.render(24000 + 72000, 256,
+                           {noteEvent(a.position + 100, CLAP_EVENT_NOTE_ON, 7, 63, 0.8),
+                            noteEvent(a.position + 24000, CLAP_EVENT_NOTE_OFF, 7, 63, 0.5)});
+        check(peakFrom(quiet, 24000) < 1e-5f && peakFrom(lr, 0) > 0.01f &&
+                  peakFrom(lr, 48000) < 1e-5f,
+              std::string("Mono ST: after ") + what[panic] + ", silence, and the next note ends: " +
+                  std::to_string(peakFrom(quiet, 24000)) + " " +
+                  std::to_string(peakFrom(lr, 48000)));
+    }
+}
+
 // Voices given up past the host's limits: a lowered limit fades the excess out at the next
 // block, without a click; a new note takes a voice in voice-budget.h's order across two sounds;
 // the voices and notes reported, fading ones included; NOTE_END after a note's last voice;
@@ -4074,6 +4169,7 @@ int main(int argc, char **argv)
         run("state round trips", [&] { testStateRoundTrip(patches); });
         run("block sizes", [&] { testBlockSizes(patches); });
         run("notes", [] { testNotes(); });
+        run("mono key struck again", [] { testMonoKeyStruckAgain(); });
         run("formula refused", [] { testFormulaRefused(); });
         run("concurrent state", [] { testConcurrentState(); });
         run("plain patches match stock Surge", [&] { testPlainPatchesMatchStock(patches); });
