@@ -3344,6 +3344,22 @@ anything under HOME changed or appeared. In CI after the build. Seen failing wit
 
 The plugin is 0.4.6 (with this entry). Nothing changes for the converter or native Surge.
 
+**A key struck again in Mono ST (2026-11-11).** In Mono ST and Mono ST+FP, with note IDs or raw
+MIDI: key K, then H legato over it, K released, K struck again (legato, so its note ends at once),
+then H and K released: K kept sounding until a panic. K's first note had been released but its
+voice lived on under H, and the final note-off took that as the key's voice being released, so it
+never released K in Surge. A note-off now releases the key in its synthesizer unless it releases
+(or the pedal will release) one of the plugin's held voices. Test (`mono key struck again`): the
+sequence ends in silence in Mono, Mono ST, Mono FP and Mono ST+FP, with note IDs, as raw MIDI and
+under the pedal (Latch keeps notes by design and isn't covered); seen failing without the change
+in Mono ST and Mono ST+FP (peak 0.26 two seconds after the release). A reset, MIDI's all sound
+off, and wildcard note-offs and chokes each silence the stuck note, also without the change: the
+plugin's `reset` already clears Surge's keys, hold buffers, mono key state and voices. MIDI's all
+notes off (CC 123) reaches `SurgeSynthesizer::allNotesOff`, which allocates on the audio thread;
+not changed here.
+
+The plugin is 0.4.7 (with this entry). Nothing changes for the converter or native Surge.
+
 **Where this stopped** (thirteenth session). HPF24 stays on the state-variable HP 24 dB: Clean
 passes everything but index 560 (at every rate), Driven fails above 48 kHz; a decision for Jacob
 again (register entry 1). The amp EG decay table holds from index 72; attack and release below
