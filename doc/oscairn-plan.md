@@ -3312,6 +3312,38 @@ the indexer's `library_root` still decides the declared factory folder.
 
 The plugin is 0.4.5 (with this entry). Nothing changes for the converter, the sound or native Surge.
 
+**No user folders (2026-11-11).** Opening a Performance with the plugin made macOS ask for access
+to the Documents folder: every synthesizer the plugin made (and the preset provider's storage)
+found Surge's user folder, `~/Documents/Surge XT` (`calculateStandardUserDataPath`), read Surge's
+user defaults and MIDI defaults from it, scanned its FX presets and FX chains, read the user data
+folder override in `~/Library/Application Support/Surge Synth Team/Surge XT`, looked for Surge XT's
+data folder in `~/Library/Application Support/Surge XT`, and the provider declared the user patch
+folder in Documents as a preset location. Under Oscairn a user's sounds are the plugin's state,
+saved by the host, and factory content comes only from an asset library, so Surge's own folders
+don't exist for the plugin. `SurgeStorageConfig::findFolders` (default true, so Surge XT is
+unchanged) set false finds no data or user folder: `datapath` stays empty unless
+`SURGE_DATA_HOME`/`PIPELINE_OVERRIDE_DATA_HOME` gives it, every user path stays empty, there is no
+user defaults provider (each user default reads as Surge's built-in value, an update does
+nothing), and the FX preset scans and the MIDI defaults file are skipped. The plugin's
+synthesizers and its preset provider use it. The provider declares only the factory patches: the
+environment override, else `org.oscairn.analog-factory` through `library_root`, else nothing (it no
+longer falls back to Surge XT's data folder in `/Library/Application Support`). Surge's user
+defaults that touch the sound (smoothing, pitch smoothing, MPE bend range) are now always Surge's
+defaults in the plugin, whatever a user set in Surge XT.
+
+Test: `tests/privacy-check.sh` runs `oscairn-analog-privacy-host` (`tests/privacy-host.cpp`, which
+opens the bundle as Oscairn does: an instance made, initialized and activated, a note, preset
+discovery with every declared location listed and its presets' metadata read, a preset loaded, a
+note, the state saved and loaded into a fresh instance, a note) with HOME and
+`CFFIXED_USER_HOME` (which `NSFileManager` reads) set to a fresh folder whose Documents, Desktop,
+Downloads, Music, Movies, Pictures and `Library/Mobile Documents` are symbolic links. On macOS
+it runs under `sandbox-exec`, killed at its first access to any of them or to the real home's
+(resolving the link counts, so a look for a missing file is caught); everywhere it fails if
+anything under HOME changed or appeared. In CI after the build. Seen failing without the change
+(killed at instance creation).
+
+The plugin is 0.4.6 (with this entry). Nothing changes for the converter or native Surge.
+
 **Where this stopped** (thirteenth session). HPF24 stays on the state-variable HP 24 dB: Clean
 passes everything but index 560 (at every rate), Driven fails above 48 kHz; a decision for Jacob
 again (register entry 1). The amp EG decay table holds from index 72; attack and release below
