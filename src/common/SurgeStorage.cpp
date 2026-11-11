@@ -181,15 +181,18 @@ SurgeStorage::SurgeStorage(const SurgeStorage::SurgeStorageConfig &config) : oth
     std::string sxtlower = "surge-xt";
 
     // Set up the local app data path for storing app-level config
-    localAppDataPath = sst::plugininfra::paths::bestLibrarySharedVendorFolderPathFor(
-        "Surge Synth Team", "Surge XT", true);
-    userDataPath = getOverridenUserPath();
+    if (config.findFolders)
+    {
+        localAppDataPath = sst::plugininfra::paths::bestLibrarySharedVendorFolderPathFor(
+            "Surge Synth Team", "Surge XT", true);
+        userDataPath = getOverridenUserPath();
+    }
 
     bool isFactoryPortable{false};
     bool isUserPortable{false};
 
 #if MAC
-    if (!hasSuppliedDataPath)
+    if (!hasSuppliedDataPath && config.findFolders)
     {
         auto shareddp = sst::plugininfra::paths::bestLibrarySharedFolderPathFor(sxt);
         auto userdp = sst::plugininfra::paths::bestLibrarySharedFolderPathFor(sxt, true);
@@ -204,7 +207,7 @@ SurgeStorage::SurgeStorage(const SurgeStorage::SurgeStorageConfig &config) : oth
         datapath = fs::path{suppliedDataPath};
     }
 
-    if (userDataPath.empty())
+    if (userDataPath.empty() && config.findFolders)
     {
         userDataPath = calculateStandardUserDataPath(sxt);
     }
@@ -215,7 +218,7 @@ SurgeStorage::SurgeStorage(const SurgeStorage::SurgeStorageConfig &config) : oth
 #elif LINUX
     const auto installPath = sst::plugininfra::paths::sharedLibraryBinaryPath().parent_path();
 
-    if (!hasSuppliedDataPath)
+    if (!hasSuppliedDataPath && config.findFolders)
     {
         bool founddir{false};
 
@@ -265,7 +268,8 @@ SurgeStorage::SurgeStorage(const SurgeStorage::SurgeStorageConfig &config) : oth
     // First check the portable mode sitting beside me
     auto up{installPath};
 
-    while (userDataPath.empty() && up.has_parent_path() && up != up.parent_path())
+    while (config.findFolders && userDataPath.empty() && up.has_parent_path() &&
+           up != up.parent_path())
     {
         auto portable = up / "SurgeXTUserData";
 
@@ -278,7 +282,7 @@ SurgeStorage::SurgeStorage(const SurgeStorage::SurgeStorageConfig &config) : oth
         up = up.parent_path();
     }
 
-    if (userDataPath.empty())
+    if (userDataPath.empty() && config.findFolders)
     {
         userDataPath = calculateStandardUserDataPath(sxt);
     }
@@ -286,7 +290,7 @@ SurgeStorage::SurgeStorage(const SurgeStorage::SurgeStorageConfig &config) : oth
 #elif WINDOWS
     const auto installPath = sst::plugininfra::paths::sharedLibraryBinaryPath().parent_path();
 
-    if (!hasSuppliedDataPath)
+    if (!hasSuppliedDataPath && config.findFolders)
     {
         // First check the portable mode sitting beside me
         auto cp{installPath};
@@ -322,7 +326,8 @@ SurgeStorage::SurgeStorage(const SurgeStorage::SurgeStorageConfig &config) : oth
     // Portable - first check for installPath\\SurgeXTUserData
     auto cp{installPath};
 
-    while (userDataPath.empty() && cp.has_parent_path() && cp != cp.parent_path())
+    while (config.findFolders && userDataPath.empty() && cp.has_parent_path() &&
+           cp != cp.parent_path())
     {
         auto portable = cp / L"SurgeXTUserData";
 
@@ -335,7 +340,7 @@ SurgeStorage::SurgeStorage(const SurgeStorage::SurgeStorageConfig &config) : oth
         cp = cp.parent_path();
     }
 
-    if (userDataPath.empty())
+    if (userDataPath.empty() && config.findFolders)
     {
         try
         {
@@ -381,16 +386,19 @@ SurgeStorage::SurgeStorage(const SurgeStorage::SurgeStorageConfig &config) : oth
     canonicalizeIfPresent(datapath, isFactoryPortable);
     canonicalizeIfPresent(userDataPath, isUserPortable);
 
-    initializeUserDataPaths();
+    if (config.findFolders)
+    {
+        initializeUserDataPaths();
 
-    userDefaultsProvider = std::make_unique<Surge::Storage::UserDefaultsProvider>(
-        userDataPath, "SurgeXT", Surge::Storage::defaultKeyToString,
-        [this](auto &a, auto &b) { reportError(a, b); });
+        userDefaultsProvider = std::make_unique<Surge::Storage::UserDefaultsProvider>(
+            userDataPath, "SurgeXT", Surge::Storage::defaultKeyToString,
+            [this](auto &a, auto &b) { reportError(a, b); });
+    }
 
     extraThirdPartyWavetablesPath = config.extraThirdPartyWavetablesPath;
     extraUserWavetablesPath = config.extraUsersWavetablesPath;
 
-    if (config.createUserDirectory)
+    if (config.createUserDirectory && config.findFolders)
     {
         createUserDirectory();
     }
@@ -593,7 +601,8 @@ SurgeStorage::SurgeStorage(const SurgeStorage::SurgeStorageConfig &config) : oth
     try
     {
         fxUserPreset = std::make_unique<Surge::Storage::FxUserPreset>();
-        fxUserPreset->doPresetRescan(this);
+        if (config.findFolders)
+            fxUserPreset->doPresetRescan(this);
     }
     catch (fs::filesystem_error &e)
     {
@@ -603,7 +612,8 @@ SurgeStorage::SurgeStorage(const SurgeStorage::SurgeStorageConfig &config) : oth
     try
     {
         fxChainUserPreset = std::make_unique<Surge::Storage::FxChainUserPreset>();
-        fxChainUserPreset->doPresetRescan(this);
+        if (config.findFolders)
+            fxChainUserPreset->doPresetRescan(this);
     }
     catch (fs::filesystem_error &e)
     {
@@ -3047,7 +3057,7 @@ void SurgeStorage::load_midi_controllers()
     TiXmlDocument mcd;
     TiXmlElement *midiRoot = nullptr;
 
-    if (mcd.LoadFile(mcp))
+    if (!userDataPath.empty() && mcd.LoadFile(mcp))
     {
         midiRoot = mcd.FirstChildElement("midiconfig");
     }

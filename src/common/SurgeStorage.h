@@ -1603,6 +1603,10 @@ class alignas(16) SurgeStorage
         fs::path extraThirdPartyWavetablesPath{};
         fs::path extraUsersWavetablesPath{};
         bool scanWavetableAndPatches{true};
+        // false: find no data or user folder (a host that hands the synth everything it needs).
+        // datapath stays empty unless suppliedDataPath or SURGE_DATA_HOME gives it, every user
+        // path stays empty and the user defaults are Surge's own: nothing is read or written.
+        bool findFolders{true};
 
         static SurgeStorageConfig fromDataPath(const std::string &s)
         {

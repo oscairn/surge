@@ -31,3 +31,11 @@ target_link_libraries(oscairn-analog-render PRIVATE oscairn-analog-core)
 # Fits the filter cutoff rate match tables (src/common/dsp/FilterCutoffRateMatchTables.h).
 add_executable(oscairn-analog-rate-match tools/OscairnAnalogRateMatch.cpp tools/RenderNote.cpp)
 target_link_libraries(oscairn-analog-rate-match PRIVATE oscairn-analog-core)
+
+# Opens the plugin as Oscairn does, for tests/privacy-check.sh: nothing may touch the user's
+# Documents, Desktop or Downloads, or create anything under HOME.
+add_executable(oscairn-analog-privacy-host tests/privacy-host.cpp)
+target_include_directories(oscairn-analog-privacy-host PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/third_party/oscairn-clap/include
+  ${SURGE_SOURCE_DIR}/libs/clap-juce-extensions/clap-libs/clap/include)
+target_link_libraries(oscairn-analog-privacy-host PRIVATE ${CMAKE_DL_LIBS})

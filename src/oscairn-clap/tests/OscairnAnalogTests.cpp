@@ -2291,7 +2291,7 @@ static void testPresets(const std::string &dir)
 
     // The factory patches through Oscairn's asset library (oscairn.assets draft 3): an indexer
     // whose library_root gives a folder (or nothing); the provider declares the folder's
-    // patches_factory, else Surge XT's own data folder; Surge's data override still wins.
+    // patches_factory, else none; Surge's data override still wins.
     {
         struct Assets
         {
@@ -2362,18 +2362,11 @@ static void testPresets(const std::string &dir)
                   as.asked == std::vector<std::string>{"org.oscairn.analog-factory 1.0.0"},
               "with the asset library installed the provider declares its patches_factory: " +
                   installed);
-        // not installed: Surge XT's data folder, as a storage built the same way finds it
-        SurgeStorage::SurgeStorageConfig config;
-        config.suppliedDataPath = SurgeStorage::skipPatchLoadDataPathSentinel;
-        config.createUserDirectory = false;
-        config.scanWavetableAndPatches = false;
-        auto surgeXt = (SurgeStorage(config).datapath / "patches_factory").u8string();
+        // not installed: no factory folder (Surge XT's own folders are never looked at)
         std::error_code ec;
         auto missing = declared(root.u8string(), false);
-        check(missing == (fs::is_directory(fs::path(surgeXt), ec) ? surgeXt : std::string()) &&
-                  as.asked.size() == 1,
-              "without the asset library the provider falls back to Surge XT's folder (" +
-                  surgeXt + "): " + missing);
+        check(missing.empty() && as.asked.size() == 1,
+              "without the asset library the provider declares no factory folder: " + missing);
         // Surge's data override wins over the library
         setenv("SURGE_DATA_HOME", data.c_str(), 1);
         auto overridden = declared(root.u8string());

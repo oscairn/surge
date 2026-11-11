@@ -47,7 +47,12 @@ jobs:
             -DCMAKE_C_FLAGS="${{ matrix.flags }}" -DCMAKE_CXX_FLAGS="${{ matrix.flags }}" \
             -DCMAKE_EXE_LINKER_FLAGS="${{ matrix.flags }}" -DCMAKE_MODULE_LINKER_FLAGS="${{ matrix.flags }}"
       - name: Build
-        run: cmake --build build --target oscairn-analog oscairn-analog-tests
+        run: cmake --build build --target oscairn-analog oscairn-analog-tests oscairn-analog-privacy-host
+      - name: Privacy
+        run: |
+          src/oscairn-clap/tests/privacy-check.sh build/src/oscairn-clap/oscairn-analog-privacy-host \
+            build/src/oscairn-clap/oscairn-analog.clap org.oscairn.analog \
+            --library org.oscairn.analog-factory="$PWD/resources/data"
       - name: Test
         # The ASan run took 31 minutes on the ARM64 runner with the fourth session's tests; the
         # thirteenth session's takes 77-100 minutes in the local Docker substitute.

@@ -1288,6 +1288,7 @@ struct Plugin : SharedVoices,
         config.suppliedDataPath = SurgeStorage::skipPatchLoadDataPathSentinel;
         config.createUserDirectory = false;
         config.scanWavetableAndPatches = false;
+        config.findFolders = false; // Surge's user folders don't exist under Oscairn
         auto s = std::make_unique<SurgeSynthesizer>(&layer, config, voiceStore.get());
         s->voiceChooser = this;
         s->storage.saveFixedTempo = true;
@@ -1871,8 +1872,10 @@ const oscairn_plugin_voice_budget_t voiceBudgetExt{budgetHonorsVolume, budgetSet
 constexpr const char *factoryLibrary = "org.oscairn.analog-factory";
 constexpr const char *factoryLibraryVersion = "1.0.0";
 
-// Preset discovery: Surge's factory patches (from Oscairn's asset library when installed, see
-// providerInit) and user patch folder, each .fxp file in them one preset named after the file.
+// Preset discovery: Surge's factory patches from Oscairn's asset library when installed (see
+// providerInit), each .fxp file in them one preset named after the file. Surge's own folders,
+// its user folder in Documents above all, are never looked at: a user's sounds are the
+// plugin's state, which the host saves.
 const clap_preset_discovery_provider_descriptor_t providerDescriptor{
     CLAP_VERSION_INIT, "org.oscairn.analog.patches", "Oscairn Analog patches", "Oscairn"};
 
@@ -1889,34 +1892,30 @@ bool providerInit(const clap_preset_discovery_provider_t *p)
     config.suppliedDataPath = SurgeStorage::skipPatchLoadDataPathSentinel;
     config.createUserDirectory = false;
     config.scanWavetableAndPatches = false;
+    config.findFolders = false;
     auto storage = std::make_unique<SurgeStorage>(config);
     clap_preset_discovery_filetype_t fxp{"Surge XT patch", nullptr, "fxp"};
     if (!indexer->declare_filetype(indexer, &fxp))
         return false;
-    // The factory patches: Surge's data folder when an environment variable overrides it; else
-    // the Oscairn asset library that ships them (read-only), when the host has it installed;
-    // else Surge XT's own data folder.
-    auto factory = path_to_string(storage->datapath / "patches_factory");
+    // The factory patches: Surge's data folder when an environment variable gives it; else the
+    // Oscairn asset library that ships them (read-only), when the host has it installed; else
+    // none.
+    std::string factory;
     auto assets = static_cast<const oscairn_host_assets_t *>(
         indexer->get_extension ? indexer->get_extension(indexer, OSCAIRN_EXT_ASSETS) : nullptr);
     char root[4096];
-    if (!storage->datapathOverriden && assets && assets->library_root &&
-        assets->library_root(indexer, factoryLibrary, factoryLibraryVersion, root, sizeof(root)))
+    if (storage->datapathOverriden)
+        factory = path_to_string(storage->datapath / "patches_factory");
+    else if (assets && assets->library_root &&
+             assets->library_root(indexer, factoryLibrary, factoryLibraryVersion, root,
+                                  sizeof(root)))
         factory = path_to_string(string_to_path(root) / "patches_factory");
-    auto user = path_to_string(storage->userPatchesPath);
-    clap_preset_discovery_location_t locations[] = {
-        {CLAP_PRESET_DISCOVERY_IS_FACTORY_CONTENT, "Factory patches",
-         CLAP_PRESET_DISCOVERY_LOCATION_FILE, factory.c_str()},
-        {CLAP_PRESET_DISCOVERY_IS_USER_CONTENT, "User patches",
-         CLAP_PRESET_DISCOVERY_LOCATION_FILE, user.c_str()}};
-    for (auto &l : locations)
-    {
-        std::error_code ec;
-        if (fs::is_directory(string_to_path(l.location), ec) &&
-            !indexer->declare_location(indexer, &l))
-            return false;
-    }
-    return true;
+    clap_preset_discovery_location_t location{CLAP_PRESET_DISCOVERY_IS_FACTORY_CONTENT,
+                                              "Factory patches",
+                                              CLAP_PRESET_DISCOVERY_LOCATION_FILE, factory.c_str()};
+    std::error_code ec;
+    return factory.empty() || !fs::is_directory(string_to_path(factory), ec) ||
+           indexer->declare_location(indexer, &location);
 }
 void providerDestroy(const clap_preset_discovery_provider_t *p)
 {

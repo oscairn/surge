@@ -420,12 +420,16 @@ std::string defaultKeyToString(DefaultKey k)
 std::string getUserDefaultValue(SurgeStorage *storage, const DefaultKey &key,
                                 const std::string &valueIfMissing, bool potentiallyRead)
 {
+    if (!storage->userDefaultsProvider) // a storage without folders
+        return valueIfMissing;
     return storage->userDefaultsProvider->getUserDefaultValue(key, valueIfMissing, potentiallyRead);
 }
 
 int getUserDefaultValue(SurgeStorage *storage, const DefaultKey &key, int valueIfMissing,
                         bool potentiallyRead)
 {
+    if (!storage->userDefaultsProvider) // a storage without folders
+        return valueIfMissing;
     return storage->userDefaultsProvider->getUserDefaultValue(key, valueIfMissing, potentiallyRead);
 }
 
@@ -433,22 +437,30 @@ std::pair<int, int> getUserDefaultValue(SurgeStorage *storage, const DefaultKey 
                                         const std::pair<int, int> &valueIfMissing,
                                         bool potentiallyRead)
 {
+    if (!storage->userDefaultsProvider) // a storage without folders
+        return valueIfMissing;
     return storage->userDefaultsProvider->getUserDefaultValue(key, valueIfMissing, potentiallyRead);
 }
 
 bool updateUserDefaultValue(SurgeStorage *storage, const DefaultKey &key, const std::string &value)
 {
+    if (!storage->userDefaultsProvider)
+        return false;
     return storage->userDefaultsProvider->updateUserDefaultValue(key, value);
 }
 
 bool updateUserDefaultValue(SurgeStorage *storage, const DefaultKey &key, const int value)
 {
+    if (!storage->userDefaultsProvider)
+        return false;
     return storage->userDefaultsProvider->updateUserDefaultValue(key, value);
 }
 
 bool updateUserDefaultValue(SurgeStorage *storage, const DefaultKey &key,
                             const std::pair<int, int> &value)
 {
+    if (!storage->userDefaultsProvider)
+        return false;
     return storage->userDefaultsProvider->updateUserDefaultValue(key, value);
 }
 
