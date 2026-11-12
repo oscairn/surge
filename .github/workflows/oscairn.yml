@@ -26,15 +26,18 @@ jobs:
         include:
           - name: macOS arm64
             os: macos-15
+            compiler: appleclang
+            sanitizer: none
             flags: ""
           - name: Linux ARM64
             os: ubuntu-24.04-arm
+            compiler: gcc
+            sanitizer: none
             flags: ""
-          - name: Linux ARM64 ASan UBSan
-            os: ubuntu-24.04-arm
-            flags: "-fsanitize=address,undefined -fno-omit-frame-pointer"
           - name: Linux ARM64 TSan
             os: ubuntu-24.04-arm
+            compiler: gcc
+            sanitizer: tsan
             flags: "-fsanitize=thread"
     steps:
       - uses: actions/checkout@v4
@@ -43,9 +46,15 @@ jobs:
       - name: Install Ninja
         run: |
           if [[ "$RUNNER_OS" == "Linux" ]]; then sudo apt-get update && sudo apt-get install -y ninja-build; else brew install ninja; fi
+      - uses: hendrikmuhs/ccache-action@v1.2.24
+        with:
+          key: analog-${{ matrix.os }}-${{ matrix.compiler }}-RelWithDebInfo-${{ matrix.sanitizer }}
+          max-size: 1500M
+          evict-old-files: job
       - name: Configure
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DSURGE_SKIP_JUCE_FOR_RACK=ON -DSURGE_SKIP_LUA=ON \
             -DSURGE_BUILD_TESTRUNNER=OFF -DSURGE_BUILD_OSCAIRN=ON \
             -DCMAKE_C_FLAGS="${{ matrix.flags }}" -DCMAKE_CXX_FLAGS="${{ matrix.flags }}" \
@@ -58,13 +67,85 @@ jobs:
             build/src/oscairn-clap/oscairn-analog.clap org.oscairn.analog \
             --library org.oscairn.analog-factory="$PWD/resources/data"
       - name: Test
-        # The ASan run took 31 minutes on the ARM64 runner with the fourth session's tests; the
-        # thirteenth session's takes 77-100 minutes in the local Docker substitute.
         timeout-minutes: 180
         env:
-          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
           TSAN_OPTIONS: halt_on_error=1
         run: ./build/src/oscairn-clap/oscairn-analog-tests
+
+  # The ASan UBSan build, whose tests (104 minutes in one job at 0.4.6) run in the asan-tests
+  # jobs, split three ways, on the runner image the binary was built on.
+  asan-build:
+    name: Oscairn Analog - Linux ARM64 ASan UBSan
+    runs-on: ubuntu-24.04-arm
+    env:
+      FLAGS: "-fsanitize=address,undefined -fno-omit-frame-pointer"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install Ninja
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - uses: hendrikmuhs/ccache-action@v1.2.24
+        with:
+          key: analog-ubuntu-24.04-arm-gcc-RelWithDebInfo-asan-ubsan
+          max-size: 1500M
+          evict-old-files: job
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DSURGE_SKIP_JUCE_FOR_RACK=ON -DSURGE_SKIP_LUA=ON \
+            -DSURGE_BUILD_TESTRUNNER=OFF -DSURGE_BUILD_OSCAIRN=ON \
+            -DCMAKE_C_FLAGS="$FLAGS" -DCMAKE_CXX_FLAGS="$FLAGS" \
+            -DCMAKE_EXE_LINKER_FLAGS="$FLAGS" -DCMAKE_MODULE_LINKER_FLAGS="$FLAGS"
+      - name: Build
+        run: cmake --build build --target oscairn-analog oscairn-analog-tests oscairn-analog-privacy-host
+      - name: Privacy
+        env:
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          src/oscairn-clap/tests/privacy-check.sh build/src/oscairn-clap/oscairn-analog-privacy-host \
+            build/src/oscairn-clap/oscairn-analog.clap org.oscairn.analog \
+            --library org.oscairn.analog-factory="$PWD/resources/data"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: oscairn-analog-tests-asan-ubsan
+          path: build/src/oscairn-clap/oscairn-analog-tests
+          retention-days: 1
+
+  # The ASan UBSan tests in three parts of 33-37 minutes each (at 0.4.6). Together the parts
+  # run every test: the first two name theirs, the third skips those, and a name that matches
+  # no test fails its part.
+  asan-tests:
+    name: Oscairn Analog - Linux ARM64 ASan UBSan tests (${{ matrix.part }})
+    needs: asan-build
+    runs-on: ubuntu-24.04-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - part: 1 of 3
+            only: "reset"
+          - part: 2 of 3
+            only: "fitted tables|presets|plain patches match stock Surge|sound contexts"
+          - part: 3 of 3
+            skip: "reset|fitted tables|presets|plain patches match stock Surge|sound contexts"
+    steps:
+      # the factory patches, at the path the build compiled in
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: oscairn-analog-tests-asan-ubsan
+          path: build/src/oscairn-clap
+      - name: Test
+        timeout-minutes: 120
+        env:
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+          OSCAIRN_TEST_ONLY: ${{ matrix.only }}
+          OSCAIRN_TEST_SKIP: ${{ matrix.skip }}
+        run: |
+          chmod +x build/src/oscairn-clap/oscairn-analog-tests
+          ./build/src/oscairn-clap/oscairn-analog-tests
 
   testrunner:
     name: Surge test runner - macOS arm64
@@ -73,10 +154,16 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+      - uses: hendrikmuhs/ccache-action@v1.2.24
+        with:
+          key: testrunner-macos-15-appleclang-Release-none
+          max-size: 1500M
+          evict-old-files: job
       - name: Build
         run: |
           brew install ninja
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           cmake --build build --target surge-testrunner
       - name: Test
         run: ./build/src/surge-testrunner/surge-testrunner
