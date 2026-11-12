@@ -24,6 +24,7 @@
  *     gives the feature measured on the reference at that index, within the tolerance.
  *
  * Usage: oscairn-analog-tests [factory patch directory]
+ * (OSCAIRN_TEST_ONLY and OSCAIRN_TEST_SKIP select tests: see main.)
  */
 
 #include "OscairnAnalog.h"
@@ -4151,14 +4152,58 @@ static void testSharing(const std::vector<std::string> &patches)
     }
 }
 
+// OSCAIRN_TEST_ONLY and OSCAIRN_TEST_SKIP split the run across CI jobs: each is a list of test
+// names separated by '|', and a test runs when ONLY, if set, names it and SKIP does not. A name
+// that matches no test fails the run, so a renamed test cannot drop out of a split.
+struct TestFilter
+{
+    std::vector<std::pair<std::string, int>> only, skip; // name, tests matched
+
+    static std::vector<std::pair<std::string, int>> parts(const char *env)
+    {
+        std::vector<std::pair<std::string, int>> r;
+        std::string s = env ? env : "";
+        for (size_t b = 0, e; b < s.size(); b = e + 1)
+        {
+            e = std::min(s.find('|', b), s.size());
+            if (e > b)
+                r.emplace_back(s.substr(b, e - b), 0);
+        }
+        return r;
+    }
+    static bool match(std::vector<std::pair<std::string, int>> &ps, const std::string &name)
+    {
+        bool any = false;
+        for (auto &[part, n] : ps)
+            if (name == part)
+                any = true, ++n;
+        return any;
+    }
+    bool runs(const std::string &name)
+    {
+        bool in = match(only, name) || only.empty();
+        return match(skip, name) ? false : in;
+    }
+    void checkAllMatched()
+    {
+        for (auto *ps : {&only, &skip})
+            for (auto &[part, n] : *ps)
+                check(n > 0, "test filter name \"" + part + "\" matches a test");
+    }
+};
+
 int main(int argc, char **argv)
 {
     std::string dir = argc > 1 ? argv[1] : SURGE_FACTORY_PATCHES;
+    static TestFilter filter{TestFilter::parts(std::getenv("OSCAIRN_TEST_ONLY")),
+                             TestFilter::parts(std::getenv("OSCAIRN_TEST_SKIP"))};
     try
     {
         auto patches = factoryPatches(dir);
         check(!patches.empty(), "factory patches found in " + dir);
         auto run = [](const char *name, auto &&test) {
+            if (!filter.runs(name))
+                return;
             std::printf("%s\n", name);
             std::fflush(stdout);
             test();
@@ -4213,6 +4258,7 @@ int main(int argc, char **argv)
         std::fprintf(stderr, "FAIL: %s\n", e.what());
         return 1;
     }
+    filter.checkAllMatched();
     std::printf(failures ? "%d failures\n" : "all passed\n", failures);
     return failures ? 1 : 0;
 }
