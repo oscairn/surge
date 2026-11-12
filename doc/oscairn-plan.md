@@ -3616,3 +3616,28 @@ only moves where a glide starts, below).
     Oscairn sets a part's bus before the part plays (when the part is made, and at a Performance
     change's cue), so its parts don't hear it. Deliberate, accepted by Jacob 2026-11-07. Reproduce: plugin test "sharing" (the
     bus change check). Code: the Output Bus in `renderBlock` and `render`, `OscairnAnalog.cpp`.
+
+## 12. Releasing
+
+`.github/workflows/release.yml` (ported from setBfree's, the scripts under
+`src/oscairn-clap/tools/release/`) builds the release: pushing tag `oscairn-vX.Y.Z`, where
+X.Y.Z is the plugin's version in `OscairnAnalog.cpp`'s descriptor (the package version and the
+plugin version are the same number here, as every published org.oscairn.analog record has them;
+nothing duplicates it), builds `oscairn-analog.clap` on `macos-15` and `ubuntu-24.04-arm` from a
+clean Release configure with the same flags as `oscairn.yml` (minus the sanitizers), runs the
+privacy check and `oscairn-analog-tests`, checks the binary's load commands, and creates a GitHub
+Release with `oscairn-analog-<platform>.clap`, `licenses.tar.gz` and `oscairn-release.json` per
+built platform. `workflow_dispatch` with dry run (the default) does everything but the release
+and uploads the files as an artifact. No signing and no secrets beyond the workflow's own token.
+
+The plugin version at release is the one in the descriptor, so a release means bumping it (as
+before) and then tagging `oscairn-v` + that version; `manifest.py` fails if the two disagree. The
+release facts (id, summary, licence expression, the asset dependency on
+org.oscairn.analog-factory 1.0.0, the licence file list) live in
+`src/oscairn-clap/tools/release/release.conf` and match the published record in the packages
+repo. Nine licence notices that live only inside third-party source headers (CMakeRC, the two
+chowdsp ones, eurorack, pffft, the Ooura FFT inside r8brain, SQLite's blessing, strnatcmp,
+TinyXML) are kept verbatim in `src/oscairn-clap/licenses/` so `licenses.sh` can bundle them; they
+are the same text the published .olib carries. `python3 src/oscairn-clap/tools/release/version.py`
+prints the version a dry run would tag; `selfcheck.py` checks the manifest against the schema's
+rules before anything is published.

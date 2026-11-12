@@ -1,0 +1,19 @@
+r8brain-free-src (libs/r8brain-free-src) bundles Takuya Ooura's FFT routines in fft4g.h, which r8bbase.cpp compiles in. Attribution from the header of fft4g.h:
+
+ *
+ * @brief Wrapper class for Takuya OOURA's FFT functions.
+ *
+ * Functions from the FFT package by: Copyright(C) 1996-2001 Takuya OOURA
+ * http://www.kurims.kyoto-u.ac.jp/~ooura/fft.html
+ *
+ * Modified and used with permission granted by the license.
+ *
+ * Here, the original "fft4g.c" file was wrapped into the "ooura_fft" class.
+
+The license, as published with the FFT package at https://www.kurims.kyoto-u.ac.jp/~ooura/fft.html:
+
+    Copyright Takuya OOURA, 1996-2001
+
+    You may use, copy, modify and distribute this code for any purpose
+    (include commercial use) and without fee. Please refer to this
+    package when you modify this code.
