@@ -55,6 +55,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <memory>
@@ -1193,6 +1194,14 @@ struct Plugin : SharedVoices,
         // The engine options that match the reference instrument (no attack overshoot,
         // amplitude velocity law, algebraic saturators) come with the patch: off unless it
         // turns them on, as a converted Part does.
+        // OSCAIRN_ANALOG_FAST_OSC (set and not 0), read once when the first plugin is created,
+        // turns the fast Modern oscillator on for every patch, for testing.
+        static const bool fastOscillatorOverride = [] {
+            const char *e = std::getenv("OSCAIRN_ANALOG_FAST_OSC");
+            return e && *e && *e != '0';
+        }();
+        if (fastOscillatorOverride)
+            s.storage.modernOscillatorFast = true;
         return true;
     }
 

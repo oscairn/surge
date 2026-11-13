@@ -60,6 +60,12 @@ void setParam(SurgeSynthesizer &synth, const std::string &name, double v)
         findParam(synth, name.substr(0, name.size() - 4))->deactivated = v > 0.5;
         return;
     }
+    // name.absolute=1 makes a parameter absolute (an oscillator's unison detune in Hz)
+    if (name.size() > 9 && name.compare(name.size() - 9, 9, ".absolute") == 0)
+    {
+        findParam(synth, name.substr(0, name.size() - 9))->absolute = v > 0.5;
+        return;
+    }
     // name.deform=n sets a parameter's deform type (an oscillator control's variant)
     if (name.size() > 7 && name.compare(name.size() - 7, 7, ".deform") == 0)
     {

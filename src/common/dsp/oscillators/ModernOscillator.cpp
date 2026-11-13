@@ -299,6 +299,8 @@ void ModernOscillator::init(float pitch, bool is_display, bool nonzero_init_drif
 
     // This is the same implementation as ClassicOscillator, just as doubles
     charFilt.init(storage->getPatch().character.val.i);
+
+    initFast(is_display);
 }
 
 template <ModernOscillator::mo_multitypes mtype, bool subOctave, bool FM>
@@ -635,6 +637,9 @@ void ModernOscillator::process_block(float pitch, float drift, bool stereo, bool
         cachedDeform = oscdata->p[mo_tri_mix].deform_type;
         multitype = ((ModernOscillator::mo_multitypes)(cachedDeform & 0xF));
     }
+
+    if (fast && processFast(pitch, drift, stereo, FM, fmdepthV))
+        return;
 
     bool subOct = false;
 

@@ -102,6 +102,16 @@ class ModernOscillator : public Oscillator
     Surge::Oscillator::DriftLFO driftLFO[MAX_UNISON];
 
     int cachedDeform = -1;
+
+    // Oscairn: the faster path in ModernOscillatorFast.cpp, chosen when the voice starts by the
+    // storage option modernOscillatorFast. syncSeen: sync has been on in this voice, which stays
+    // on the path in ModernOscillator.cpp from then on. fmScene, fmOsc: where the oscillator
+    // sits in its voice, to tell when another oscillator takes it as its FM source.
+    bool fast = false, syncSeen = false;
+    const SurgeSceneStorage *fmScene = nullptr;
+    int fmOsc = -1;
+    void initFast(bool is_display);
+    bool processFast(float pitch, float drift, bool stereo, bool FM, float FMdepth);
 };
 
 const char mo_multitype_names[3][16] = {"Triangle", "Square", "Sine"};

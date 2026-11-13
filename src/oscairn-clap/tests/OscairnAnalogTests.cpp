@@ -31,6 +31,7 @@
 #include "SurgeSynthesizer.h"
 #include "../tools/RenderNote.h"
 #include "Features.h"
+#include "ModernOscillatorFastKernels.h"
 #include "FittedTables.h"
 #include "sst/plugininfra/cpufeatures.h"
 
@@ -916,6 +917,8 @@ static void testBlockSizes(const std::vector<std::string> &patches)
     }
 }
 
+using ModernParams = std::vector<std::pair<std::string, double>>;
+
 // A patch that doesn't turn on the reference-matching engine options plays in the plugin
 // exactly as in a stock Surge synthesizer (default options and parameter ranges): every 8th
 // factory patch, loaded into each (in stock Surge with the plugin's one-scene, no-effects
@@ -959,6 +962,29 @@ static void testPlainPatchesMatchStock(const std::vector<std::string> &patches)
         if (p.find("Plucks/Snap.fxp") != std::string::npos)
             states.emplace_back(p, patchFromFxp(p));
     states.emplace_back("built", built);
+    // and Modern oscillator patches as a converted part has them (the option off): a saw, pulse
+    // and sine third with unison, drift and pitch modulation, with sync, and as an FM pair
+    {
+        const ModernParams modern{{"a_osc1_type", 8},     {"a_osc1_param0", 0.8},
+                                  {"a_osc1_param1", 0.5}, {"a_osc1_param2", -0.3},
+                                  {"a_osc1_param2.deform", 2}, {"a_osc1_param5", 25},
+                                  {"a_osc1_param6", 3},   {"a_drift", 0.5}};
+        auto plus = [&](ModernParams more) {
+            oscairn_analog::RenderSpec spec;
+            spec.params = modern;
+            spec.params.insert(spec.params.end(), more.begin(), more.end());
+            return spec;
+        };
+        auto swept = plus({{"a_lfo0_rate", 4}});
+        swept.mods = {{17, "a_osc1_pitch", 0.6}};
+        states.emplace_back("modern unison", oscairn_analog::buildState(plus({})));
+        states.emplace_back("modern swept", oscairn_analog::buildState(swept));
+        states.emplace_back("modern sync",
+                            oscairn_analog::buildState(plus({{"a_osc1_param4", 7}})));
+        states.emplace_back("modern FM", oscairn_analog::buildState(plus(
+                                             {{"a_osc2_type", 8}, {"a_fm_switch", 1},
+                                              {"a_fm_depth", -6}})));
+    }
     for (auto &[name, patch] : states)
     {
         if (patch.empty())
@@ -1249,6 +1275,329 @@ static constexpr bool sanitizerBuild = false;
 // The sample rate the reference checks render at: the reference was measured at 44.1 kHz, and
 // the checks run again at 48 and 96 kHz (see main).
 static double checkRate = 44100;
+
+// --- the fast Modern oscillator (ModernOscillatorFast.cpp) ---------------------------------
+
+// How far below a's energy the energy of a - b is, in dB (-999 for identical, 999 for silence).
+static double belowDb(const std::vector<float> &a, const std::vector<float> &b)
+{
+    double e = 0, s = 0;
+    for (size_t i = 0; i < a.size() && i < b.size(); ++i)
+        e += (double)(a[i] - b[i]) * (a[i] - b[i]), s += (double)a[i] * a[i];
+    if (a.size() != b.size())
+        return 999;
+    return s <= 0 ? 999 : e == 0 ? -999 : 10 * std::log10(e / s);
+}
+
+// The tolerance of the fast path against the code it replaces: the difference at least this
+// many dB below the signal.
+static constexpr double fastToleranceDb = -100;
+
+// The closed forms against the oscillator's own numerical second difference of the generator
+// (ModernOscillator.cpp), in double: the saw and the sine, phases and increments over the range
+// of notes and across every corner the stencil can reach (the wrap, the sine's centre).
+static void testModernFastKernels()
+{
+    using namespace Surge::Oscillator::Fast;
+    auto sawGen = [](double p) {
+        double x = (p - 0.5) * 2;
+        return (x * x * x - x) / 6;
+    };
+    auto sineGen = [](double p) {
+        double x = (p - 0.5) * 2, x3 = x * x * x, m = 2.0 * (x < 0) - 1;
+        return -(m * x3 * x + 2 * x3 - x) / 3;
+    };
+    auto second = [](auto gen, double p, double d) {
+        double p1 = p - d, p2 = p - 2 * d;
+        p1 += (p1 < 0);
+        p2 += (p2 < 0);
+        return (gen(p) + gen(p2) - 2 * gen(p1)) * 0.25 / (d * d);
+    };
+    uint64_t state = 12345;
+    auto uni = [&](double lo, double hi) {
+        state = state * 6364136223846793005ull + 1442695040888963407ull;
+        return lo + (hi - lo) * ((state >> 11) * (1.0 / 9007199254740992.0));
+    };
+    double worstSaw = 0, worstSine = 0;
+    for (int i = 0; i < 60000; ++i)
+    {
+        const bool sineCase = i % 2;
+        // the sine's closed form is for increments up to 1/4, the saw's up to 1/2
+        float d = (float)std::exp(uni(std::log(1e-5), std::log(sineCase ? 0.24 : 0.5)));
+        double p;
+        switch (i / 2 % 6)
+        {
+        case 0: p = uni(0, 1); break;
+        case 1: p = uni(0, 3 * d); break;
+        case 2: p = 0.5 + uni(-3 * d, 3 * d); break;
+        case 3: p = 1 - uni(0, 3 * d); break;
+        case 4: p = uni(0, 2 * d); break;
+        default: p = uni(0, 1); break;
+        }
+        p = std::min(std::max(p, 0.0), 0.9999999);
+        const float pf = (float)p;
+        alignas(16) float P[4] = {pf, pf, pf, pf}, D[4] = {d, d, d, d}, RD[4], out[4];
+        for (int k = 0; k < 4; ++k)
+            RD[k] = 1.f / D[k];
+        const V vp = SIMD_MM(load_ps)(P), vd = SIMD_MM(load_ps)(D), vrd = SIMD_MM(load_ps)(RD);
+        SIMD_MM(store_ps)(out, sineCase ? sineClosed(vp, vd, vrd) : sawClosed(vp, vd, vrd));
+        const double ref = sineCase ? second(sineGen, pf, d) : second(sawGen, pf, d),
+                     err = std::fabs(out[0] - ref);
+        (sineCase ? worstSine : worstSaw) = std::max(sineCase ? worstSine : worstSaw, err);
+    }
+    std::printf("  fast kernels: worst error saw %.2e, sine %.2e\n", worstSaw, worstSine);
+    check(worstSaw < 1e-6, "the saw's closed form matches the numerical second difference");
+    check(worstSine < 2e-6, "the sine's closed form matches the numerical second difference, "
+                            "corners included");
+}
+
+static oscairn_analog::RenderSpec modernSpec(int note, double rate, ModernParams params,
+                                             bool fast)
+{
+    oscairn_analog::RenderSpec s;
+    s.note = note;
+    s.hold = 0.12;
+    s.tail = 0.02;
+    s.rate = rate;
+    s.fastOscillator = fast;
+    s.params = {{"a_osc1_type", 8}};
+    s.params.insert(s.params.end(), params.begin(), params.end());
+    return s;
+}
+
+// With the engine option off the oscillator plays as before; on, a sawtooth, pulse and sine
+// third component play within fastToleranceDb of that for every wave, unison count, drift,
+// pitch and level modulation, pulse width modulation and portamento, at every sample rate and
+// from the lowest key to the highest.
+static void testModernFastAgainstSlow()
+{
+    const std::vector<double> rates = sanitizerBuild
+                                          ? std::vector<double>{48000, 192000}
+                                          : std::vector<double>{44100, 48000, 88200, 96000,
+                                                                176400, 192000};
+    const std::pair<const char *, ModernParams> waves[] = {
+        {"saw", {{"a_osc1_param0", 0.8}, {"a_osc1_param1.off", 1}}},
+        {"pulse", {{"a_osc1_param0.off", 1}, {"a_osc1_param1", 0.9}, {"a_osc1_param3", 0.3}}},
+        {"saw and pulse",
+         {{"a_osc1_param0", 0.8}, {"a_osc1_param1", 0.5}, {"a_osc1_param3", 0.35}}},
+        {"saw, pulse and sine",
+         {{"a_osc1_param0", 0.8}, {"a_osc1_param1", 0.5}, {"a_osc1_param2", -0.3},
+          {"a_osc1_param2.deform", 2}}},
+        {"sine", {{"a_osc1_param0.off", 1}, {"a_osc1_param1.off", 1}, {"a_osc1_param2", 0.9},
+                  {"a_osc1_param2.deform", 2}}},
+    };
+    double worst = -999;
+    int compared = 0;
+    std::map<std::string, double> worstBy; // by wave or feature, and by sample rate
+    auto compare = [&](const std::string &what, double rate, int note, ModernParams params,
+                       auto &&adjust) {
+        auto a = modernSpec(note, rate, params, false), b = modernSpec(note, rate, params, true);
+        adjust(a), adjust(b);
+        auto slow = oscairn_analog::renderNote(a), fast = oscairn_analog::renderNote(b);
+        const double db = belowDb(slow, fast);
+        const std::string name = what + " at note " + std::to_string(note) + ", " +
+                                 std::to_string((int)rate) + " Hz";
+        check(db <= fastToleranceDb,
+              "the fast Modern oscillator stays within " + std::to_string((int)fastToleranceDb) +
+                  " dB of the slow: " + name + " is at " + std::to_string(db) + " dB");
+        check(slow != fast, "the fast path plays: " + name);
+        worst = std::max(worst, db);
+        for (auto key : {what, std::to_string((int)rate) + " Hz"})
+            worstBy[key] = worstBy.count(key) ? std::max(worstBy[key], db) : db;
+        ++compared;
+    };
+    auto same = [](oscairn_analog::RenderSpec &) {};
+    for (double rate : rates)
+    {
+        for (auto &[name, params] : waves)
+            for (int note : {0, 36, 72, 127})
+                compare(name, rate, note, params, same);
+    }
+    const ModernParams all = waves[3].second;
+    for (double rate : sanitizerBuild ? rates : std::vector<double>{44100, 96000, 192000})
+    {
+        for (int voices : {2, 3, 4, 5, 7, 16})
+        {
+            auto p = all;
+            p.insert(p.end(), {{"a_osc1_param5", 25}, {"a_osc1_param6", voices}});
+            compare("unison " + std::to_string(voices), rate, 48, p, same);
+        }
+        // the unison detune in Hz rather than cents
+        auto hertz = all;
+        hertz.insert(hertz.end(), {{"a_osc1_param5.absolute", 1}, {"a_osc1_param5", 1.2},
+                                   {"a_osc1_param6", 4}});
+        compare("absolute unison detune", rate, 48, hertz, same);
+        auto drifting = all;
+        drifting.insert(drifting.end(), {{"a_drift", 0.5}, {"a_osc1_param6", 3}});
+        compare("drift", rate, 48, drifting, same);
+        // a pitch sweep (16 Hz, 0.6 of the range) and a fast one at a high key; the pulse
+        // width, the saw's level and the sine's level moved by an LFO; portamento
+        auto lfo = all;
+        lfo.insert(lfo.end(), {{"a_lfo0_rate", 4}});
+        compare("pitch sweep", rate, 60, lfo,
+                [](auto &s) { s.mods = {{17, "a_osc1_pitch", 0.6}}; });
+        lfo.back() = {"a_lfo0_rate", 6};
+        compare("fast pitch sweep", rate, 100, lfo,
+                [](auto &s) { s.mods = {{17, "a_osc1_pitch", 1.0}}; });
+        // a sweep two octaves up from note 100 through a quarter of the rate the voice runs at
+        // (23 kHz at 44.1 kHz), where the sine's closed form ends
+        auto high = lfo;
+        high.push_back({"a_osc1_octave", 2});
+        compare("sweep past a quarter of the rate", rate, 100, high,
+                [](auto &s) { s.mods = {{17, "a_osc1_pitch", 1.0}}; });
+        compare("pulse width modulation", rate, 52, lfo,
+                [](auto &s) { s.mods = {{17, "a_osc1_param3", 0.8}}; });
+        compare("level modulation", rate, 52, lfo, [](auto &s) {
+            s.mods = {{17, "a_osc1_param0", 0.8}, {17, "a_osc1_param2", 0.9}};
+        });
+        auto porta = all;
+        porta.push_back({"a_portamento", -2});
+        compare("portamento", rate, 40, porta, [](auto &s) {
+            s.legatoNote = 76;
+            s.legatoAt = 0.05;
+        });
+    }
+    std::printf("  fast Modern oscillator: %d renders compared, worst difference %.1f dB\n",
+                compared, worst);
+    for (auto &[key, db] : worstBy)
+        std::printf("    %-24s %.1f dB\n", key.c_str(), db);
+}
+
+// What the fast path doesn't play falls back to the slow path whole: with the option on, a
+// voice with sync, a sub-octave, a triangle or square third component that sounds, or an
+// oscillator in an FM pair (either way round) is bit for bit what it is with the option off.
+static void testModernFastFallsBack()
+{
+    const ModernParams saws{{"a_osc1_param0", 0.8}, {"a_osc1_param1", 0.5}};
+    auto with = [&](ModernParams more) {
+        auto p = saws;
+        p.insert(p.end(), more.begin(), more.end());
+        return p;
+    };
+    const std::pair<const char *, ModernParams> cases[] = {
+        {"sync", with({{"a_osc1_param4", 7}})},
+        {"sub-octave sine", with({{"a_osc1_param2", 0.5}, {"a_osc1_param2.deform", 1026}})},
+        {"sub-octave triangle", with({{"a_osc1_param2", 0.5}, {"a_osc1_param2.deform", 1024}})},
+        {"triangle third", with({{"a_osc1_param2", 0.5}, {"a_osc1_param2.deform", 0}})},
+        {"square third", with({{"a_osc1_param2", 0.5}, {"a_osc1_param2.deform", 1}})},
+        // osc 1 is FM'd by a sine (2 > 1); and osc 2, a Modern oscillator, modulates a sine
+        // note 127 two octaves up, 50 kHz: past a quarter of the 96 kHz the voice runs at (and
+        // past what the host rate carries, so what is left of the sound is tiny, but not zero)
+        {"sine above a quarter of the rate",
+         with({{"a_osc1_param2", 0.5}, {"a_osc1_param2.deform", 2}, {"a_osc1_octave", 2}})},
+        {"FM carrier", with({{"a_fm_switch", 1}, {"a_fm_depth", -6}, {"a_osc2_type", 1}})},
+        {"FM source",
+         {{"a_osc1_type", 1}, {"a_osc2_type", 8}, {"a_osc2_param0", 0.8}, {"a_osc2_param1", 0.5},
+          {"a_fm_switch", 1}, {"a_fm_depth", -6}}},
+        {"FM source, 3 > 2 > 1",
+         {{"a_osc1_type", 1}, {"a_osc2_type", 1}, {"a_osc3_type", 8}, {"a_osc3_param0", 0.8},
+          {"a_osc3_param1", 0.5}, {"a_fm_switch", 2}, {"a_fm_depth", -6}}},
+    };
+    for (auto &[name, params] : cases)
+        for (int note : {38, 80, 127})
+        {
+            const bool beyond = std::string(name).rfind("sine above", 0) == 0;
+            if (beyond != (note == 127))
+                continue;
+            oscairn_analog::RenderSpec a, b;
+            for (auto *s : {&a, &b})
+            {
+                s->note = note;
+                s->hold = 0.12;
+                s->tail = 0.02;
+                s->params = {{"a_osc1_type", 8}};
+                s->params.insert(s->params.end(), params.begin(), params.end());
+            }
+            b.fastOscillator = true;
+            auto slow = oscairn_analog::renderNote(a), fast = oscairn_analog::renderNote(b);
+            double peak = 0;
+            for (float x : slow)
+                peak = std::max(peak, (double)std::fabs(x));
+            check(beyond ? peak > 0 : peak > 0.01, std::string("a sound to compare: ") + name);
+            check(slow == fast, std::string("with ") + name + " (note " + std::to_string(note) +
+                                    ") the fast option plays the slow path bit for bit");
+        }
+}
+
+// Parameters changed during a note, which moves a voice between the paths: a triangle third
+// component brought in and out, sync turned on and off and modulated, and an FM routing
+// switched on. Played through the plugin (with its allocation guard) with and without the
+// option: within the tolerance of the slow path throughout, and no step between samples
+// larger than the slow path's own.
+static void testModernFastMidNote()
+{
+    const double rate = 48000;
+    auto build = [&](bool fast, ModernParams more, bool lfoOnSync, bool sweep) {
+        oscairn_analog::RenderSpec s;
+        s.fastOscillator = fast;
+        s.params = {{"a_osc1_type", 8},      {"a_osc1_param0", 0.8}, {"a_osc1_param1", 0.5},
+                    {"a_osc1_param5", 20},   {"a_osc1_param6", 3},   {"a_osc2_type", 1}};
+        s.params.insert(s.params.end(), more.begin(), more.end());
+        if (lfoOnSync)
+        {
+            // a sine LFO starting negative: sync (its positive part) comes in and out
+            s.params.insert(s.params.end(), {{"a_lfo0_rate", 2}, {"a_lfo0_phase", 0.5}});
+            s.mods = {{17, "a_osc1_param4", 0.6}};
+        }
+        if (sweep)
+        {
+            // the pitch swept by an LFO (16 Hz, 0.6 of the range) all along
+            s.params.push_back({"a_lfo1_rate", 4});
+            s.mods.push_back({18, "a_osc1_pitch", 0.6});
+        }
+        return oscairn_analog::buildState(s);
+    };
+    struct Case
+    {
+        const char *name;
+        ModernParams more;
+        bool lfoOnSync;
+        bool sweep;
+        std::vector<std::pair<double, std::pair<const char *, double>>> changes; // s, name, value
+    };
+    const Case cases[] = {
+        {"a triangle third brought in and out", {{"a_osc1_param2", 0}}, false, false,
+         {{0.1, {"a_osc1_param2", 0.6}}, {0.2, {"a_osc1_param2", 0}}}},
+        {"sync turned on and off", {}, false, false,
+         {{0.1, {"a_osc1_param4", 7}}, {0.2, {"a_osc1_param4", 0}}}},
+        {"sync turned on in a pitch sweep", {}, false, true,
+         {{0.1, {"a_osc1_param4", 7}}, {0.2, {"a_osc1_param4", 0}}}},
+        {"sync modulated", {}, true, false, {}},
+        {"FM switched on and off",
+         {{"a_osc2_type", 8}, {"a_osc2_param0", 0.8}, {"a_osc2_param1", 0.5}},
+         false, false,
+         {{0.1, {"a_fm_switch", 1}}, {0.2, {"a_fm_switch", 0}}}},
+    };
+    for (auto &c : cases)
+    {
+        std::vector<std::vector<float>> out;
+        for (bool fast : {false, true})
+        {
+            Instance a(rate);
+            check(a.load(build(fast, c.more, c.lfoOnSync, c.sweep)), "the patch loads");
+            std::vector<Event> ev{paramEvent(0, fnv1a("a_fm_depth"), -6),
+                                  noteEvent(0, CLAP_EVENT_NOTE_ON, 1, 50, 0.8),
+                                  noteEvent((uint32_t)(0.3 * rate), CLAP_EVENT_NOTE_OFF, 1, 50, 0)};
+            for (auto &[t, change] : c.changes)
+                ev.push_back(paramEvent((uint32_t)(t * rate), fnv1a(change.first), change.second));
+            out.push_back(a.render((uint32_t)(0.34 * rate), 512, ev));
+        }
+        auto steps = [](const std::vector<float> &x) {
+            float m = 0;
+            for (size_t i = 2; i < x.size(); i += 2)
+                m = std::max(m, std::fabs(x[i] - x[i - 2]));
+            return m;
+        };
+        const double db = belowDb(out[0], out[1]);
+        std::printf("  fast Modern oscillator, %s: %.1f dB, largest step %.4f (slow %.4f)\n",
+                    c.name, db, steps(out[1]), steps(out[0]));
+        check(db <= fastToleranceDb, std::string("the fast path within the tolerance when ") +
+                                         c.name + ": " + std::to_string(db) + " dB");
+        check(steps(out[1]) <= steps(out[0]) * 1.001f + 1e-5f,
+              std::string("no larger step than the slow path's when ") + c.name);
+        check(db > -999, std::string("the fast path played at the start when ") + c.name);
+    }
+}
 
 static std::vector<float> renderMono(oscairn_analog::RenderSpec spec)
 {
@@ -4263,6 +4612,10 @@ int main(int argc, char **argv)
         run("per-part voice budgets", [] { testPartBudgets(); });
         run("sharing", [&] { testSharing(patches); });
         run("reset", [&] { testReset(patches); });
+        run("modern oscillator kernels", [] { testModernFastKernels(); });
+        run("modern oscillator fast path", [] { testModernFastAgainstSlow(); });
+        run("modern oscillator fast path falls back", [] { testModernFastFallsBack(); });
+        run("modern oscillator fast path mid-note", [] { testModernFastMidNote(); });
         run("first block after a load", [] { testFirstBlockAfterLoad(); });
         run("unison against the reference", [] { testUnisonAgainstReference(); });
         run("drift against the reference", [] { testDriftAgainstReference(); });

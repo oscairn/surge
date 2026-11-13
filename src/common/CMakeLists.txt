@@ -249,6 +249,8 @@ add_library(${PROJECT_NAME}
   dsp/oscillators/FM3Oscillator.h
   dsp/oscillators/ModernOscillator.cpp
   dsp/oscillators/ModernOscillator.h
+  dsp/oscillators/ModernOscillatorFast.cpp
+  dsp/oscillators/ModernOscillatorFastKernels.h
   dsp/oscillators/OscillatorBase.h
   dsp/oscillators/OscillatorCommonFunctions.h
   dsp/oscillators/SampleAndHoldOscillator.cpp
