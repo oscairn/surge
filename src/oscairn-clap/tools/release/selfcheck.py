@@ -118,6 +118,18 @@ def is_macho(path):
         return f.read(4) in MACHO_MAGICS
 
 
+# ELF e_machine (little-endian) of a Linux build, by platform suffix.
+ELF_MACHINES = {'linux-arm64': 183, 'linux-x86_64': 62}
+
+
+def elf_machine(path):
+    with open(path, 'rb') as f:
+        head = f.read(20)
+    if head[:4] != b'\x7fELF' or head[4] != 2 or head[5] != 1:  # 64-bit, little-endian
+        return None
+    return int.from_bytes(head[18:20], 'little')
+
+
 def check_files(dist, manifest, bad):
     for row in manifest.get('builds', []):
         path = os.path.join(dist, row['file'])
@@ -126,6 +138,9 @@ def check_files(dist, manifest, bad):
             continue
         if row['platform'].startswith('macos-') and not is_macho(path):
             bad(f"builds: {row['file']}: a macOS build must be a Mach-O file, not a zip or archive")
+        if row['platform'] in ELF_MACHINES and elf_machine(path) != ELF_MACHINES[row['platform']]:
+            bad(f"builds: {row['file']}: a {row['platform']} build must be a 64-bit little-endian ELF "
+                f"of machine {ELF_MACHINES[row['platform']]}")
         if sha256(path) != row['sha256']:
             bad(f"builds: {row['file']}: sha256 mismatch")
         if os.path.getsize(path) != row['size']:
