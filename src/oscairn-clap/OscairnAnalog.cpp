@@ -35,7 +35,9 @@
  *   several Oscairn parts can share one instance.
  * - Oscairn's voice budget (oscairn.voice-budget/draft-1): past the host's limits, Surge
  *   voices of every sound are given up in the SDK's order and fade out over 3 ms. With no
- *   limit set, Surge steals voices as it always has.
+ *   limit set, Surge steals voices as it always has. OSCAIRN_ANALOG_MAX_VOICES (the instance)
+ *   and OSCAIRN_ANALOG_MAX_VOICES_PER_SOUND (each sound), read when an instance is created, are
+ *   a device's own limits: they stand where the host sets none and bound a higher one.
  */
 
 #include "OscairnAnalog.h"
@@ -579,7 +581,30 @@ struct Plugin : SharedVoices,
     std::array<oscairn::voices::Candidate, surgeVoices> candidates{};
     std::array<SurgeVoice *, surgeVoices> candidateVoice{}; // null: no voice there
 
-    bool budgeted() const { return budget.limit || budget.count; }
+    // The device's caps (OSCAIRN_ANALOG_MAX_VOICES for the instance, ..._PER_SOUND for each sound),
+    // read when the instance is created; 0: none. They stand where the host sets no limit and bound
+    // a higher one; a lower host limit stands.
+    static uint32_t envCap(const char *name, long ceiling)
+    {
+        const char *e = std::getenv(name);
+        char *end = nullptr;
+        const long v = e && *e ? std::strtol(e, &end, 10) : 0;
+        return e && *e && !*end && v >= 1 && v <= ceiling ? uint32_t(v) : 0;
+    }
+    const uint32_t deviceCap = envCap("OSCAIRN_ANALOG_MAX_VOICES", long(n_scenes * MAX_VOICES));
+    const uint32_t soundCap = envCap("OSCAIRN_ANALOG_MAX_VOICES_PER_SOUND", long(MAX_VOICES));
+    static uint32_t tighter(uint32_t host, uint32_t cap)
+    {
+        return host && (!cap || host < cap) ? host : cap;
+    }
+    uint32_t instanceLimit() const { return tighter(budget.limit, deviceCap); }
+    oscairn_voice_budget_context_t soundLimits(const Context &c) const
+    {
+        auto own = budget.of(c.id, c.selected.load(std::memory_order_relaxed));
+        own.limit = tighter(own.limit, soundCap);
+        return own;
+    }
+    bool budgeted() const { return budget.limit || budget.count || deviceCap || soundCap; }
     size_t storeIndex(const SurgeVoice &v) const
     {
         return size_t(&v - voiceStore->voices[0].data());
@@ -672,10 +697,10 @@ struct Plugin : SharedVoices,
             for (auto *sv : sy.voices[0])
                 if (sv->state.key == key)
                     adding = 0; // reuses that key's voice
-        const auto own = budget.of(c.id, c.selected.load(std::memory_order_relaxed));
+        const auto own = soundLimits(c);
         while (own.limit && keeping(c.id) + adding > own.limit && giveUp(victim(c.id, c.id)))
             ;
-        while (budget.limit && keeping() + adding > budget.limit && giveUp(victim(c.id)))
+        while (instanceLimit() && keeping() + adding > instanceLimit() && giveUp(victim(c.id)))
             ;
     }
     // At a block's start (from the helper's process, after the selections): a sound a reset left
@@ -698,12 +723,13 @@ struct Plugin : SharedVoices,
             if (!(m >> slot & 1))
                 continue;
             const auto &c = contexts[slot];
-            const auto own = budget.of(c.id, c.selected.load(std::memory_order_relaxed));
+            const auto own = soundLimits(c);
             while (own.limit && keeping(c.id) > own.limit &&
                    giveUp(victim(oscairn::voices::none, c.id)))
                 ;
         }
-        while (budget.limit && keeping() > budget.limit && giveUp(victim(oscairn::voices::none)))
+        while (instanceLimit() && keeping() > instanceLimit() &&
+               giveUp(victim(oscairn::voices::none)))
             ;
     }
     // Surge's Polyphony Limit, full: under a budget, the voice it releases is chosen in the

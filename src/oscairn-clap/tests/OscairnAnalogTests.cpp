@@ -47,10 +47,12 @@
 #include <map>
 #include <memory>
 #include <new>
+#include <random>
 #include <set>
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <vector>
 #include <execinfo.h>
 #include <unistd.h>
@@ -3877,9 +3879,10 @@ struct NoteLog
               a.plugin->get_extension(a.plugin, OSCAIRN_EXT_VOICE_BUDGET)))
     {
     }
-    void on(uint32_t t, int32_t id, int16_t channel, int16_t key, int16_t port = 0)
+    void on(uint32_t t, int32_t id, int16_t channel, int16_t key, int16_t port = 0,
+            double velocity = 0.8)
     {
-        auto e = noteEvent(t, CLAP_EVENT_NOTE_ON, id, key, 0.8);
+        auto e = noteEvent(t, CLAP_EVENT_NOTE_ON, id, key, velocity);
         e.note.channel = channel;
         e.note.port_index = port;
         pending.push_back(e);
@@ -3986,6 +3989,270 @@ struct NoteLog
         return budget->active_voices(a.plugin, &cost);
     }
 };
+
+// The device's voice caps, OSCAIRN_ANALOG_MAX_VOICES for the instance and ..._PER_SOUND for each
+// sound, read when an instance is created: they stand where the host sets no limit and bound a
+// higher one. Voices go in the budget's order, whole notes at a time.
+struct CapEnv
+{
+    CapEnv(const char *instance, const char *perSound = nullptr)
+    {
+        set("OSCAIRN_ANALOG_MAX_VOICES", instance);
+        set("OSCAIRN_ANALOG_MAX_VOICES_PER_SOUND", perSound);
+    }
+    ~CapEnv()
+    {
+        set("OSCAIRN_ANALOG_MAX_VOICES", nullptr);
+        set("OSCAIRN_ANALOG_MAX_VOICES_PER_SOUND", nullptr);
+    }
+    static void set(const char *name, const char *v)
+    {
+        if (v)
+            setenv(name, v, 1);
+        else
+            unsetenv(name);
+    }
+};
+
+static void testDeviceCap()
+{
+    // a sine; velocity sets the gain (-24 dB at 0); a release of 8 s so released notes ring on
+    const ParamList sine{{"a_osc1_type", 1},
+                         {"a_lowcut.off", 1},
+                         {"a_vca_velsense", -24},
+                         {"a_env1_release", 3}};
+    auto setup = [&](NoteLog &t, const ParamList &extra = {}) {
+        for (auto &[name, v] : sine)
+            if (!std::any_of(extra.begin(), extra.end(),
+                             [&, name = name](auto &e) { return !std::strcmp(e.first, name); }))
+                t.param(name, v);
+        for (auto &[name, v] : extra)
+            t.param(name, v);
+        t.run();
+    };
+    // held notes only: the oldest go first, a cap of 3 keeps the last 3
+    {
+        CapEnv env("3");
+        NoteLog t;
+        setup(t);
+        for (int i = 0; i < 6; ++i)
+        {
+            t.on(0, 1 + i, 0, 60 + i);
+            t.run(8);
+            check(t.voices() <= 3, "cap 3: at most 3 voices after each note-on settles");
+        }
+        check(t.voices() == 3 && t.ended.size() == 3 && t.ended.count(1) && t.ended.count(2) &&
+                  t.ended.count(3),
+              "cap 3, six held notes: the three oldest ended, three voices sound");
+        t.releaseAll();
+        t.settle();
+        t.verify("cap held");
+    }
+    // a held note is never cut while a releasing one exists, and the quietest releasing note goes
+    // first, whatever its age
+    {
+        CapEnv env("3");
+        NoteLog t;
+        setup(t);
+        t.on(0, 1, 0, 60, 0, 0.9);
+        t.on(0, 2, 0, 62, 0, 0.2);
+        t.on(0, 3, 0, 64, 0, 0.5);
+        t.run(8);
+        t.off(0, 1, 0, 60);
+        t.off(0, 2, 0, 62);
+        t.off(0, 3, 0, 64);
+        t.run(8);
+        t.on(0, 4, 0, 66, 0, 0.8); // the quietest releasing note (2) goes, not the oldest (1)
+        t.run(8);
+        check(t.ended.size() == 1 && t.ended.count(2), "the quietest releasing note goes first");
+        t.on(0, 5, 0, 67, 0, 0.8); // then 3 (0.5), before 1 (0.9), while 4 is held
+        t.run(8);
+        check(t.ended.size() == 2 && t.ended.count(3) && !t.ended.count(1) && !t.ended.count(4),
+              "then the next quietest releasing note, never a held one");
+        t.on(0, 6, 0, 69, 0, 0.8);
+        t.run(8);
+        check(t.ended.size() == 3 && t.ended.count(1), "the last releasing note goes next");
+        t.on(0, 7, 0, 71, 0, 0.8); // only held ones remain: the oldest (4)
+        t.run(8);
+        check(t.ended.size() == 4 && t.ended.count(4) && t.voices() == 3,
+              "held notes go only when no releasing one remains, the oldest first");
+        t.releaseAll();
+        t.settle();
+        t.verify("cap order");
+    }
+    // the host's limit: a higher one does not lift the cap, a lower one stands
+    {
+        CapEnv env("4");
+        NoteLog t;
+        setup(t);
+        t.limit(8);
+        for (int i = 0; i < 6; ++i)
+            t.on(0, 1 + i, 0, 60 + i);
+        t.run(8);
+        check(t.voices() == 4, "a host limit of 8 over a cap of 4: 4 voices");
+        t.limit(2);
+        t.run(8);
+        check(t.voices() == 2, "a host limit of 2 under a cap of 4 stands");
+        t.limit(0);
+        t.on(0, 20, 0, 80);
+        t.on(0, 21, 0, 81);
+        t.on(0, 22, 0, 82);
+        t.run(8);
+        check(t.voices() == 4, "the host lifts its limit: the cap stands");
+        t.releaseAll();
+        t.settle();
+        t.verify("cap and host limit");
+    }
+    // invalid values are ignored: no cap at all
+    for (const char *bad : {"0", "-3", "abc", "3x", "", "129", "99999999999999999999"})
+    {
+        CapEnv env(bad, "65");
+        NoteLog t;
+        setup(t);
+        for (int i = 0; i < 12; ++i)
+            t.on(0, 1 + i, 0, 40 + i);
+        t.run(8);
+        check(t.voices() == 12 && t.ended.empty(),
+              std::string("a cap of \"") + bad + "\" is ignored");
+    }
+    // a per-sound cap bounds each sound and leaves the other alone; the instance cap, the total
+    {
+        CapEnv env(nullptr, "2");
+        NoteLog t;
+        setup(t);
+        const auto second = t.addSound(1);
+        (void)second;
+        for (int i = 0; i < 5; ++i)
+            t.on(0, 1 + i, 0, 60 + i);
+        t.on(0, 10, 1, 70);
+        t.on(0, 11, 1, 71);
+        t.on(0, 12, 1, 72);
+        t.run(8);
+        check(t.voices() == 4 && t.ended.size() == 4 && t.ended.count(1) && t.ended.count(2) &&
+                  t.ended.count(3) && t.ended.count(10),
+              "per-sound cap 2: each sound keeps its two newest notes");
+        t.releaseAll();
+        t.settle();
+        t.verify("per-sound cap");
+    }
+    {
+        CapEnv env("5", "3");
+        NoteLog t;
+        setup(t);
+        t.addSound(1);
+        for (int i = 0; i < 4; ++i)
+            t.on(0, 1 + i, 0, 60 + i);
+        t.run(8);
+        check(t.voices() == 3, "the per-sound cap alone bounds a sound at 3");
+        for (int i = 0; i < 4; ++i)
+            t.on(0, 10 + i, 1, 70 + i);
+        t.run(8);
+        check(t.voices() == 5, "3 and 3 voices under an instance cap of 5: 5 sound");
+        // a new note's own sound gives way first (the order's third rule): 1 went before, then the
+        // second sound's own oldest, 10 and 11
+        check(t.ended.size() == 3 && t.ended.count(1) && t.ended.count(10) && t.ended.count(11),
+              "the new note's own sound gives up its older notes first");
+        t.releaseAll();
+        t.settle();
+        t.verify("per-sound and instance caps");
+    }
+    // a long randomised run: notes of two sounds, struck and released at random, some held to
+    // the end; the voices never exceed the cap when the fades have run, NOTE_ENDs balance
+    {
+        CapEnv env("5", "3");
+        NoteLog t;
+        setup(t, {{"a_env1_release", -1}});
+        t.addSound(1);
+        std::mt19937 rng(7);
+        int id = 100;
+        std::vector<int> down;
+        std::map<int, std::pair<int, int>> keyOf;
+        bool within = true;
+        uint32_t peak = 0;
+        for (int step = 0; step < 400; ++step)
+        {
+            const int r = int(rng() % 8);
+            if (r < 5 || down.empty())
+            {
+                const int ch = int(rng() % 2), key = 36 + int(rng() % 60);
+                t.on(uint32_t(rng() % 100), ++id, ch, key, 0, 0.3 + 0.7 * double(rng() % 100) / 100);
+                keyOf[id] = {ch, key};
+                down.push_back(id);
+            }
+            else
+            {
+                const size_t i = rng() % down.size();
+                if (!t.ended.count(down[i]))
+                    t.off(uint32_t(rng() % 100), down[i], keyOf[down[i]].first, keyOf[down[i]].second);
+                down.erase(down.begin() + long(i));
+            }
+            t.run(1 + int(rng() % 20)); // at most 2560 frames: a fade is 144
+            t.run(2);
+            peak = std::max(peak, t.voices());
+            within &= t.voices() <= 5;
+        }
+        std::printf("  device cap: randomised run peak %u voices\n", peak);
+        check(within, "randomised run: voices never above the cap once the fades ended");
+        t.releaseAll();
+        t.settle();
+        t.verify("randomised cap");
+    }
+    // an arpeggio: sixteenths at 84 BPM over three keys, gate 0.9, a release of about 1.2 s
+    {
+        const double step = 48000 * 60 / 84.0 / 4;
+        auto arp = [&](const char *cap) {
+            CapEnv env(cap);
+            NoteLog t;
+            setup(t, {{"a_env1_release", 0.26}, {"a_env1_sustain", 1}});
+            const int keys[3] = {60, 64, 67};
+            std::vector<int> checkAt;
+            uint32_t peak = 0, atStep = 0;
+            bool sounds = true;
+            t.run();
+            const uint64_t start = t.a.position;
+            // blocks of 128 frames; each note-on or note-off goes into the block holding its time
+            for (uint64_t pos = start; pos < start + uint64_t(36 * step); pos += NoteLog::block)
+            {
+                for (int n = 0; n < 36; ++n)
+                {
+                    const uint64_t on = start + uint64_t(n * step),
+                                   off = on + uint64_t(0.9 * step);
+                    if (on >= pos && on < pos + NoteLog::block)
+                        t.on(uint32_t(on - pos), 500 + n, 0, keys[n % 3]);
+                    if (off >= pos && off < pos + NoteLog::block)
+                        t.off(uint32_t(off - pos), 500 + n, 0, keys[n % 3]);
+                    // 100 ms after a note-on, once the line is established: it still sounds
+                    if (n >= 12 && on + 4800 >= pos && on + 4800 < pos + NoteLog::block)
+                        checkAt.push_back(500 + n);
+                }
+                t.run();
+                peak = std::max(peak, t.voices());
+                for (auto id : checkAt)
+                {
+                    const auto notes = Budget(t.a).notes();
+                    sounds &= notes.count(id) && notes.at(id).loudness > 0.05f;
+                }
+                checkAt.clear();
+                // just before the next note: the count is what the cap leaves
+                const double rel = std::fmod(double(pos + NoteLog::block - start), step);
+                if (pos > start + uint64_t(12 * step) && rel > step - NoteLog::block)
+                    atStep = std::max(atStep, t.voices());
+            }
+            t.releaseAll();
+            t.settle();
+            t.verify("arpeggio");
+            return std::tuple<uint32_t, uint32_t, bool>{peak, atStep, sounds};
+        };
+        const auto [openPeak, openSteady, openSounds] = arp(nullptr);
+        const auto [capPeak, capSteady, capSounds] = arp("5");
+        std::printf("  arpeggio: uncapped peak %u voices (steady %u); cap 5: peak %u (steady %u)\n",
+                    openPeak, openSteady, capPeak, capSteady);
+        check(openPeak >= 7 && openPeak <= 8, "the arpeggio overlaps 7 to 8 voices uncapped");
+        // the one voice a new note takes the place of fades for 3 ms beside it: 6 at most, then 5
+        check(capPeak <= 6 && capSteady == 5, "with a cap of 5 the count stays at 5");
+        check(openSounds && capSounds, "every new note sounds, capped or not");
+    }
+}
 
 static void testNoteLifetime()
 {
@@ -5181,6 +5448,7 @@ int main(int argc, char **argv)
         run("sound contexts", [&] { testSoundContexts(patches); });
         run("note lifetime", [] { testNoteLifetime(); });
         run("voice budget", [] { testVoiceBudget(); });
+        run("device voice cap", [] { testDeviceCap(); });
         run("per-part voice budgets", [] { testPartBudgets(); });
         run("sharing", [&] { testSharing(patches); });
         run("reset", [&] { testReset(patches); });
