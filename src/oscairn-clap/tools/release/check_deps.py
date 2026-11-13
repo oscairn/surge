@@ -15,9 +15,9 @@ import re
 import subprocess
 import sys
 
-# The 18 names in plugin-porting.md; each is in both device images.
+# The 19 names in plugin-porting.md; each is in both device images.
 LINUX_NEEDED = {
-    'libc.so.6', 'libm.so.6', 'libdl.so.2', 'libpthread.so.0', 'librt.so.1',
+    'libc.so.6', 'libm.so.6', 'libmvec.so.1', 'libdl.so.2', 'libpthread.so.0', 'librt.so.1',
     'ld-linux-aarch64.so.1', 'ld-linux-x86-64.so.2',
     'libgcc_s.so.1', 'libstdc++.so.6', 'libasound.so.2',
     'libX11.so.6', 'libXext.so.6', 'libXrandr.so.2', 'libXinerama.so.1',
