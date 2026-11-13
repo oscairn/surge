@@ -381,6 +381,15 @@ void ModernOscillator::process_sblk(float pitch, float drift, bool stereo, float
     // numerical path; away from sync the turnaround-gated shortcut is exact.
     bool syncActive = sync.v > 1e-4;
 
+    /*
+     * A component whose mix is zero now and targets zero stays exactly zero through the block
+     * (the lag only scales it), so it adds only a signed zero to each sample; skipping it leaves
+     * the output unchanged (vL and vR start at +0, and +0 plus a signed zero is +0).
+     */
+    const bool sawOn = sawmix.v != 0 || sawmix.target_v != 0;
+    const bool sqrOn = sqrmix.v != 0 || sqrmix.target_v != 0;
+    const bool triOn = trimix.v != 0 || trimix.target_v != 0;
+
     const bool subsyncskip =
         oscdata->p[mo_tri_mix].deform_type & ModernOscillator::mo_submask::mo_subskipsync;
 
@@ -487,19 +496,24 @@ void ModernOscillator::process_sblk(float pitch, float drift, bool stereo, float
 
                 // Saw: analytic away from the wrap, numerical near it. Each helper
                 // returns the final component value (1/(4 dsp^2) scale folded in).
-                sawv = dpwSawComp(pfm, dsp, false);
+                if (sawOn || sqrOn)
+                    sawv = dpwSawComp(pfm, dsp, false);
 
                 // Pulse = saw(phase) - saw(phase + width); the second saw turns
                 // around at a different phase so it gates independently.
-                double poff = pfm + pwHalf;
-                poff -= (poff >= 1.0);
-                sqrv = dpwSawComp(poff, dsp, false) - sawv;
+                if (sqrOn)
+                {
+                    double poff = pfm + pwHalf;
+                    poff -= (poff >= 1.0);
+                    sqrv = dpwSawComp(poff, dsp, false) - sawv;
+                }
 
                 // Triangle / square analytically; sine stays numerical inside the
                 // helper. Sub-octave moves the multitype to the sub, so it's zero
                 // here (matching the original triBuff = 0 in that case).
-                double triv =
-                    (subOctave || !thirdActive) ? 0.0 : dpwMultiComp<mtype>(pfm, dsp, false);
+                double triv = (subOctave || !thirdActive || !triOn)
+                                  ? 0.0
+                                  : dpwMultiComp<mtype>(pfm, dsp, false);
 
                 res = sawmix.v * sawv + trimix.v * triv + sqrmix.v * sqrv;
             }
