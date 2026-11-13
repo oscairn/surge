@@ -958,14 +958,21 @@ struct Plugin : SharedVoices,
     void renderBlock(uint32_t s)
     {
         eventTime = s;
+        // The sounds the channels select and those voices play, as live() finds them, once a
+        // block rather than once a sound (it reads every voice of the pool): the loop below
+        // changes neither for a sound before that sound's turn.
+        uint32_t selectedMask = 0, voiceMask = 0;
+        for (auto slot : selected)
+            selectedMask |= 1u << slot;
+        for (auto &v : voices)
+            if (v.active)
+                voiceMask |= 1u << v.context;
         for (uint32_t i = 0; i < contextCapacity; ++i)
         {
             auto &sl = slots[i];
             // A sound found quiet a block ago with no note since gives up its tail's pin here,
             // before its output stops being read.
-            if (sl.ringing && sl.silent &&
-                std::none_of(voices.begin(), voices.end(),
-                             [&](const Voice &v) { return v.active && v.context == i; }))
+            if (sl.ringing && sl.silent && !(voiceMask >> i & 1))
             {
                 sl.ringing = false;
                 sl.choking = false;
@@ -980,7 +987,7 @@ struct Plugin : SharedVoices,
             }
             // A block pins what it renders until the next boundary: a selection can unpin a
             // sound mid-block, while this block still reads its output.
-            const bool use = live(false) >> i & 1;
+            const bool use = ((selectedMask | voiceMask) >> i & 1) || sl.ringing; // live(false)
             if (use != sl.fresh)
             {
                 if (use)
