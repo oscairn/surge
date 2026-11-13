@@ -3365,6 +3365,60 @@ release workflow (section 12) builds a new one, and a new binary takes a new ver
 
 The plugin is 0.4.8 (with this entry). Nothing changes for the converter, the sound or native Surge.
 
+**CPU on arm64 and the polyphony limit (2026-11-13).** Jacob's first runs on the FANTOM-07 (4x
+Cortex-A53 at 1.8 GHz, 48 kHz, 128-frame blocks; a worker gets half a block, 1.33 ms; CI
+linux-arm64 build of 0.4.7) failed at one note: Pads/Pad 1 typical block 748 us, worst 6,998 us, 7
+misses; Polysynths/Hugeness 773 us, worst 9,648 us; worker 81-104 MiB.
+
+*Measuring.* `oscairn-analog-bench patch.fxp [notes] [seconds] [block]` (new tool) plays a patch
+file as Oscairn does (preset-load, or with `OSCAIRN_BENCH_CONTEXT=1` a prepared sound context
+selected on every channel) and times every block: before any note, one note, released, again, an
+8-note chord, released, with page faults per block (`RUSAGE_THREAD` on Linux), an output hash, and
+`OSCAIRN_BENCH_BLOCKS=file` writing each block's time. Run natively in Docker
+(`--platform linux/arm64`, Ubuntu 24.04, gcc 13, the release flags: `-O3`, LTO) on an Apple
+Silicon Mac, and under callgrind for instruction counts; the build is optimised and vectorised
+(SIMDe maps Surge's SSE to NEON; `arm_neon.h` intrinsics in the profile), and the same patch costs
+1.15-1.3 times what the macOS arm64 build does on the same cores.
+
+*Where the time went.* At rest (no note) 64 % of the instructions were the plugin's own
+`renderBlock`: for each of its 16 sound slots, every Surge block, it called `live()`, which reads
+all 256 voices of the helper's pool, so 4,096 voice reads a 32-sample block. It now finds the
+selected sounds and those with voices once a block (nothing in the loop changes either for a slot
+before that slot's turn). Pad 1 (callgrind, linux arm64, per 128-frame block): at rest 184,600 to
+101,900 instructions, with one note 327,000 to 244,000; Hugeness with one note 362,000 to 280,000.
+Time (Docker, each block's minimum over six runs): Pad 1 at rest 28.3 to 11.6 us, one note 51.3 to
+31.9, the chord 191.7 to 156.9; Hugeness 28.4 to 11.5, 55.9 to 36.1, 137.0 to 102.6. The output is
+bit-identical (hashes of eight factory patches, both load paths). The rest is Surge's own: per
+synthesizer each Surge block copies the scene and global data (about 20,000 instructions a host
+block), runs the modulators and computes the scene's biquad coefficients with `sincos`; per voice
+the oscillators (2x oversampled), the quad filter chain (four lanes for one voice) and the
+half-band filter: about 18 us a voice of Pad 1 here after the first. Scaling by Jacob's own
+figure (748 us on the A53 against 51.3 here before, 14.6 times): about 470 us at one note and
+260 us a further Pad 1 voice, so about 4 Pad 1 notes, or 5-6 of Hugeness, in one worker's 1.33 ms
+(an estimate: not measured on the A53, whose caches may favour the change more). CPU, not the
+64-voice ceiling, is the limit on that device.
+
+*Stalls.* Not reproduced. Over six runs no block's minimum is above twice its phase's median
+except the note-on and chord blocks (about twice) and a released chord's steady cost; at most one page
+fault in a whole run after the load; both load paths' first block 1.6-2.7 times the median; heap
+allocation in `process()` is already a test failure. Flushing denormals to zero (as stock Surge
+XT's `processBlock` sets FPCR.FZ on aarch64; this plugin does not) leaves both patches' output
+bit-identical. So the 7-16 ms blocks are outside this code as tested here, or need something the
+bench does not do; to check on the device: major faults and `VmLck` of the worker
+(`/proc/<pid>/status`, `/proc/<pid>/stat`) during a stall, its thread's policy, and memory pressure
+(81-104 MiB a worker on a 1 GB unit). At the old cost a note-on block (about twice a typical one)
+was itself over 1.33 ms.
+
+*Polyphony limit.* Each sound's Polyphony Limit is its patch's: Surge's factory patches store
+theirs (641 patches: 379 at 8, 241 at 16, 20 at 64, one at 3; a revision 15 or older patch's 8 is
+read as 16, Surge's default), and the converter wrote the init template's 16 for every AN-X Part
+until performance-converter `fd05d0c`, which writes the reference engine's 12 (register entry 22).
+The ceiling stays: 64 a sound, 128 across the sounds (entry 20); on the A53 a handful of voices
+fill a worker's time first, and the voice budget gives voices up before either.
+
+The plugin version is unchanged here (the next release carries it). Nothing changes for native
+Surge or the sound.
+
 **Where this stopped** (thirteenth session). HPF24 stays on the state-variable HP 24 dB: Clean
 passes everything but index 560 (at every rate), Driven fails above 48 kHz; a decision for Jacob
 again (register entry 1). The amp EG decay table holds from index 72; attack and release below
@@ -3621,6 +3675,14 @@ only moves where a glide starts, below).
     Oscairn sets a part's bus before the part plays (when the part is made, and at a Performance
     change's cue), so its parts don't hear it. Deliberate, accepted by Jacob 2026-11-07. Reproduce: plugin test "sharing" (the
     bus change check). Code: the Output Bus in `renderBlock` and `render`, `OscairnAnalog.cpp`.
+
+22. **Polyphony of a converted Part.** The reference's analog engine is listed at 12 voices; a
+    converted Part's Polyphony Limit is 12 notes, each with its unison voices inside, where the
+    reference may count unison voices against its 12 (not measured), and how the reference steals at
+    its limit and shares its voices between Parts is not measured either (the plugin steals as
+    Surge does, or in the voice budget's order, entry 19). Mono plays one note whatever the limit.
+    Reproduce: performance-converter `tests/test_anx.py` (`test_polyphony_limit_is_the_reference_engines`).
+    Code: `perfconv/anx.py`.
 
 ## 12. Releasing
 
