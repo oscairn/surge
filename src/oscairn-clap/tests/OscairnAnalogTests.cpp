@@ -4080,6 +4080,27 @@ static void testDeviceCap()
         t.settle();
         t.verify("cap order");
     }
+    // a unison note counts as its voices, and goes whole
+    {
+        CapEnv env("7"); // room for two such notes and a copy: a note goes whole, not by a copy
+        NoteLog t;
+        setup(t, {{"a_unison_voices", 3}});
+        for (int i = 0; i < 4; ++i)
+        {
+            t.on(0, 1 + i, 0, 60 + 3 * i);
+            t.run(8);
+        }
+        const auto n = Budget(t.a).notes();
+        bool whole = true;
+        for (auto &[id, note] : n)
+            whole &= note.voices == 3;
+        check(t.voices() == 6 && n.size() == 2 && whole && t.ended.size() == 2 &&
+                  t.ended.count(1) && t.ended.count(2),
+              "cap 7, four 3-voice notes: the two oldest notes go whole, 6 voices sound");
+        t.releaseAll();
+        t.settle();
+        t.verify("cap unison");
+    }
     // the host's limit: a higher one does not lift the cap, a lower one stands
     {
         CapEnv env("4");
@@ -4824,14 +4845,12 @@ static void testVoiceBudget()
               "fading voices are counted until they end");
         a.render(1024, 64);
         n = b.notes();
-        check(b.active() == 4 && n[7].voices == 3 && n[8].voices == 1 && !hasNoteEnd(a, 8),
-              "two of a note's three voices given up: the note sounds on, no NOTE_END");
+        check(b.active() == 3 && n.size() == 1 && n[7].voices == 3 && hasNoteEnd(a, 8) &&
+                  !hasNoteEnd(a, 7),
+              "a note is given up whole: its three voices go together, one NOTE_END after them");
         b.set(3);
-        a.render(64, 64);
-        check(!hasNoteEnd(a, 8), "no NOTE_END while a note's last voice fades");
         a.render(1024, 64);
-        check(hasNoteEnd(a, 8) && !hasNoteEnd(a, 7) && b.active() == 3 && b.notes().size() == 1,
-              "NOTE_END once a note's last voice has ended");
+        check(b.active() == 3 && !hasNoteEnd(a, 7), "at the limit, nothing more is given up");
     }
     // Surge's Polyphony Limit (4) full: without a limit from the host it releases the oldest
     // note, exactly as stock Surge renders; under a budget, the quietest.

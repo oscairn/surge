@@ -678,8 +678,16 @@ struct Plugin : SharedVoices,
     {
         if (i < 0)
             return false;
-        candidateVoice[i]->fadeOut(std::max(1, (int)std::ceil(chokeFrames / (double)BLOCK_SIZE)));
-        candidates[i].ending = true;
+        // a whole note goes: its unison copies fade out together
+        const auto id = candidateVoice[i]->host_note_id;
+        for (size_t j = 0; j < surgeVoices; ++j)
+            if (candidateVoice[j] && !candidates[j].ending &&
+                (j == size_t(i) || (id >= 0 && candidateVoice[j]->host_note_id == id)))
+            {
+                candidateVoice[j]->fadeOut(
+                    std::max(1, (int)std::ceil(chokeFrames / (double)BLOCK_SIZE)));
+                candidates[j].ending = true;
+            }
         return true;
     }
     // Before a note starts in `slot`: room for the voices it will add within the limits.
