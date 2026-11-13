@@ -3850,6 +3850,549 @@ static void testMonoKeyStruckAgain()
     }
 }
 
+// NOTE_END for every note that ends, exactly once. The host holds a slot for each note-on until
+// the NOTE_END with its ID, key, channel and port, inside the block; reset and deactivation end
+// notes without one (the host ends those itself).
+struct NoteLog
+{
+    static constexpr uint32_t block = 128;
+    Instance a;
+    struct Start
+    {
+        int16_t channel, key, port;
+    };
+    std::map<int32_t, Start> started;
+    std::map<int32_t, int> ended;
+    std::set<int32_t> offed;    // notes the script released: the key goes up, NOTE_END or not
+    std::set<int32_t> forgiven; // ended by a reset
+    std::vector<Event> pending; // times in frames from the next block's start
+    std::string problem;
+    const oscairn_plugin_sound_contexts_t *contexts;
+    const oscairn_plugin_voice_budget_t *budget;
+
+    NoteLog()
+        : contexts(static_cast<const oscairn_plugin_sound_contexts_t *>(
+              a.plugin->get_extension(a.plugin, OSCAIRN_EXT_SOUND_CONTEXTS))),
+          budget(static_cast<const oscairn_plugin_voice_budget_t *>(
+              a.plugin->get_extension(a.plugin, OSCAIRN_EXT_VOICE_BUDGET)))
+    {
+    }
+    void on(uint32_t t, int32_t id, int16_t channel, int16_t key, int16_t port = 0)
+    {
+        auto e = noteEvent(t, CLAP_EVENT_NOTE_ON, id, key, 0.8);
+        e.note.channel = channel;
+        e.note.port_index = port;
+        pending.push_back(e);
+        if (!started.count(id))
+            started[id] = {channel, key, port};
+    }
+    void note(uint32_t t, uint16_t type, int32_t id, int16_t channel, int16_t key)
+    {
+        auto e = noteEvent(t, type, id, key, 0.5);
+        e.note.channel = channel;
+        pending.push_back(e);
+    }
+    void off(uint32_t t, int32_t id, int16_t channel, int16_t key)
+    {
+        note(t, CLAP_EVENT_NOTE_OFF, id, channel, key);
+        offed.insert(id);
+    }
+    void midi(uint32_t t, uint8_t a_, uint8_t b, uint8_t c = 0)
+    {
+        pending.push_back(midiEvent(t, a_, b, c));
+    }
+    void param(const char *name, double v) { pending.push_back(paramEvent(0, fnv1a(name), v)); }
+    void run(int blocks = 1)
+    {
+        for (int b = 0; b < blocks; ++b)
+        {
+            for (auto &e : pending)
+                e.time += (uint32_t)a.position;
+            a.out.noteEnds.clear();
+            a.render(block, block, std::move(pending));
+            pending.clear();
+            for (auto &e : a.out.noteEnds)
+            {
+                auto s = started.find(e.note_id);
+                if (s == started.end())
+                {
+                    if (problem.empty())
+                        problem = "NOTE_END for an id never started: " + std::to_string(e.note_id);
+                }
+                else if (e.port_index != s->second.port || e.channel != s->second.channel ||
+                         e.key != s->second.key || e.header.time >= block)
+                {
+                    if (problem.empty())
+                        problem = "NOTE_END with wrong fields for id " + std::to_string(e.note_id);
+                }
+                if (++ended[e.note_id] > 1 && problem.empty())
+                    problem = "NOTE_END twice for id " + std::to_string(e.note_id);
+                if (forgiven.count(e.note_id) && problem.empty())
+                    problem = "NOTE_END after a reset for id " + std::to_string(e.note_id);
+            }
+        }
+    }
+    std::string missing() const
+    {
+        std::string r;
+        for (auto &[id, s] : started)
+            if (!ended.count(id) && !forgiven.count(id))
+                r += " " + std::to_string(id);
+        return r;
+    }
+    // runs until every note has ended (at most `seconds`), then on a little, for late repeats
+    void settle(double seconds = 12)
+    {
+        for (uint32_t n = 0; n * block < seconds * 48000 && !missing().empty(); ++n)
+            run();
+        run(100);
+    }
+    void verify(const std::string &what)
+    {
+        check(problem.empty(), what + ": " + problem);
+        check(missing().empty(), what + ": no NOTE_END for ids" + missing());
+    }
+    // every key still down is released, whether or not its note has ended (a player lets go)
+    void releaseAll()
+    {
+        for (auto &[id, s] : started)
+            if (!offed.count(id))
+                off(0, id, s.channel, s.key);
+        run(2);
+    }
+    void reset()
+    {
+        for (auto &[id, s] : started)
+            if (!ended.count(id))
+                forgiven.insert(id);
+        a.plugin->reset(a.plugin);
+    }
+    uint32_t addSound(int16_t channel)
+    {
+        char message[256] = {};
+        auto id = contexts->prepare(a.plugin, "second", nullptr, 0, nullptr, nullptr, message,
+                                    sizeof message);
+        check(id != CLAP_INVALID_ID && contexts->select(a.plugin, id, channel), "a second sound");
+        run();
+        return id;
+    }
+    void limit(uint32_t voices, std::vector<oscairn_voice_budget_context_t> entries = {})
+    {
+        budget->set_limits(a.plugin, voices, entries.data(), (uint32_t)entries.size());
+    }
+    uint32_t voices()
+    {
+        double cost = 0;
+        return budget->active_voices(a.plugin, &cost);
+    }
+};
+
+static void testNoteLifetime()
+{
+    // a release that finishes, while another note is still held
+    {
+        NoteLog t;
+        t.on(0, 1, 0, 60);
+        t.on(10, 2, 3, 64);
+        t.run(8);
+        t.off(0, 2, 3, 64);
+        t.run(48000 * 4 / NoteLog::block);
+        check(t.ended.count(2) == 1 && !t.ended.count(1),
+              "a released note ends while another is held");
+        t.off(0, 1, 0, 60);
+        t.settle();
+        t.verify("release");
+    }
+    // Surge's own polyphony limit, more notes than it keeps
+    {
+        NoteLog t;
+        t.param("polylimit", 3);
+        t.run();
+        for (int i = 0; i < 12; ++i)
+            t.on(i, 100 + i, 0, 40 + i);
+        t.run(8);
+        t.releaseAll();
+        t.settle();
+        t.verify("polyphony limit");
+        check(t.ended.size() == 12, "every one of 12 notes ended");
+    }
+    // far more notes held than the voices Surge keeps
+    {
+        NoteLog t;
+        for (int i = 0; i < 300; ++i)
+            t.on(i % 128, 1000 + i, i % 4, 24 + i % 80);
+        t.run(60);
+        t.releaseAll();
+        t.settle();
+        t.verify("300 notes held");
+    }
+    // the host's budget: its limit, reserves and priorities on two sounds, tightened and lifted
+    for (int variant = 0; variant < 3; ++variant)
+    {
+        NoteLog t;
+        const auto second = t.addSound(1);
+        if (variant == 0)
+            t.limit(3);
+        if (variant == 1)
+            t.limit(4, {{0, 0, 3, 0, 0}, {second, 0, 0, 9, 0}});
+        if (variant == 2)
+            t.limit(0, {{OSCAIRN_VOICE_BUDGET_SELECTED, 2, 0, 1, 0}});
+        for (int i = 0; i < 8; ++i)
+            t.on(i, 300 + i, i % 2, 40 + i);
+        t.run(4);
+        t.limit(2);
+        t.run(4);
+        for (int i = 0; i < 4; ++i)
+            t.on(0, 320 + i, i % 2, 60 + i);
+        t.run(4);
+        t.limit(0);
+        t.releaseAll();
+        t.settle();
+        t.verify("host budget " + std::to_string(variant));
+    }
+    // every play mode: keys over each other, a held key released first, a key struck again
+    for (int mode = 0; mode < n_play_modes; ++mode)
+    {
+        NoteLog t;
+        t.param("a_polymode", mode);
+        t.run();
+        t.on(0, 500, 0, 60);
+        t.run(4);
+        t.on(0, 501, 0, 64);
+        t.run(4);
+        t.on(0, 502, 0, 50);
+        t.run(4);
+        t.off(0, 501, 0, 64);
+        t.run(4);
+        t.on(0, 503, 0, 64); // struck again
+        t.on(0, 504, 0, 64); // and once more under it
+        t.off(0, 500, 0, 60);
+        t.run(4);
+        t.off(0, 503, 0, 64);
+        t.run(4);
+        t.releaseAll();
+        if (mode == pm_latch)
+        {
+            // Latch keeps the last notes sounding after their keys are up: they end with all
+            // sound off, which then ends each once
+            t.run(48000 / NoteLog::block);
+            check(t.voices() > 0, "latch keeps its notes sounding after the keys are released");
+            t.midi(0, 0xB0, 120, 0);
+        }
+        t.settle();
+        t.verify("play mode " + std::to_string(mode));
+    }
+    // unison: several voices to a note, one NOTE_END when the last ends, also with voices
+    // given up one by one
+    for (int variant = 0; variant < 3; ++variant)
+    {
+        NoteLog t;
+        t.param("a_unison_voices", 7);
+        if (variant == 1)
+            t.param("polylimit", 9);
+        t.run();
+        if (variant == 2)
+            t.limit(5);
+        for (int i = 0; i < 4; ++i)
+            t.on(i, 600 + i, 0, 50 + 3 * i);
+        t.run(8);
+        t.off(0, 600, 0, 50);
+        t.run(4);
+        if (variant == 2)
+            t.limit(3);
+        t.run(8);
+        t.releaseAll();
+        t.settle();
+        t.verify("unison " + std::to_string(variant));
+    }
+    // the same key again, with the first still held (and not)
+    {
+        NoteLog t;
+        t.on(0, 700, 0, 60);
+        t.run(4);
+        t.on(0, 701, 0, 60);
+        t.run(4);
+        t.off(0, 701, 0, 60);
+        t.run(4);
+        t.off(0, 700, 0, 60);
+        t.settle();
+        t.verify("same key again");
+    }
+    // a key-on delay still pending at the note-off, and at a state load
+    {
+        NoteLog t;
+        t.param("a_keyon_delay", -2);
+        t.param("a_keyon_delay.off", 0);
+        t.run();
+        t.on(0, 900, 0, 60);
+        t.run(4);
+        check(t.voices() <= 1, "active_voices while a key-on delay waits");
+        t.off(0, 900, 0, 60);
+        t.run(4);
+        t.on(0, 901, 0, 64);
+        t.on(0, 902, 0, 67);
+        t.run(8);
+        t.off(0, 902, 0, 67);
+        t.settle();
+        t.off(0, 901, 0, 64);
+        t.settle();
+        t.verify("key-on delay");
+    }
+    // CC 120 and CC 123, on one channel and then the other
+    for (int cc : {120, 123})
+    {
+        NoteLog t;
+        t.on(0, 1000, 0, 60);
+        t.on(0, 1001, 0, 64);
+        t.on(0, 1002, 1, 67);
+        t.run(8);
+        t.midi(5, 0xB0, (uint8_t)cc, 0);
+        t.run(4);
+        t.midi(5, 0xB1, (uint8_t)cc, 0);
+        t.run(4);
+        t.settle();
+        t.verify("CC " + std::to_string(cc));
+    }
+    // choke and note-off by ID, by key and channel, with wildcards, and with an ID it does not know
+    {
+        NoteLog t;
+        t.on(0, 1100, 0, 60);
+        t.on(0, 1101, 0, 61);
+        t.on(0, 1102, 2, 62);
+        t.on(0, 1103, 2, 63);
+        t.on(0, 1104, 4, 64);
+        t.on(0, 1105, 5, 65);
+        t.run(8);
+        t.note(0, CLAP_EVENT_NOTE_CHOKE, -1, 0, 60);
+        t.note(0, CLAP_EVENT_NOTE_CHOKE, 1101, -1, -1);
+        t.note(0, CLAP_EVENT_NOTE_OFF, -1, 2, 62);
+        t.note(0, CLAP_EVENT_NOTE_OFF, -1, -1, 63);
+        t.note(0, CLAP_EVENT_NOTE_CHOKE, -1, 4, -1);
+        t.run(8);
+        t.off(0, 7777, 5, 65); // an ID the plugin does not know: nothing to release
+        t.run(2);
+        check(t.ended.count(1105) == 0, "a note-off with another ID releases nothing");
+        t.off(0, 1105, 5, 65);
+        t.settle();
+        t.verify("choke and note-off addressing");
+    }
+    // a note-off before its note-on, and twice
+    {
+        NoteLog t;
+        t.off(0, 1200, 0, 60);
+        t.on(1, 1200, 0, 60);
+        t.off(2, 1200, 0, 60);
+        t.off(3, 1200, 0, 60);
+        t.settle();
+        t.verify("note-off twice");
+    }
+    // a sound switched under held notes, and retiring sounds choked
+    {
+        NoteLog t;
+        const auto second = t.addSound(1);
+        t.on(0, 1300, 0, 60);
+        t.on(0, 1301, 1, 64);
+        t.run(8);
+        check(t.contexts->select(t.a.plugin, second, 0), "select the second sound over held notes");
+        t.run(4);
+        t.on(0, 1302, 0, 70);
+        t.run(2);
+        t.off(0, 1300, 0, 60);
+        t.run(2);
+        auto snaps = static_cast<const oscairn_plugin_sound_snapshots_t *>(
+            t.a.plugin->get_extension(t.a.plugin, OSCAIRN_EXT_SOUND_SNAPSHOTS));
+        check(snaps && snaps->choke_retiring(t.a.plugin), "choke_retiring");
+        check(t.contexts->select(t.a.plugin, 0, -1), "select the default everywhere");
+        t.run(8);
+        t.releaseAll();
+        t.settle();
+        t.verify("sound switch and choke_retiring");
+    }
+    // states loaded while notes are held, ringing and waiting
+    {
+        NoteLog t;
+        const auto plain = t.a.save();
+        t.param("a_polymode", pm_mono);
+        t.param("a_unison_voices", 5);
+        t.run();
+        const auto other = t.a.save();
+        check(t.a.load(plain), "load the plain state");
+        t.on(0, 1400, 0, 60);
+        t.on(0, 1401, 0, 64);
+        t.run(8);
+        t.off(0, 1401, 0, 64);
+        t.run(1);
+        check(t.a.load(other), "load another state while notes are held and ringing");
+        t.run(8);
+        t.on(0, 1402, 0, 67);
+        t.on(1, 1403, 0, 70);
+        t.run(8);
+        check(t.a.load(plain), "load the first again");
+        t.run(8);
+        t.on(0, 1404, 0, 67);
+        t.run(2);
+        t.releaseAll();
+        t.settle();
+        t.verify("state load");
+    }
+    // reset: no NOTE_END for the notes it ended, then the instance goes on as new
+    {
+        NoteLog t;
+        t.on(0, 1600, 0, 60);
+        t.on(0, 1601, 0, 64);
+        t.run(8);
+        t.off(0, 1601, 0, 64);
+        t.run(1);
+        t.reset();
+        t.run(40);
+        t.on(0, 1602, 0, 60);
+        t.run(8);
+        t.off(0, 1602, 0, 60);
+        t.settle();
+        t.verify("reset");
+        check(!t.ended.count(1600) && !t.ended.count(1601) && t.ended.count(1602) == 1,
+              "no NOTE_END after a reset, one for the new note");
+    }
+    // deactivate and activate with notes held: none after
+    {
+        NoteLog t;
+        t.on(0, 1700, 0, 60);
+        t.run(8);
+        t.a.plugin->stop_processing(t.a.plugin);
+        t.a.plugin->deactivate(t.a.plugin);
+        t.forgiven.insert(1700);
+        t.a.activate(48000);
+        t.run(40);
+        t.verify("deactivate");
+    }
+    // what active_voices counts
+    {
+        NoteLog t;
+        check(t.voices() == 0, "no voices at the start");
+        t.on(0, 1800, 0, 60);
+        t.on(0, 1801, 0, 64);
+        t.run(16);
+        const auto held = t.voices();
+        t.off(0, 1800, 0, 60);
+        t.run(1);
+        std::printf("active_voices: %u with two held notes, %u with one releasing\n", held,
+                    t.voices());
+        t.releaseAll();
+        t.settle();
+        check(t.voices() == 0, "no voices when every note has ended");
+        t.verify("active_voices");
+    }
+
+    // The long run: thousands of notes across keys and channels, far past the voices Surge
+    // keeps, with play modes, unison, key-on delay, Surge's polyphony limit and the host's budget
+    // changing, the pedal, CC 120 and 123, chokes, wildcards, a second sound and a few resets.
+    {
+        NoteLog t;
+        const auto second = t.addSound(1);
+        uint64_t rng = 0x9E3779B97F4A7C15ull;
+        auto rnd = [&](uint32_t n) {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            return (uint32_t)((rng >> 11) % n);
+        };
+        std::vector<int32_t> held;
+        int32_t next = 10000;
+        int notes = 0, resets = 0;
+        for (int step = 0; step < 5000; ++step)
+        {
+            const uint32_t events = 1 + rnd(5);
+            for (uint32_t k = 0; k < events; ++k)
+            {
+                const uint32_t kind = rnd(100), time = rnd(NoteLog::block);
+                if (kind < 45)
+                {
+                    t.on(time, next, (int16_t)rnd(4), (int16_t)(24 + rnd(72)));
+                    held.push_back(next++);
+                    ++notes;
+                }
+                else if (kind < 80 && !held.empty())
+                {
+                    const size_t i = rnd((uint32_t)held.size());
+                    const int32_t id = held[i];
+                    held.erase(held.begin() + (long)i);
+                    const auto s = t.started[id];
+                    t.off(time, rnd(8) == 0 ? -1 : id, s.channel, s.key);
+                }
+                else if (kind < 84 && !held.empty())
+                {
+                    const int32_t id = held[rnd((uint32_t)held.size())];
+                    const auto s = t.started[id];
+                    t.note(time, CLAP_EVENT_NOTE_CHOKE, rnd(2) ? id : -1, s.channel,
+                           rnd(2) ? s.key : -1);
+                }
+                else if (kind < 86)
+                    t.midi(time, (uint8_t)(0xB0 | rnd(4)), rnd(2) ? 123 : 120, 0);
+                else if (kind < 88)
+                    t.midi(time, (uint8_t)(0xB0 | rnd(4)), 64, rnd(2) ? 127 : 0);
+                else if (kind < 92)
+                {
+                    switch (rnd(4))
+                    {
+                    case 0:
+                        t.param("a_polymode", rnd(n_play_modes));
+                        break;
+                    case 1:
+                        t.param("a_unison_voices", 1 + rnd(7));
+                        break;
+                    case 2:
+                        t.param("polylimit", 2 + rnd(7));
+                        break;
+                    default:
+                        t.param("a_keyon_delay.off", rnd(2));
+                        t.param("a_keyon_delay", -4 + (double)rnd(3));
+                    }
+                }
+                else if (kind < 96)
+                {
+                    const uint32_t n = rnd(3);
+                    std::vector<oscairn_voice_budget_context_t> c;
+                    if (n > 0)
+                        c.push_back({0, rnd(4), rnd(3), (uint8_t)rnd(11), 0});
+                    if (n > 1)
+                        c.push_back({second, rnd(4), rnd(3), (uint8_t)rnd(11), 0});
+                    t.limit(rnd(3) == 0 ? 0 : 1 + rnd(12), c);
+                }
+            }
+            t.run();
+            if (step % 1250 == 1249)
+            {
+                t.reset();
+                for (auto id : held)
+                    t.offed.insert(id); // the player lets go after the reset; those keys are not sent again
+                held.clear();
+                ++resets;
+            }
+        }
+        t.limit(0);
+        t.param("a_polymode", pm_poly);
+        t.param("a_keyon_delay.off", 1);
+        t.releaseAll();
+        for (int c = 0; c < 4; ++c)
+            t.midi(0, (uint8_t)(0xB0 | c), 64, 0);
+        t.run(2);
+        for (int c = 0; c < 4; ++c)
+            t.midi(0, (uint8_t)(0xB0 | c), 123, 0);
+        t.run(2);
+        t.releaseAll();
+        t.settle(30);
+        t.verify("randomised run");
+        size_t counted = 0;
+        for (auto &[id, n] : t.ended)
+            counted += (size_t)n;
+        const size_t expected = t.started.size() - t.forgiven.size();
+        std::printf("randomised run: %d note-ons, %d resets, %zu NOTE_END, %zu expected\n", notes,
+                    resets, counted, expected);
+        check(counted == expected,
+              "randomised run: NOTE_END count equals the note-ons not ended by a reset");
+    }
+}
+
 // Voices given up past the host's limits: a lowered limit fades the excess out at the next
 // block, without a click; a new note takes a voice in voice-budget.h's order across two sounds;
 // the voices and notes reported, fading ones included; NOTE_END after a note's last voice;
@@ -4608,6 +5151,7 @@ int main(int argc, char **argv)
         run("plain patches match stock Surge", [&] { testPlainPatchesMatchStock(patches); });
         run("presets", [&] { testPresets(dir); });
         run("sound contexts", [&] { testSoundContexts(patches); });
+        run("note lifetime", [] { testNoteLifetime(); });
         run("voice budget", [] { testVoiceBudget(); });
         run("per-part voice budgets", [] { testPartBudgets(); });
         run("sharing", [&] { testSharing(patches); });

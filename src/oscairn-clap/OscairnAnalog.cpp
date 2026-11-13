@@ -858,6 +858,17 @@ struct Plugin : SharedVoices,
                 noteOff(n, false, true);
             return;
         }
+        if (kind == 0xB0 && (d[1] & 0x7F) == 123)
+        {
+            // All notes off, on this channel: a wildcard release (Surge's allNotesOff builds a
+            // set and a vector, which process() must not, and ignores the channel).
+            clap_event_note_t n{};
+            n.note_id = -1;
+            n.channel = ch;
+            n.key = -1;
+            noteOff(n);
+            return;
+        }
         forTargets(ch, [&](SurgeSynthesizer &s, uint32_t) {
             switch (kind)
             {
