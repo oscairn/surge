@@ -28,6 +28,10 @@ target_compile_definitions(oscairn-analog-tests PRIVATE
 add_executable(oscairn-analog-render tools/OscairnAnalogRender.cpp tools/RenderNote.cpp)
 target_link_libraries(oscairn-analog-render PRIVATE oscairn-analog-core)
 
+# Times every block of a patch file played as Oscairn plays it (CPU per voice, stalls).
+add_executable(oscairn-analog-bench tools/OscairnAnalogBench.cpp)
+target_link_libraries(oscairn-analog-bench PRIVATE oscairn-analog-core)
+
 # Fits the filter cutoff rate match tables (src/common/dsp/FilterCutoffRateMatchTables.h).
 add_executable(oscairn-analog-rate-match tools/OscairnAnalogRateMatch.cpp tools/RenderNote.cpp)
 target_link_libraries(oscairn-analog-rate-match PRIVATE oscairn-analog-core)
