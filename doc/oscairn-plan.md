@@ -3506,6 +3506,133 @@ The plugin version is unchanged here (the next release carries it). Nothing chan
 converter (performance-converter `7460f92` writes polyphony 16, `291982f` corrects its comment:
 Surge's limit counts voices, a unison copy each, so a Unison 2 Part plays 8 notes).
 
+**A faster Modern oscillator, behind an engine option (2026-11-13).** Jacob approved the cost
+recommendation of the previous entry ("do your recommendations about analog"): the Modern
+oscillator is most of a converted voice (about 70 % of 80s Syn Bass), and it worked in double
+precision one sample at a time. A prototype (variants A, today's code, to D) was judged by
+measurement; this finishes the one that held up, C, and drops B (slower than A) and D (a
+host-rate render interpolated up: it adds aliasing for a gain of 1 to 2 %, the prototype's
+report).
+
+*What it is.* `ModernOscillatorFast.cpp` (with `ModernOscillatorFastKernels.h`) plays a Modern
+oscillator's sawtooth, pulse and sine third component four samples at a time in SIMD lanes, in
+single precision (Surge's SIMD macros: SSE on x86, NEON through SIMDe on arm64; nothing past
+SSE2, the fork's x86 build adds `-msse4.1`). Surge's code takes, for each sample, the second
+difference over three phases of a generator polynomial (the DPW method, in double). The fast
+path takes the same second difference in closed form: a generator that is a piecewise polynomial
+has, for a stencil of increment d, the generator's second derivative at the stencil's centre plus
+(d^2 times) its fourth derivative term, plus for each corner the stencil reaches, the second
+difference of the truncated power the corner adds. The saw (cubic generator) has one corner,
+a step of 2 in its second derivative at the wrap; the "sine" (a pair of parabolas, quartic) has its
+fourth derivative jump at its centre and at the wrap. Written so that nothing cancels in single
+precision (the corner terms are `u^2 (u^2 / h^2)` evaluated only where the stencil reaches the
+corner). The prototype's sine left the corner terms out ("one small simplification"): at high
+keys that is -33 dB, not -100 (note 127 at 44.1 kHz, seen); here they are in. The phase and
+its increment at each of a block's samples are laid out in double (the increment ramps linearly
+over the block, so sample j is at the block's start phase plus j d + j (j - 1) / 2 dd, as the
+accumulating loop has it), the pulse's second phase too: a single precision phase near the wrap
+puts an error of (rounding / increment) into the three samples there, which at notes 0 and 12
+(44.1 and 192 kHz) was -93 to -98 dB until it was laid out in double.
+
+*The option.* `modernOscillatorFast` (storage option like the other five; saved in the patch as
+`<modernOscillatorFast v="1"/>` among the non-parameter config, written only when on, reset on
+load, off when absent). Read when a voice starts (`ModernOscillator::init`), so no `getenv` and
+no storage read in the sample loop. A patch (a converted Part: the performance converter, not
+touched here, writes it beside the other options) sets it by having that element in its XML. The
+environment variable `OSCAIRN_ANALOG_FAST_OSC` (set and not 0), read once when the first plugin
+is created, turns it on for every patch the plugin loads, for testing. Default off: a native
+Surge patch and a converted patch without the element play bit for bit as before (the stock
+comparison, with Modern oscillator patches added; the bench's output hashes of Jacob's 38
+converted patches and 53 factory patches equal to those of the commit before, option off).
+
+*What falls back, and how.* Per block, to the code in `ModernOscillator.cpp` (never to a third
+path): a triangle or square third component that sounds (mix not zero now, before or at its
+target); the sub-octave; oscillator FM, an oscillator that is another's FM source included
+(routing 2 > 1, 3 > 2 > 1 and 2 + 3 > 1; found at voice start from the oscillator's place in the
+patch, the routing read each block: the modulation multiplies the error by up to 16 cycles per
+unit of the source); sync, which once on (or modulated above 0) in a voice keeps the voice on the
+original code for the rest of the note (its two phases and reset parity after a sync that
+has gone off are not reconstructed); and a phase increment past a quarter of the rate for a
+sine (the closed form covers a stencil spanning two of its corners: bounded from the key, the
+detune, the drift and the last block's, before anything is touched). Everything the two paths
+share is kept the same by both, so either can play the next block: phases, the increments'
+lipol state, the level lags (closed form of the one-pole, `t + (v - t) r^j`) and their
+first-call flags (the sync lag's first call must still be made: left out, sync turned on mid-note
+jumped to its full offset), the previous sample, the sync reset parity (the wraps counted in
+the block), and the sub-octave's increments. The character filter stays the double precision
+one in both.
+
+*Tolerance reached* (the difference between a render with the option on and one with it off, as
+an energy ratio to the signal, through the plugin at the sample rate named, all else equal): the
+gate is -100 dB. `oscairn-analog-tests` "modern oscillator fast path" renders 162 pairs (saw,
+pulse, saw and pulse, saw + pulse + sine, sine alone, at notes 0, 36, 72, 127, at 44.1, 48, 88.2,
+96, 176.4 and 192 kHz; and, at 44.1, 96 and 192 kHz, unison 2, 3, 4, 5, 7 and 16, absolute unison
+detune, drift, a pitch sweep, a fast one at note 100 and one through a quarter of the rate the
+voice runs at, pulse width and level modulation by an LFO, and portamento). The worst is -121.3
+dB (a pulse, at 44.1 kHz); worst by rate: 44.1 kHz -121.3, 48 -123.4, 88.2 -123.4, 96
+-124.9, 176.4 -124.8, 192 -124.6; by wave: saw -128.2, pulse -121.3, saw and pulse -127.7, saw,
+pulse and sine -124.2, sine -127.4; by feature: unison 2 to 16 -134.3 to -134.9, absolute detune
+-135.4, drift -135.0, pitch sweep -135.2, fast pitch sweep -131.4, sweep past a quarter of the
+rate -128.5, pulse width modulation -136.2, level modulation -133.8, portamento -135.5 (single
+precision's floor is about -135: the output is single precision). The closed forms against the
+numerical second difference in double (60,000 random and corner cases, increments from 1e-5;
+the sine to 0.24, the saw to 0.5): worst 2.6e-7 (saw) and 4.5e-7 (sine). Jacob's 38 converted
+patches, played through a scratch phrase tool (not committed: a low, a middle and a very high
+note, a chord, a fast run, a six-second sweep up four octaves; 48 kHz, as Oscairn plays): 33 are
+at -120 dB or below in every part; the other 5 (Backing Strings and its copy, 511baf6a05,
+c5c74def2f, dc0fd9a268) are lower only in parts where the patch is itself nearly silent (note 100
+through a closed filter, signal -93 to -100 dBFS, difference -194 to -197 dBFS). Over all 38 and
+all six parts, with the signal above -80 dBFS: the largest difference -144.7 dBFS (a chord at
+-9 dBFS), the largest relative one -112.2 dB (c5c74def2f, note 60: signal -73 dBFS, difference
+-185 dBFS). During a note (`modern oscillator fast path mid-note`, through the plugin with its
+allocation guard): a triangle third brought in and out, sync turned on and off, sync turned on
+during a pitch sweep, sync modulated by an LFO, an FM routing switched on and off: -135.6 to
+-144.6 dB and no step between samples larger than the original path's.
+
+*Cost* (callgrind, linux/arm64 in Docker, gcc 13, `-O3`, LTO, instructions per 128-frame block,
+held chords, a sound context, medians; the three converted patches; off / on):
+
+| patch | rest | 1 note | 8 notes | 16 notes | per extra note, 1 to 8 |
+|---|---|---|---|---|---|
+| 80s Syn Bass | 93.3 k / 93.3 k | 299 / 233 k | 1.27 / 0.74 M | 2.44 / 1.38 M | 139.0 / 72.7 k (-48 %) |
+| SquareLead | 93.3 / 93.3 k | 227 / 212 k | 685 / 565 k | 1.27 / 1.02 M | 65.4 / 50.5 k (-23 %) |
+| Backing Strings | 93.3 / 93.3 k | 371 / 280 k | 1.96 / 1.23 M | 1.97 / 1.23 M (the polyphony is reached at 8 notes) | 227.6 / 136.1 k (-40 %) |
+
+(Backing Strings' polyphony is reached at 8 notes: unison 2.) SquareLead gains least: it has one
+pulse oscillator, and the noise and the voice's filter are the rest. The prototype's variant C, for
+comparison, measured 1 note 243, 217 and 315 k and 16 notes 1.54, 1.10 and 1.52 M (bass, lead,
+pad): the finished path is no dearer (233, 212 and 280 k at one note). With the option off a
+voice costs what it did: 93.3 k at rest and 299, 227 and 371 k at one note, the figures of the
+entry above (the `if` in `process_block` is not measurable against the layout's run-to-run
+difference). Scaled
+by the unit figure of the entries above (2.3 ns an instruction, an upper bound that includes
+the old voice scan's cache misses; not measured on the unit): a further 80s Syn Bass voice up to
+0.17 ms instead of 0.32 ms (1.33 ms holds about 5 notes instead of 3), SquareLead's 0.12 ms
+instead of 0.15 ms, Backing Strings' (two oscillator copies a note) 0.31 ms instead of 0.52 ms.
+
+*Tests.* `modern oscillator kernels`, `modern oscillator fast path`, `... falls back` (each
+fall-back case, with the option on, equal to the option off bit for bit), `... mid-note` (above),
+the stock comparison with Modern oscillator patches, the options' round trip (test runner and
+plugin state). Each seen failing with a piece removed (sine corner terms; the sync lag's first
+call; the reset parity; the increment lag; the FM source check; the third component check; the
+hook; the one-quarter bound). Not caught by a test: the previous sample handed over (it matters
+for one sample, only if a sync reset falls on the first sample after a hand-over).
+
+*Tests run* (macOS arm64, RelWithDebInfo, the tree of the code commit). `oscairn-analog-tests`,
+the whole suite (the stock comparison and the allocation guard included): the second of two runs
+passed; the first had one failure, "a sound's declared memory covers what it allocates, within 25
+%", the heap measurement at 96 kHz, which fails intermittently on the commit before as well (3 of
+8 runs there, 2 of 8 here; not touched). `surge-testrunner`: 212 passed, 1 skipped. The privacy
+check passed. The four new tests also passed on the same machine under ASan and UBSan, and as an
+x86_64 build run under Rosetta (SSE, `-msse4.1`). A linux/arm64 build in Docker played the three
+patches (callgrind) with the option off and on. Not run: a linux/x86_64 build with gcc, the TSan
+build, the linux/arm64 test suite (CI).
+
+Register: entry 23. Nothing changes for native Surge or for a patch without the option. The
+plugin version is unchanged here; a release carrying this needs a bump (0.4.11 or 0.5.0: a new
+option saved in patches is new behaviour) and the converter writing the option for converted
+Parts.
+
 **Where this stopped** (thirteenth session). HPF24 stays on the state-variable HP 24 dB: Clean
 passes everything but index 560 (at every rate), Driven fails above 48 kHz; a decision for Jacob
 again (register entry 1). The amp EG decay table holds from index 72; attack and release below
@@ -3771,6 +3898,22 @@ only moves where a glide starts, below).
     does, or in the voice budget's order, entry 19). Mono plays one note whatever the limit.
     Deliberate (16), the unison count unresolved. Reproduce: performance-converter
     `tests/test_anx.py` (`test_polyphony_limit_is_16`). Code: `perfconv/anx.py`.
+
+23. **The fast Modern oscillator (option `modernOscillatorFast`).** With the option on, a Modern
+    oscillator voice's sawtooth, pulse and sine third component come from single precision closed
+    forms, not the double precision numerical second difference, so the sound is not bit for bit
+    the original code's: at least 100 dB below the signal in every tested case (worst -121.3 dB;
+    notes 0 to 127, 44.1 to 192 kHz, unison 1 to 16, drift, modulation, portamento), and in
+    Jacob's 38 converted patches, played, the largest difference -144.7 dBFS in any part louder
+    than -80 dBFS. A voice plays the original code, bit for bit what it is with the option off,
+    for a block where a triangle or square third component sounds, the sub-octave is on, FM is on
+    either way round, sync is on or has been on in the voice (it stays on the original code for
+    the rest of the note), or a sine's phase increment passes a quarter of the rate; a patch that
+    uses these gains less. Off unless the patch turns it on (the converter writes it for
+    converted Parts). Deliberate (Jacob approved the fast path, 2026-11-13). Reproduce: plugin
+    tests "modern oscillator kernels", "modern oscillator fast path", "... falls back", "...
+    mid-note". Code: `ModernOscillatorFast.cpp`, `ModernOscillatorFastKernels.h`, the `initFast`
+    and `processFast` hooks in `ModernOscillator.cpp`.
 
 ## 12. Releasing
 
