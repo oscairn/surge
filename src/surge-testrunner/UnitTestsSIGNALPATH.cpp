@@ -492,40 +492,43 @@ TEST_CASE("Engine Options Are Saved In The Patch", "[signalpath]")
     auto options = [&] {
         return std::vector<bool>{st.analogEnvelopeAttackClamp, st.vcaVelocityAmplitudeLaw,
                                  st.saturatorAlgebraicCurve, st.lfoLongRelease,
-                                 st.filterCutoffRateMatch};
+                                 st.filterCutoffRateMatch, st.modernOscillatorFast};
     };
-    auto set = [&](bool a, bool b, bool c, bool d, bool e) {
+    auto set = [&](bool a, bool b, bool c, bool d, bool e, bool f) {
         st.analogEnvelopeAttackClamp = a;
         st.vcaVelocityAmplitudeLaw = b;
         st.saturatorAlgebraicCurve = c;
         st.lfoLongRelease = d;
         st.filterCutoffRateMatch = e;
+        st.modernOscillatorFast = f;
     };
 
     // off by default, and a patch saved with them off doesn't mention them
-    REQUIRE(options() == std::vector<bool>{false, false, false, false, false});
+    REQUIRE(options() == std::vector<bool>{false, false, false, false, false, false});
     auto off = save();
     REQUIRE(std::string(off.begin(), off.end()).find("saturatorAlgebraicCurve") ==
             std::string::npos);
+    REQUIRE(std::string(off.begin(), off.end()).find("modernOscillatorFast") ==
+            std::string::npos);
 
     // each round trips on its own
-    for (int i = 0; i < 5; i++)
+    for (int i = 0; i < 6; i++)
     {
         INFO("option " << i);
-        set(i == 0, i == 1, i == 2, i == 3, i == 4);
+        set(i == 0, i == 1, i == 2, i == 3, i == 4, i == 5);
         auto on = save();
-        set(false, false, false, false, false);
+        set(false, false, false, false, false, false);
         patch.load_patch(on.data(), (int)on.size(), false);
-        REQUIRE(options() == std::vector<bool>{i == 0, i == 1, i == 2, i == 3, i == 4});
+        REQUIRE(options() == std::vector<bool>{i == 0, i == 1, i == 2, i == 3, i == 4, i == 5});
     }
 
     // a patch without them turns them off
-    set(true, true, true, true, true);
+    set(true, true, true, true, true, true);
     patch.load_patch(off.data(), (int)off.size(), false);
-    REQUIRE(options() == std::vector<bool>{false, false, false, false, false});
-    set(true, true, true, true, true);
+    REQUIRE(options() == std::vector<bool>{false, false, false, false, false, false});
+    set(true, true, true, true, true, true);
     REQUIRE(surge->loadPatchByPath("resources/test-data/patches/TestInitSaw.fxp", -1, "Test"));
-    REQUIRE(options() == std::vector<bool>{false, false, false, false, false});
+    REQUIRE(options() == std::vector<bool>{false, false, false, false, false, false});
 }
 
 TEST_CASE("Filter Cutoff Rate Match", "[signalpath]")

@@ -8,6 +8,7 @@
 #ifndef OSCAIRN_ANALOG_RENDER_NOTE_H
 #define OSCAIRN_ANALOG_RENDER_NOTE_H
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -37,7 +38,13 @@ struct RenderSpec
     // clamp, the amplitude velocity law, the algebraic saturators, the long LFO release and the
     // filter cutoff rate match), as a converted Part does
     bool referenceMatching = false;
+    // Turn on the engine option modernOscillatorFast in the patch, as a converted Part does
+    bool fastOscillator = false;
 };
+
+// The patch the spec describes, as the plugin loads it as its state (the note and timing fields
+// do not matter). Throws std::runtime_error on an unknown name.
+std::vector<uint8_t> buildState(const RenderSpec &spec);
 
 // Interleaved stereo samples. Throws std::runtime_error on an unknown name or a refused patch.
 std::vector<float> renderNote(const RenderSpec &spec);

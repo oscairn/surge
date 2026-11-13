@@ -1722,6 +1722,10 @@ class alignas(16) SurgeStorage
     // cutoff so they respond as they do at 44.1 kHz with the patch's cutoff (their top-of-range
     // clamps included). Saved in the patch; off when absent.
     bool filterCutoffRateMatch{false};
+    // Selects the faster Modern oscillator path (single precision, four samples at a time, the
+    // closed form of its second difference; it plays what it can and leaves the rest to the
+    // original path, within -100 dB of it). Saved in the patch; off when absent.
+    bool modernOscillatorFast{false};
     float unstreamedTempo{120.f};             // this one is in actual BPM
     double songpos;
     bool isPlaying{false}; // host transport state

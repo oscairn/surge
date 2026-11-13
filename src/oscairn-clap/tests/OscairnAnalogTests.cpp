@@ -1033,6 +1033,7 @@ static void testPlainPatchesMatchStock(const std::vector<std::string> &patches)
         s->storage.saturatorAlgebraicCurve = true;
         s->storage.lfoLongRelease = true;
         s->storage.filterCutoffRateMatch = true;
+        s->storage.modernOscillatorFast = true;
         void *data = nullptr;
         auto size = s->saveRaw(&data);
         std::vector<uint8_t> on((uint8_t *)data, (uint8_t *)data + size);
@@ -1044,7 +1045,8 @@ static void testPlainPatchesMatchStock(const std::vector<std::string> &patches)
                   text.find("vcaVelocityAmplitudeLaw") != std::string::npos &&
                   text.find("saturatorAlgebraicCurve") != std::string::npos &&
                   text.find("lfoLongRelease") != std::string::npos &&
-                  text.find("filterCutoffRateMatch") != std::string::npos,
+                  text.find("filterCutoffRateMatch") != std::string::npos &&
+                  text.find("modernOscillatorFast") != std::string::npos,
               "the plugin's state keeps the options");
         check(b.load(saved) && b.save() == saved, "the options round trip through the state");
         auto x = a.render(24000, 512, {noteEvent(0, CLAP_EVENT_NOTE_ON, 1, 60, 70 / 127.0)}, false);

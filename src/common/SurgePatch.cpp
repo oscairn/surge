@@ -2558,6 +2558,7 @@ void SurgePatch::load_xml(const void *data, int datasize, bool is_preset)
     storage->saturatorAlgebraicCurve = false;
     storage->lfoLongRelease = false;
     storage->filterCutoffRateMatch = false;
+    storage->modernOscillatorFast = false;
 
     for (int sc = 0; sc < n_scenes; ++sc)
     {
@@ -2654,7 +2655,8 @@ void SurgePatch::load_xml(const void *data, int datasize, bool is_preset)
               {"vcaVelocityAmplitudeLaw", &storage->vcaVelocityAmplitudeLaw},
               {"saturatorAlgebraicCurve", &storage->saturatorAlgebraicCurve},
               {"lfoLongRelease", &storage->lfoLongRelease},
-              {"filterCutoffRateMatch", &storage->filterCutoffRateMatch}})
+              {"filterCutoffRateMatch", &storage->filterCutoffRateMatch},
+              {"modernOscillatorFast", &storage->modernOscillatorFast}})
         {
             bool tv;
             auto *el = TINYXML_SAFE_TO_ELEMENT(nonparamconfig->FirstChild(name));
@@ -4492,7 +4494,8 @@ unsigned int SurgePatch::save_xml(void **data) // allocates mem, must be freed b
                             {"vcaVelocityAmplitudeLaw", (bool)storage->vcaVelocityAmplitudeLaw},
                             {"saturatorAlgebraicCurve", (bool)storage->saturatorAlgebraicCurve},
                             {"lfoLongRelease", (bool)storage->lfoLongRelease},
-                            {"filterCutoffRateMatch", (bool)storage->filterCutoffRateMatch}})
+                            {"filterCutoffRateMatch", (bool)storage->filterCutoffRateMatch},
+                            {"modernOscillatorFast", (bool)storage->modernOscillatorFast}})
     {
         if (!on)
             continue;

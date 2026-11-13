@@ -103,12 +103,10 @@ std::vector<std::string> listParameters()
     return out;
 }
 
-std::vector<float> renderNote(const RenderSpec &spec)
+std::vector<uint8_t> buildState(const RenderSpec &spec)
 {
     Layer layer;
     auto synth = makeSynth(layer);
-    const int note = spec.note, vel = spec.velocity;
-    const double hold = spec.hold, tail = spec.tail, rate = spec.rate;
     for (auto &[name, v] : spec.params)
         setParam(*synth, name, v);
     for (auto &m : spec.mods)
@@ -119,9 +117,17 @@ std::vector<float> renderNote(const RenderSpec &spec)
     synth->storage.saturatorAlgebraicCurve = spec.referenceMatching;
     synth->storage.lfoLongRelease = spec.referenceMatching;
     synth->storage.filterCutoffRateMatch = spec.referenceMatching;
+    synth->storage.modernOscillatorFast = spec.fastOscillator;
     void *data = nullptr;
     auto size = synth->saveRaw(&data);
-    std::vector<uint8_t> state((uint8_t *)data, (uint8_t *)data + size);
+    return std::vector<uint8_t>((uint8_t *)data, (uint8_t *)data + size);
+}
+
+std::vector<float> renderNote(const RenderSpec &spec)
+{
+    const int note = spec.note, vel = spec.velocity;
+    const double hold = spec.hold, tail = spec.tail, rate = spec.rate;
+    std::vector<uint8_t> state = buildState(spec);
 
     auto factory = static_cast<const clap_plugin_factory_t *>(
         oscairn_analog_entry.get_factory(CLAP_PLUGIN_FACTORY_ID));
