@@ -4118,6 +4118,21 @@ static void testNoteLifetime()
         t.settle();
         t.verify("same key again");
     }
+    // note-ons that get no voice: another port, a key or channel out of range
+    {
+        NoteLog t;
+        t.on(0, 800, 0, 60, 1);
+        t.on(0, 801, 0, 128);
+        t.on(0, 802, 0, -1);
+        t.on(0, 803, 16, 60);
+        t.on(0, 804, -1, 60);
+        t.run(4);
+        t.on(0, 805, 0, 60);
+        t.run(2);
+        t.off(0, 805, 0, 60);
+        t.settle();
+        t.verify("note-on without a voice");
+    }
     // a key-on delay still pending at the note-off, and at a state load
     {
         NoteLog t;

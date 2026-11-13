@@ -767,6 +767,19 @@ struct Plugin : SharedVoices,
     {
         if (validNote(n.channel, n.key) && n.port_index == 0)
             keySlot[n.channel][n.key] = (uint8_t)selected[n.channel];
+        else if (output)
+        {
+            // No voice will play it, and the host holds a slot for the note until its NOTE_END:
+            // end it with the fields it came with (the helper's endNote sends port 0 only).
+            clap_event_note_t end{};
+            end.header = {sizeof(end), eventTime, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_NOTE_END, 0};
+            end.note_id = n.note_id;
+            end.port_index = n.port_index;
+            end.channel = n.channel;
+            end.key = n.key;
+            output->try_push(output, &end.header);
+            return;
+        }
         Base::noteOn(n);
     }
     void noteOff(const clap_event_note_t &n, bool choke = false, bool midi = false)
