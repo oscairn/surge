@@ -4105,6 +4105,20 @@ static void testNoteLifetime()
         t.settle();
         t.verify("unison " + std::to_string(variant));
     }
+    // what active_voices counts: Surge's voices, a unison note's each
+    {
+        NoteLog t;
+        t.param("a_unison_voices", 7);
+        t.run();
+        t.on(0, 650, 0, 60);
+        t.run(8);
+        check(t.voices() == 7, "active_voices counts each voice of a unison note");
+        t.off(0, 650, 0, 60);
+        t.run(1);
+        check(t.voices() == 7, "and counts them while they release");
+        t.settle();
+        t.verify("unison voices counted");
+    }
     // the same key again, with the first still held (and not)
     {
         NoteLog t;
@@ -4141,7 +4155,7 @@ static void testNoteLifetime()
         t.run();
         t.on(0, 900, 0, 60);
         t.run(4);
-        check(t.voices() <= 1, "active_voices while a key-on delay waits");
+        check(t.voices() == 0, "active_voices does not count a note waiting out its key-on delay");
         t.off(0, 900, 0, 60);
         t.run(4);
         t.on(0, 901, 0, 64);
@@ -4287,11 +4301,10 @@ static void testNoteLifetime()
         t.on(0, 1800, 0, 60);
         t.on(0, 1801, 0, 64);
         t.run(16);
-        const auto held = t.voices();
+        check(t.voices() == 2, "active_voices counts held notes");
         t.off(0, 1800, 0, 60);
         t.run(1);
-        std::printf("active_voices: %u with two held notes, %u with one releasing\n", held,
-                    t.voices());
+        check(t.voices() == 2, "and a releasing one");
         t.releaseAll();
         t.settle();
         check(t.voices() == 0, "no voices when every note has ended");
