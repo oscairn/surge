@@ -32,6 +32,7 @@
 #include "../tools/RenderNote.h"
 #include "Features.h"
 #include "FittedTables.h"
+#include "sst/plugininfra/cpufeatures.h"
 
 #include <algorithm>
 #include <atomic>
@@ -953,6 +954,10 @@ static void testPlainPatchesMatchStock(const std::vector<std::string> &patches)
     std::vector<std::pair<std::string, std::vector<uint8_t>>> states;
     for (size_t i = 0; i < patches.size(); i += 8)
         states.emplace_back(patches[i], patchFromFxp(patches[i]));
+    // and one whose output depends on denormals being flushed, as stock Surge XT flushes them
+    for (auto &p : patches)
+        if (p.find("Plucks/Snap.fxp") != std::string::npos)
+            states.emplace_back(p, patchFromFxp(p));
     states.emplace_back("built", built);
     for (auto &[name, patch] : states)
     {
@@ -992,7 +997,11 @@ static void testPlainPatchesMatchStock(const std::vector<std::string> &patches)
                 stock->playNote(0, 60, 70, 0, 1);
             if (b * BLOCK_SIZE == 24000)
                 stock->releaseNote(0, 60, 0, 1);
-            stock->process();
+            {
+                // stock Surge XT's processBlock runs the engine with this guard
+                auto fpu = sst::plugininfra::cpufeatures::FPUStateGuard();
+                stock->process();
+            }
             stock->time_data.ppqPos += (double)BLOCK_SIZE * stock->time_data.tempo / (60. * rate);
             for (int k = 0; k < BLOCK_SIZE; ++k)
             {

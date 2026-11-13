@@ -43,6 +43,7 @@
 #include "SurgeSynthesizer.h"
 #include "PatchFileHeaderStructs.h"
 #include "sst/basic-blocks/mechanics/endian-ops.h"
+#include "sst/plugininfra/cpufeatures.h"
 
 #include <oscairn-clap/assets.h>
 #include <oscairn-clap/memory.h>
@@ -1124,6 +1125,8 @@ struct Plugin : SharedVoices,
     {
         if (pr->audio_outputs_count < 1 || pr->audio_outputs[0].channel_count != 2)
             return CLAP_PROCESS_ERROR;
+        // Denormals flushed to zero while processing, as stock Surge XT's processBlock has them
+        auto fpu = sst::plugininfra::cpufeatures::FPUStateGuard();
 
         inProcess.store(true);
         if (loading.load())
