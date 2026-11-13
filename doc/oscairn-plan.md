@@ -3472,7 +3472,7 @@ in 1.33 ms about 3 and 6 notes, in 4.0 ms 11 and 16. Scaled instead by 14.6 time
 Docker time (the same unit figure against wall time; each the best of three runs' medians, pinned
 to one core, memory locked, sound context), 16 held notes take 80s Syn Bass 3.4 ms (235.7 us),
 SquareLead 2.1 ms (146.0), Syn Harmonica 2.0 ms (136.2), Backing Strings at its 8 notes 2.9 ms
-(199.3) and Pad 1 5.2 ms (358.9): every converted patch's 16 voices inside 4.0 ms, and 5-9 notes
+(199.3) and Pad 1 5.2 ms (358.9): every converted patch's 16 voices inside 4.0 ms, and 3 (Backing Strings) to 10 notes
 inside 1.33 ms. The two scalings bracket the unit; the bench on the unit would settle it.
 Docker wall times before and after this entry differ by less than their run-to-run spread. Sixteen notes of a three-oscillator
 converted patch would need about a fifth of today's cost a voice: oscillators computed in single
