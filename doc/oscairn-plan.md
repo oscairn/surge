@@ -3360,6 +3360,11 @@ not changed here.
 
 The plugin is 0.4.7 (with this entry). Nothing changes for the converter or native Surge.
 
+**First workflow release (2026-11-12).** The published 0.4.7 is a macOS binary built by hand; the
+release workflow (section 12) builds a new one, and a new binary takes a new version.
+
+The plugin is 0.4.8 (with this entry). Nothing changes for the converter, the sound or native Surge.
+
 **Where this stopped** (thirteenth session). HPF24 stays on the state-variable HP 24 dB: Clean
 passes everything but index 560 (at every rate), Driven fails above 48 kHz; a decision for Jacob
 again (register entry 1). The amp EG decay table holds from index 72; attack and release below
@@ -3629,6 +3634,9 @@ privacy check and `oscairn-analog-tests`, checks the binary's load commands, and
 Release with `oscairn-analog-<platform>.clap`, `licenses.tar.gz` and `oscairn-release.json` per
 built platform. `workflow_dispatch` with dry run (the default) does everything but the release
 and uploads the files as an artifact. No signing and no secrets beyond the workflow's own token.
+
+A plugin's version changes whenever its shipped binary does, so every release (including the first
+workflow build after hand-built packages) bumps it.
 
 The plugin version at release is the one in the descriptor, so a release means bumping it (as
 before) and then tagging `oscairn-v` + that version; `manifest.py` fails if the two disagree. The
