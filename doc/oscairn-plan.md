@@ -3733,6 +3733,54 @@ not fitted); a shorter analog decay in the engine (a generic change: the decay's
 tail); probe the other envelopes and oscillator and mixer
 levels; then milestone 2.
 
+### Note lifetime (2026-11-13)
+
+The host holds one of 512 note-route slots per note-on until the instrument sends NOTE_END for it;
+a note that ends without one leaks its slot. Rule: each note-on gets exactly one NOTE_END, with
+its ID, key, channel and port, at a time inside the block, except notes `reset()` or deactivation
+ended (the host ends those itself: `silence()` runs with no output queue, so none is sent).
+
+- **How a note is tracked.** The helper's `Voice` (one per note-on, 256 at most) holds the note's
+  ID, key and channel and a Surge ID of its own. Surge reports an ended ID in `endedHostNoteIds`
+  (`freeVoice` when a note's last voice goes, `reclaimVoiceFor` when a legato note takes a voice,
+  `cancelDelayedNotes` for a key-on delay); `renderBlock` finishes the matching `Voice`, whose
+  `finishVoice` sends the NOTE_END and clears `active`, so a second report does nothing. A released
+  note is finished there too, if Surge did not say so, once its whole synthesizer has no voice and
+  no waiting note. A unison note is one `Voice`: one NOTE_END when its last Surge voice goes.
+- **Ways a note ends.** `oscairn-analog-tests` "note lifetime": release finishing (while another
+  note is held); Surge's Polyphony Limit; 300 notes held past what Surge keeps; the host's limit,
+  reserves and priorities on two sounds, tightened and lifted; each of the six play modes with
+  keys over each other, released first and struck again (Mono ST: a legato note's ID ends at once, and
+  its later note-off still lets its key go);
+  unison with voices given up by Surge's limit and the host's; the same key again; a key-on delay
+  pending at the note-off; CC 120 and CC 123 on each channel; NOTE_CHOKE and note-off by ID, by key
+  and channel and with -1 wildcards; a sound switch and `choke_retiring` with notes held and
+  ringing; state loads over held, ringing and waiting notes; reset and deactivation. All send
+  exactly one NOTE_END, except two: a note-on with no voice (another port, a key or channel out of
+  range) sent none, and CC 123 allocated inside `process()` (Surge's `allNotesOff` builds a
+  `std::set` and a `std::vector`) and released every channel's notes. Both are fixed in the
+  wrapper: the first now gets a NOTE_END with the fields it came with (the helper's `endNote` says
+  port 0 only), the second becomes the helper's wildcard release on the CC's channel.
+- **Latch** keeps its last notes sounding after their keys are up, so their NOTE_END waits for
+  the next note, CC 120 or CC 123 (the test checks that).
+- **A note-off with an unknown ID** (not -1) matches nothing, even if its key and channel match a
+  held note under another ID; such a note is released by its own ID, a choke, CC 120 or 123.
+- **A host that drops note-offs after NOTE_END.** A legato note's ID ends while its key is down; the
+  plugin relies on the host still sending that key's note-off, which lets the key up in Surge.
+  Without it the mono voice sounds on (the test's first version, which skipped note-offs for ended
+  notes, showed this in Mono ST and Mono ST+FP). Unverified for Oscairn's host.
+- **The long run.** 5,000 blocks of 1 to 5 random events: note-ons on four channels across 72 keys,
+  note-offs (a few by -1), chokes, CC 120, 123, the sustain pedal, the play mode, unison, Surge's
+  polyphony limit, key-on delay, host budgets with reserves and priorities on two sounds, and a
+  reset every 1,250 blocks; then everything is released and rung out. 6,857 note-ons, 4 resets:
+  6,697 NOTE_END, equal to the note-ons not ended by a reset, none twice, none missing, none after
+  a reset. The whole test runs under the allocation guard.
+- **`active_voices`** returns the number of Surge voices of the sounds in use, one per unison
+  voice, releasing and fading voices included; a note waiting out its key-on delay is not counted
+  until it starts, and a note with no voice at all is not. (Tested: unison 7 counts 7, also while
+  it releases; a delayed note counts 0.) `notes` lists the notes that have a voice, once each.
+- **Known limit.** NOTE_END goes through `try_push`; a host whose output queue is full drops it.
+
 ## 11. Known differences from the reference
 
 One entry per known difference between the engine (through the plugin, with a converted
@@ -3914,6 +3962,12 @@ only moves where a glide starts, below).
     tests "modern oscillator kernels", "modern oscillator fast path", "... falls back", "...
     mid-note". Code: `ModernOscillatorFast.cpp`, `ModernOscillatorFastKernels.h`, the `initFast`
     and `processFast` hooks in `ModernOscillator.cpp`.
+
+24. **CC 123 is per channel.** Stock Surge's all notes off releases every channel's notes whatever
+    channel it came on; here it releases the CC's channel only (MIDI's meaning, and the helper's
+    for a note-off with channel and key -1), and allocates nothing. Deliberate (2026-11-13: process()
+    must not allocate). Reproduce: plugin test "note lifetime" (CC 123). Code: `applyMidi`,
+    `OscairnAnalog.cpp`.
 
 ## 12. Releasing
 
