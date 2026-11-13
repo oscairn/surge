@@ -3781,6 +3781,71 @@ ended (the host ends those itself: `silence()` runs with no output queue, so non
   it releases; a delayed note counts 0.) `notes` lists the notes that have a voice, once each.
 - **Known limit.** NOTE_END goes through `try_push`; a host whose output queue is full drops it.
 
+### The device voice cap and the release tail (2026-11-14)
+
+On a device an arpeggiated Part (Jacob's "ST Final", "Arp": sixteenths at 84 BPM, three keys, gate
+0.9, amp release index 145, nominally 0.38 s) kept 7 to 8 voices sounding and overran its processor
+share.
+
+- **The caps.** `OSCAIRN_ANALOG_MAX_VOICES` (1 to 128, the shared store) bounds the instance and
+  `OSCAIRN_ANALOG_MAX_VOICES_PER_SOUND` (1 to 64, one sound's most) each sound context separately;
+  read when an instance is created, anything else (0, negative, text after the number, over the
+  ceiling, empty) is ignored, and unset nothing changes. A cap stands as the voice budget's limit
+  when the host sets none through `oscairn.voice-budget` and bounds a higher host limit; a lower
+  host limit stands (a context's limit from the host likewise, under the per-sound cap). Either or
+  both may be set: the per-sound cap stops one part starving the others on a shared instance, the
+  instance cap bounds the total. Past a cap the budget's order applies at each note-on and at each
+  block's start (the same code as the host's limits): a releasing voice before a held one, among
+  releasing voices the quietest (the lowest gain now, the amp envelope's level with velocity and
+  volume expression) and then the oldest, held voices only when none releases, the oldest first;
+  and a new note takes its own sound's voices before another sound's. A note with N unison voices
+  counts as N and goes whole (all its copies fade together). A cut voice fades over 3 ms rounded
+  up to whole blocks (`SurgeVoice::fadeOut`, as the host's limits already do, not Surge's
+  uber-release) and frees its voice; its note gets its one
+  NOTE_END (the randomised test's note ids balance). The SDK's order was already what the budget
+  used; Surge's own stealing at its Polyphony Limit releases the voice released longest ago, else
+  the oldest held, without regard to loudness, and under a cap that choice follows the budget's
+  order too (register 19).
+- **Tests** (`device voice cap`, each seen failing with the code out: 17 failures without the cap,
+  the unison test alone without the whole-note change). Caps against held notes; the order
+  (held never cut while a note releases, quietest releasing first, then the held oldest); unison
+  notes whole; a host limit above and below the cap; invalid values; per-sound and instance caps
+  together; 400 random note-ons and note-offs over two sounds (voices at most 5 once fades ended,
+  NOTE_ENDs balanced); the arpeggio on a sine patch with a release giving 8 voices uncapped (7
+  steady): with a cap of 5 the count settles at 5 before each note (6 for the 3 ms the replaced
+  voice fades beside the new one) and every note from the thirteenth on still sounds 100 ms in.
+- **The release tail against the reference** (recordings in
+  `forks/measurements/analog-release-2026-11-14/`, scratch tools not committed). The reference
+  Part alone (effects and arpeggio off, note 84 which its zone plays three octaves down, velocity
+  100, hold 0.5 s; two takes and a 3 s hold) and the plugin's render of the converted patch
+  (48 kHz, hold 0.5 s), level in 10 ms windows against the level before the note-off, seconds
+  after the note-off:
+
+  | | -20 dB | -40 dB | -60 dB | -80 dB | silent |
+  | --- | --- | --- | --- | --- | --- |
+  | reference (3 takes) | 0.255, 0.245, 0.265 | 0.485, 0.475, 0.495 | 0.715, 0.695, 0.745 | 0.965, 0.925, 0.975 | 1.015, 1.013, 1.012 |
+  | plugin | 0.205 | 0.425 | 0.655 | 0.865 | 0.942 (NOTE_END) |
+
+  The reference rings as long as the plugin does, a little longer (the plugin's release is 7 to
+  16 % short at these points, 0.083 dB/ms against 0.094): the tail is not the plugin's fault and
+  the converter's table is not too long for index 145. A voice lives its gate (0.16 s) plus the
+  tail, 1.10 s here (the reference's 1.17 s), so 6.2 voices overlap on average at sixteenths at 84
+  BPM and up to 7, in the reference as in the plugin. In the plugin a voice ends when the analog
+  envelope is idle: released and its capacitor level under 1e-6 (-120 dB), the analog mode's long
+  asymptotic tail (`ADSRModulationSource::process_block`). The
+  reference's voice ends at exactly zero, 1.0 s after the note-off for this Part.
+- **Plain analog Parts, release raw 128, 160, 208** (sustain full, 0.5 s hold; table values
+  -2.439, -0.44, 2.557 in the plugin, analog mode): the two agree to -20 and -40 dB (reference
+  0.115 and 0.215 s, 0.455 and 0.855, 3.635 and 6.785; plugin 0.115 and 0.215, 0.435 and 0.855,
+  3.405 and 6.795: the converter's table holds, as fitted to -40 dB). Past -40 dB the reference
+  falls faster than exponentially to exact zero, at 1.30 times its -40 dB time (0.289, 1.116,
+  8.80 s after the note-off), where the plugin keeps falling at the same dB per ms to -120 dB
+  (silent at 0.632, 2.54 and over 14 s). Not so with a low sustain: raw 160 at sustain 140 the
+  reference falls at a constant rate to -80 dB and is silent at 1.945 s, and at sustain 300 it
+  ends at 1.144 s (-40 dB at 0.865, -60 at 1.085, -80 at 1.135). The end is therefore not a single
+  level or a single multiple of the -40 dB time, and the law is not identified; no rule was
+  built for it (register 25).
+
 ## 11. Known differences from the reference
 
 One entry per known difference between the engine (through the plugin, with a converted
@@ -3916,7 +3981,8 @@ only moves where a glide starts, below).
     (`oscairn.voice-budget`: a limit or an entry), voices go in the Oscairn SDK's order instead of
     Surge's: a sound's full Polyphony Limit releases the voice that order gives within that sound
     (released before held, the quietest, then the oldest), where Surge releases the voice released
-    longest ago, else the oldest held; and a voice given up past the host's limits fades linearly
+    longest ago, else the oldest held, and a unison note's copies one at a time (the budget
+    gives up a unison note whole: its copies fade together); and a voice given up past the host's limits fades linearly
     over 3 ms rounded up to whole 32-sample blocks rather than by Surge's uber-release. Without a
     budget Surge's stealing is unchanged (checked against stock Surge in the plugin test).
     Deliberate (Jacob: use the SDK's order; accepted by Jacob 2026-11-07). Reproduce: plugin test "voice budget". Code: the
@@ -3968,6 +4034,25 @@ only moves where a glide starts, below).
     for a note-off with channel and key -1), and allocates nothing. Deliberate (2026-11-13: process()
     must not allocate). Reproduce: plugin test "note lifetime" (CC 123). Code: `applyMidi`,
     `OscairnAnalog.cpp`.
+
+25. **The release of a voice from a high sustain ends later than the reference's.** In the
+    analog envelope mode a released voice's level falls at a constant dB per ms to -120 dB
+    before it ends; the reference falls at the same rate to about -40 dB, then faster, and
+    ends at exactly zero (a plain Part at full sustain: 1.30 times its -40 dB time; the
+    plugin's voice lives 2.3 times as long at release index 160, and at 208 at least 1.6 times: it had not
+    ended by 14 s against the reference's 8.8 s).
+    From a low sustain (the "Arp" Part, sustain level 140) the reference does not end early and
+    the plugin ends 7 % sooner. Not fixed: the reference's rule for where it ends is not
+    identified (a level and a multiple of the -40 dB time were both ruled out by the sustain
+    levels measured). Reproduce: the recordings in `forks/measurements/analog-release-2026-11-14/`
+    (`esp/probe/rel_160.wav`, `esp/probe2/*`). Code: `ADSRModulationSource::process_block`
+    (`SILENCE_THRESHOLD`).
+26. **A device's voice cap.** `OSCAIRN_ANALOG_MAX_VOICES` and `..._PER_SOUND` limit voices below
+    the 128 of the shared store, the reference's 12 or 16 aside; past a cap voices go in the
+    budget's order and whole notes (a unison note is cut whole), unlike stock Surge's
+    stealing one voice. Unset, nothing changes. Deliberate (Jacob, 2026-11-13: a device's
+    processor share). Reproduce: plugin test "device voice cap". Code: `envCap`,
+    `soundLimits`, `giveUp`, `OscairnAnalog.cpp`.
 
 ## 12. Releasing
 
