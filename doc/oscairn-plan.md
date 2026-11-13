@@ -3419,6 +3419,87 @@ fill a worker's time first, and the voice budget gives voices up before either.
 The plugin version is unchanged here (the next release carries it). Nothing changes for native
 Surge or the sound.
 
+**Worst blocks and voices on arm64 (2026-11-13).** On the FANTOM (relayed): "80s Syn Bass"
+(Starship Bass), 4 notes, 30 s: 0.4.8 51 misses at the default allowance, longest block 6.2 ms;
+0.4.9 8 misses, longest 8.3 ms since start (load included), 7.7 ms with the 4.0 ms allowance.
+
+*Measuring.* The bench now also takes `OSCAIRN_BENCH_MLOCK=1` (memory locked, as Oscairn's
+workers run), `OSCAIRN_BENCH_HELD=1` (the chord held alone, for profiling a chord size), reports
+the load's time (main thread), the longest block of the run and its phase, and each phase's
+largest thread CPU time beside the wall time, and grows nothing between blocks. Instructions per
+block are counted with callgrind dumping each block apart (a scratch build of the bench with
+`CALLGRIND_DUMP_STATS` around each `process()`; not committed), with an A53-like cache model
+(32 KiB L1s, 512 KiB L2). Every count here is linux/arm64 in Docker (gcc 13, -O3, LTO), held
+chords of keys 48, 51, ... at velocity 0.8, a sound context selected on every channel or preset-load.
+
+*Worst block.* No block in the plugin does intermittent work: for 80s Syn Bass the instructions
+per block of a held 16-note chord stay within 0.7 % after its first block (374 blocks), and a
+note-on block is 1.06-1.12 times its phase's median (a 16-note chord 2.69 M against 2.44 M); the first
+block after a load or selection is 115 k against 93 k at rest. What a note-on block does add is
+memory traffic: before this change a 4-note chord's first block missed the model's L2 6,449 times
+(about 1 a block when held), a 16-note chord's 31,113, more than half of it the voice
+constructor clearing the comb filters' delay lines, 64 KiB a voice (`memset(&FBP)`), which nothing but a
+comb filter reads. They are now cleared when a comb filter first takes them (`SetQFB`), and the
+first chord block misses 1,690 (4 notes) and 14,665 (16 notes) times. Held, 16 voices miss about
+3,300 times a block (their working set passes 512 KiB). Single blocks of 6-8 ms (6-8 times the
+steady cost at 4 notes) are not reproduced by anything the bench does, with memory locked or not
+and the bench pinned to one core (worst wall time 3.1 times the median, at random blocks; the CPU
+time follows it, the instruction count doesn't): to check on the unit, the bench itself (built for
+linux-arm64) with `OSCAIRN_BENCH_MLOCK=1 OSCAIRN_BENCH_CONTEXT=1`, and the worker's major faults,
+scheduling policy and other cores' load during a long block.
+
+*Per voice.* Instructions per 128-frame block, held chord (polyphony 16 for the converted
+patches, as the converter now writes; their libraries had 12):
+
+| patch | rest | 1 | 8 | 12 | 16 |
+|---|---|---|---|---|---|
+| 80s Syn Bass (3 Modern, sine and saw) | 94.6 k / 93.3 k | 311 / 299 k | 1.36 / 1.27 M | 1.98 / 1.86 M | 2.61 / 2.44 M |
+| SquareLead (1 Modern pulse, noise) | 94.6 / 93.3 k | 231 / 227 k | 709 / 685 k | 1.01 / 0.97 M | 1.32 / 1.27 M |
+| Backing Strings (3 Modern saws, unison 2) | 94.6 / 93.3 k | 406 / 371 k | 2.24 / 1.96 M | (8 notes: 16 voices) | |
+| Nameless saw (2 Modern, unison 2) | 94.6 / 93.3 k | 282 / 270 k | 1.25 / 1.15 M | (8 notes) | |
+| Syn Harmonica (pulse, saw, sine) | 94.6 / 93.3 k | 225 / 221 k | 674 / 648 k | 962 / 921 k | 1.26 / 1.20 M |
+| Pads/Pad 1 (factory) | 102.0 / 100.7 k | 244 / 243 k | 1.04 / 1.04 M | 1.64 / 1.64 M | 2.35 / 2.35 M |
+
+(before / after this entry). The Modern oscillator is about 70 % of an 80s Syn Bass voice (callgrind): it works in
+double precision a sample at a time at the oversampled rate, and its sine (a converted Part's
+triangle-mix "sine") always takes the numerical second difference. It now skips a component
+(saw, pulse, third waveform) whose mix is zero and stays zero through the block; that component
+adds only a signed zero to a sample, and the sums it would join start at +0, so the output is
+unchanged (4-13 % of a voice's instructions; Pad 1 has no Modern oscillator). On the A53, scaled by the one unit figure (Pad 1 one note, 748 us
+for 327 k instructions: 2.3 ns an instruction, which includes the old voice scan's cache misses,
+so an upper bound), a further 80s Syn Bass voice costs up to 0.34 ms and SquareLead's 0.17 ms:
+in 1.33 ms about 3 and 6 notes, in 4.0 ms 11 and 16. Sixteen notes of a three-oscillator
+converted patch would need about a fifth of today's cost a voice: oscillators computed in single
+precision across voices or unison copies (SIMD), not one sample of one oscillator at a time, and
+a smaller voice working set. That changes the sound and the engine's structure: not started.
+
+*Flush to zero.* The plugin's `process()` now runs under `FPUStateGuard`, as stock Surge XT's
+`processBlock` does (FPCR.FZ on aarch64; FTZ, DAZ and round to nearest on x86). Of 674 patches
+(the factory's and Jacob's 35 converted Parts, played by the bench), 7 factory patches change
+output (Plucks/Snap, Sinus Verby Pops, Soft Space Oboe Pops, FM Poops, Delay Dancer, Man Machine,
+Percussion/Kick 909ish), each exactly as with the bench flushing denormals itself; none of the
+converted. The stock comparison now runs stock Surge under the same guard (stock Surge XT's own
+processing) and includes Plucks/Snap; seen failing without the plugin's guard (Sinus Verby Pops
+and Snap, 2 of 81).
+
+*Output.* Bit-identical across the 674 patches (preset-load, 8-note chord) and the 35 converted
+Parts as sound contexts (16-note chord) for the oscillator and delay-line changes; the flush
+changes only the 7 patches above.
+
+*Voice cost for the host.* `oscairn.voice-budget` draft 1 already has the place: `active_voices`'
+`voice_cost` (microseconds a voice a block at the current block size), which the plugin leaves 0.
+The plugin could fill it by timing its `process()` (two clock reads a call) and keeping an average
+of (block time - the time at rest) / voices; not built (no extension changes).
+
+Tests: `note-on work` (a note in a patch without a comb filter leaves the delay lines uncleared, a
+comb filter's note clears them; seen failing with the old constructor), the stock comparison
+above. No test can tell the oscillator change apart (the output is the same); the hashes above are
+its check.
+
+The plugin version is unchanged here (the next release carries it). Nothing changes for the
+converter (performance-converter `7460f92` writes polyphony 16, `291982f` corrects its comment:
+Surge's limit counts voices, a unison copy each, so a Unison 2 Part plays 8 notes).
+
 **Where this stopped** (thirteenth session). HPF24 stays on the state-variable HP 24 dB: Clean
 passes everything but index 560 (at every rate), Driven fails above 48 kHz; a decision for Jacob
 again (register entry 1). The amp EG decay table holds from index 72; attack and release below
@@ -3676,13 +3757,14 @@ only moves where a glide starts, below).
     change's cue), so its parts don't hear it. Deliberate, accepted by Jacob 2026-11-07. Reproduce: plugin test "sharing" (the
     bus change check). Code: the Output Bus in `renderBlock` and `render`, `OscairnAnalog.cpp`.
 
-22. **Polyphony of a converted Part.** The reference's analog engine is listed at 12 voices; a
-    converted Part's Polyphony Limit is 12 notes, each with its unison voices inside, where the
-    reference may count unison voices against its 12 (not measured), and how the reference steals at
-    its limit and shares its voices between Parts is not measured either (the plugin steals as
-    Surge does, or in the voice budget's order, entry 19). Mono plays one note whatever the limit.
-    Reproduce: performance-converter `tests/test_anx.py` (`test_polyphony_limit_is_the_reference_engines`).
-    Code: `perfconv/anx.py`.
+22. **Polyphony of a converted Part.** The reference's analog engine is listed at 12 voices (its
+    larger model 16); a converted Part's Polyphony Limit is 16 (Jacob's choice). Surge counts each
+    unison copy against it, so a Unison 2 Part plays 8 notes and a Unison 4 Part 4; whether the
+    reference counts unison voices against its limit is not measured, and how it steals at its
+    limit and shares its voices between Parts is not measured either (the plugin steals as Surge
+    does, or in the voice budget's order, entry 19). Mono plays one note whatever the limit.
+    Deliberate (16), the unison count unresolved. Reproduce: performance-converter
+    `tests/test_anx.py` (`test_polyphony_limit_is_16`). Code: `perfconv/anx.py`.
 
 ## 12. Releasing
 
