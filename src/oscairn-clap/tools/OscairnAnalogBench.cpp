@@ -10,6 +10,8 @@
  *   oscairn-analog-bench patch.fxp [notes 8] [seconds per phase 2] [block 128]
  *
  * notes -1: only the blocks before any note; 0: those and one held note (for profiling).
+ * OSCAIRN_BENCH_HELD=1: the blocks before any note and the chord held alone.
+ * OSCAIRN_BENCH_MLOCK=1: memory locked first (mlockall), as Oscairn's workers run.
  */
 
 #include "OscairnAnalog.h"
@@ -23,7 +25,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <string>
+#include <sys/mman.h>
 #include <sys/resource.h>
 #include <vector>
 
@@ -53,9 +57,17 @@ long faults()
     return u.ru_minflt + u.ru_majflt;
 }
 
+// This thread's CPU time: unlike the wall clock it leaves out time the thread was preempted.
+double cpuUs()
+{
+    timespec t{};
+    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t);
+    return t.tv_sec * 1e6 + t.tv_nsec * 1e-3;
+}
+
 struct Block
 {
-    double us;
+    double us, cpu;
     long faults;
     const char *phase;
     int index;
@@ -63,6 +75,11 @@ struct Block
 // A block carrying note events, apart so a profiler can collect these blocks alone
 // (valgrind --tool=callgrind --toggle-collect=processEventBlock).
 __attribute__((noinline)) void processEventBlock(const clap_plugin_t *plugin, const clap_process_t *pr)
+{
+    plugin->process(plugin, pr);
+}
+// A block without events (--toggle-collect=processQuietBlock).
+__attribute__((noinline)) void processQuietBlock(const clap_plugin_t *plugin, const clap_process_t *pr)
 {
     plugin->process(plugin, pr);
 }
@@ -82,6 +99,8 @@ int main(int argc, char **argv)
     // OSCAIRN_BENCH_FTZ=1: denormals flushed to zero, as stock Surge XT's processBlock sets them
     // (aarch64 only here), to see what they cost and whether the output changes
     const bool ftz = std::getenv("OSCAIRN_BENCH_FTZ") != nullptr;
+    if (std::getenv("OSCAIRN_BENCH_MLOCK") && mlockall(MCL_CURRENT | MCL_FUTURE) != 0)
+        std::perror("mlockall");
 #if defined(__aarch64__)
     if (ftz)
     {
@@ -100,6 +119,7 @@ int main(int argc, char **argv)
         return 1;
     // OSCAIRN_BENCH_CONTEXT=1: the patch as a prepared sound context selected on every channel
     // (Oscairn's Performance path), else preset-load into the default sound
+    const auto loadStart = std::chrono::steady_clock::now();
     if (std::getenv("OSCAIRN_BENCH_CONTEXT"))
     {
         auto ctx = static_cast<const oscairn_plugin_sound_contexts_t *>(
@@ -126,9 +146,14 @@ int main(int argc, char **argv)
         }
     }
 
+    const double loadUs = std::chrono::duration<double, std::micro>(
+                              std::chrono::steady_clock::now() - loadStart)
+                              .count();
+
     std::vector<float> left(frames), right(frames);
     std::vector<clap_event_note_t> pending;
     std::vector<Block> blocks;
+    blocks.reserve(size_t(8 * seconds * rate / frames) + 16); // no growth between blocks
     int32_t nextId = 1;
     auto run = [&](const char *phase, double secs) {
         const int n = (int)(secs * rate / frames);
@@ -161,15 +186,16 @@ int main(int argc, char **argv)
             pr.in_events = &in;
             pr.out_events = &out;
             const long f0 = faults();
+            const double c0 = cpuUs();
             const auto t0 = std::chrono::steady_clock::now();
             if (evs.empty())
-                plugin->process(plugin, &pr);
+                processQuietBlock(plugin, &pr);
             else
                 processEventBlock(plugin, &pr);
             const double us =
                 std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0)
                     .count();
-            blocks.push_back({us, faults() - f0, phase, b});
+            blocks.push_back({us, cpuUs() - c0, faults() - f0, phase, b});
             for (uint32_t k = 0; k < frames; ++k)
                 for (float x : {left[k], right[k]})
                 {
@@ -202,30 +228,49 @@ int main(int argc, char **argv)
         run("1 note", seconds);
         return std::printf("output hash %016llx\n", (unsigned long long)hash), 0;
     }
-    notes(CLAP_EVENT_NOTE_ON, 1);
-    run("1 note", seconds);
-    notes(CLAP_EVENT_NOTE_OFF, 1);
-    run("released", seconds);
-    notes(CLAP_EVENT_NOTE_ON, 1);
-    run("1 note again", seconds);
-    notes(CLAP_EVENT_NOTE_OFF, 1);
-    run("released again", seconds);
-    notes(CLAP_EVENT_NOTE_ON, chord);
-    run("chord", seconds);
-    notes(CLAP_EVENT_NOTE_OFF, chord);
-    run("chord released", seconds);
+    if (std::getenv("OSCAIRN_BENCH_HELD")) // the chord held alone (profiling voices)
+    {
+        notes(CLAP_EVENT_NOTE_ON, chord);
+        run("held", seconds);
+    }
+    else
+    {
+        notes(CLAP_EVENT_NOTE_ON, 1);
+        run("1 note", seconds);
+        notes(CLAP_EVENT_NOTE_OFF, 1);
+        run("released", seconds);
+        notes(CLAP_EVENT_NOTE_ON, 1);
+        run("1 note again", seconds);
+        notes(CLAP_EVENT_NOTE_OFF, 1);
+        run("released again", seconds);
+        notes(CLAP_EVENT_NOTE_ON, chord);
+        run("chord", seconds);
+        notes(CLAP_EVENT_NOTE_OFF, chord);
+        run("chord released", seconds);
+    }
 
     std::printf("output hash %016llx%s\n", (unsigned long long)hash, ftz ? " (flush to zero)" : "");
-    // OSCAIRN_BENCH_BLOCKS=file: every block's time, one line each (phase, index, us, faults)
+    // OSCAIRN_BENCH_BLOCKS=file: every block's time, one line each (phase, index, us, faults,
+    // thread CPU us)
     if (const char *path = std::getenv("OSCAIRN_BENCH_BLOCKS"))
         if (FILE *f = std::fopen(path, "w"))
         {
             for (auto &b : blocks)
-                std::fprintf(f, "%s\t%d\t%.2f\t%ld\n", b.phase, b.index, b.us, b.faults);
+                std::fprintf(f, "%s\t%d\t%.2f\t%ld\t%.2f\n", b.phase, b.index, b.us, b.faults, b.cpu);
             std::fclose(f);
         }
     const double budget = frames / rate * 1e6;
-    std::printf("%s: %u-frame blocks (%.0f us), %d-note chord\n", argv[1], frames, budget, chord);
+    std::printf("%s: %u-frame blocks (%.0f us), %d-note chord; load (main thread) %.0f us\n",
+                argv[1], frames, budget, chord, loadUs);
+    if (!blocks.empty())
+    {
+        auto w = std::max_element(blocks.begin(), blocks.end(),
+                                  [](auto &a, auto &b) { return a.us < b.us; });
+        auto wc = std::max_element(blocks.begin(), blocks.end(),
+                                   [](auto &a, auto &b) { return a.cpu < b.cpu; });
+        std::printf("  longest block %.1f us (%s, block %d); most CPU %.1f us (%s, block %d)\n",
+                    w->us, w->phase, w->index, wc->cpu, wc->phase, wc->index);
+    }
     const char *last = nullptr;
     for (size_t i = 0; i <= blocks.size(); ++i)
     {
@@ -245,11 +290,13 @@ int main(int argc, char **argv)
             }
             auto worst = std::max_element(blocks.begin() + first, blocks.begin() + i,
                                           [](auto &a, auto &b) { return a.us < b.us; });
+            auto worstCpu = std::max_element(blocks.begin() + first, blocks.begin() + i,
+                                             [](auto &a, auto &b) { return a.cpu < b.cpu; });
             std::sort(t.begin(), t.end());
             std::printf("  %-16s first %7.1f us, median %7.1f, p99 %7.1f, worst %7.1f (block %d, "
-                        "%ld faults); %ld faults in all\n",
+                        "%ld faults); %ld faults in all; worst CPU %7.1f (block %d)\n",
                         last, blocks[first].us, t[t.size() / 2], t[t.size() * 99 / 100],
-                        worst->us, worst->index, worst->faults, f);
+                        worst->us, worst->index, worst->faults, f, worstCpu->cpu, worstCpu->index);
         }
         if (i < blocks.size())
             last = blocks[i].phase;
