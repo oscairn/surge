@@ -79,6 +79,7 @@ class alignas(16) SurgeVoice
     }
     int fadeBlocks{0}, fadeLeft{0};            // 0: not fading
     float ampGain() const { return FBP.Gain; } // this block's: level, velocity, EG and fade
+    bool combDelayCleared{false}; // the comb filters' delay lines are zero (see the constructor)
 
     void sampleRateReset();
     bool process_block(QuadFilterChainState &, int);

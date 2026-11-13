@@ -255,7 +255,12 @@ SurgeVoice::SurgeVoice(SurgeStorage *storage, SurgeSceneStorage *oscene, pdata *
         osctype[i] = -1;
     }
 
-    memset(&FBP, 0, sizeof(FBP));
+    // All but the comb filters' delay lines (64 KiB, read by nothing else), which are cleared
+    // when a comb filter first takes them (SetQFB) rather than at every note-on
+    using FBPType = decltype(FBP);
+    memset(&FBP, 0, offsetof(FBPType, Delay));
+    memset(&FBP.FU, 0, sizeof(FBP) - offsetof(FBPType, FU));
+    combDelayCleared = false;
     sampleRateReset();
 
     polyAftertouchSource = ControllerModulationSource(storage->smoothingMode);
@@ -1615,6 +1620,12 @@ void SurgeVoice::SetQFB(QuadFilterChainState *Q, int e) // Q == 0 means init(ial
         {
             if (scene->filterunit[u].type.val.i != 0)
             {
+                if (!combDelayCleared && (scene->filterunit[u].type.val.i == fut_comb_pos ||
+                                          scene->filterunit[u].type.val.i == fut_comb_neg))
+                {
+                    memset(FBP.Delay, 0, sizeof(FBP.Delay));
+                    combDelayCleared = true;
+                }
                 CM[u].updateState(Q->FU[u], e);
                 for (int i = 0; i < n_filter_registers; i++)
                 {

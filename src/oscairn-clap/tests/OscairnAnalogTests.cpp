@@ -1146,6 +1146,33 @@ static void testNotes()
     }
 }
 
+// A note-on clears the comb filters' delay lines (64 KiB a voice) only for a comb filter: work
+// that doesn't change the output, counted rather than timed.
+static void testNoteOnWork()
+{
+    HeadlessLayer layer;
+    SurgeStorage::SurgeStorageConfig config;
+    config.suppliedDataPath = SurgeStorage::skipPatchLoadDataPathSentinel;
+    config.createUserDirectory = false;
+    config.scanWavetableAndPatches = false;
+    auto synth = std::make_unique<SurgeSynthesizer>(&layer, config);
+    auto &s = *synth;
+    s.setSamplerate(48000);
+    s.audio_processing_active = true;
+    auto &f = s.storage.getPatch().scene[0].filterunit[0];
+    check(f.type.val.i != sst::filters::fut_comb_pos && f.type.val.i != sst::filters::fut_comb_neg,
+          "the init patch's first filter isn't a comb");
+    s.playNote(0, 60, 100, 0, -1);
+    s.process();
+    check(s.voices[0].size() == 1 && !s.voices[0].back()->combDelayCleared,
+          "without a comb filter a note leaves the comb delay lines alone");
+    f.type.val.i = sst::filters::fut_comb_pos;
+    s.playNote(0, 64, 100, 0, -1);
+    s.process();
+    check(s.voices[0].size() == 2 && s.voices[0].back()->combDelayCleared,
+          "a comb filter's note clears its delay lines");
+}
+
 static void testFormulaRefused()
 {
     HeadlessLayer layer;
@@ -4215,6 +4242,7 @@ int main(int argc, char **argv)
         run("block sizes", [&] { testBlockSizes(patches); });
         run("notes", [] { testNotes(); });
         run("mono key struck again", [] { testMonoKeyStruckAgain(); });
+        run("note-on work", [] { testNoteOnWork(); });
         run("formula refused", [] { testFormulaRefused(); });
         run("concurrent state", [] { testConcurrentState(); });
         run("plain patches match stock Surge", [&] { testPlainPatchesMatchStock(patches); });
